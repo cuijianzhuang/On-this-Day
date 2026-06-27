@@ -1,0 +1,17 @@
+name = "memories-today"
+main = "worker.js"
+compatibility_date = "2026-06-27"
+
+routes = [
+  { pattern = "memories.cuijianzhuang.com/*", zone_name = "cuijianzhuang.com" }
+]
+
+[[r2_buckets]]
+binding = "PHOTOS"
+bucket_name = "image"
+
+[ai]
+binding = "AI"
+
+[vars]
+ADMIN_TOKEN = "14958fadd86643053156dff51a7dce372f921d8b99a4d5bd"
