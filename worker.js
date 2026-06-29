@@ -2027,6 +2027,7 @@ const HTML = `<!doctype html>
     animation: skeletonPulse 1.4s ease-in-out infinite;
   }
   @keyframes skeletonPulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 0.9; } }
+  #content { transition: opacity 0.22s ease; }
   .grid {
     display: flex; flex-wrap: wrap; align-items: flex-start;
     gap: 22px 18px; padding: 0.5rem 0.5rem 1.5rem;
@@ -2927,151 +2928,195 @@ const HTML = `<!doctype html>
   }
   requestAnimationFrame(wallTick);
 
+  // 每次调用递增，旧请求返回时 seq 已变则丢弃，防止快速切换日期时旧数据覆盖新内容
+  let _memSeq = 0;
+  // 首次加载时骨架屏已摆好，等数据到了再淡出骨架→淡入真实内容；后续切换则立即淡出旧内容
+  let _memFirstLoad = true;
+
   // 切日期时（navigateToDate/popstate）会用新的 month/day 再调一次这个函数，原地刷新内容，
   // 不会触发整页 location.href 跳转——声明成 function 而不是 const，靠 hoisting 保证在它定义之前
   // 出现的 navigateToDate/popstate 里提前引用到它也没问题
   function loadMemories(month, day) {
-  fetch('/api/memories?month=' + month + '&day=' + day).then(r => r.json()).then(data => {
-    document.getElementById('title').innerHTML = '<span class="date">' + data.month + '月' + data.day + '日</span>，那些年的此刻';
     const content = document.getElementById('content');
     const subtitle = document.getElementById('subtitle');
-    if (!data.years.length) {
-      subtitle.textContent = '这一天，还没有故事';
-      content.innerHTML = '<div class="empty">去拍一张，留给未来的自己</div>';
-      return;
-    }
-    const totalPhotos = data.years.reduce((s, y) => s + y.photos.length, 0);
-    subtitle.textContent = '横跨 ' + data.years.length + ' 个年头，' + totalPhotos + ' 个瞬间';
-    playBtn.disabled = false;
+    const FADE_MS = 180;
+    const seq = ++_memSeq;
+    const isFirst = _memFirstLoad;
+    _memFirstLoad = false;
 
-    // 切日期会把整面墙的照片换掉，旧的 cell 元素马上就从 DOM 里消失了——
-    // 不清的话 visibleCells/cellCenters 里攒着的是已经被扔掉的旧元素引用，越点几次日期切换越积越多
-    visibleCells.clear();
-    cellCenters.clear();
-
-    allPhotos = [];
-    data.years.forEach(y => y.photos.forEach(p => allPhotos.push({ ...p, year: y.year })));
-
-    // 给每张图随机一个尺寸档位、轻微倾斜角度，再配一个随机的晃动周期和延迟，做出挂在墙上被风吹的参差感
-    const SIZES = [150, 190, 230, 170, 210];
-    function pickSize(seed) { return SIZES[seed % SIZES.length]; }
-    function pickTilt(seed) { const angles = [-3, -1.5, 0, 1.5, 3]; return angles[seed % angles.length]; }
-
-    // 一年的照片太多时，先精选一部分摆出来：视频/Live Photo 优先收录，然后是 AI 打过分的高分照片，
-    // 剩下名额（包括还没被 AI 打分的）按时间均匀抽样，保证不是"挤在某一段"，而是有代表性的几个瞬间
-    const FEATURED_LIMIT = 10;
-    function pickFeatured(photos, limit) {
-      if (photos.length <= limit) return null; // null 表示不需要折叠，全部都是精选
-      const featured = new Set();
-      photos.forEach((p, i) => { if ((p.type === 'video' || p.type === 'live') && featured.size < limit) featured.add(i); });
-
-      // 带坐标 + 检测到人脸的"真实拍摄"照片最优先（screenshots/表情包之类的一般没有这两样），
-      // 同样按 AI 分数从高到低排
-      const realPhotoIdx = photos
-        .map((p, i) => ({ i, score: p.score }))
-        .filter(({ i, score }) => !featured.has(i) && typeof score === 'number' && photos[i].hasFace && photos[i].place)
-        .sort((a, b) => b.score - a.score);
-      for (const { i } of realPhotoIdx) {
-        if (featured.size >= limit) break;
-        featured.add(i);
-      }
-
-      // 剩下名额里，AI 打过分的非视频照片按分数从高到低收录
-      const scoredIdx = photos
-        .map((p, i) => ({ i, score: p.score }))
-        .filter(({ i, score }) => !featured.has(i) && typeof score === 'number')
-        .sort((a, b) => b.score - a.score);
-      for (const { i } of scoredIdx) {
-        if (featured.size >= limit) break;
-        featured.add(i);
-      }
-
-      // 还没打分的照片（或者 AI 还没跑过），按时间均匀抽样补满剩下的名额
-      const remainingIdx = photos.map((_, i) => i).filter((i) => !featured.has(i));
-      const need = limit - featured.size;
-      if (need > 0 && remainingIdx.length > 0) {
-        const step = remainingIdx.length / need;
-        for (let k = 0; k < need; k++) {
-          featured.add(remainingIdx[Math.min(remainingIdx.length - 1, Math.floor(k * step))]);
-        }
-      }
-      return featured;
+    if (!isFirst) {
+      // 切日期：立即淡出旧内容，提前释放旧 cell 引用，禁用操作按钮防止误触
+      subtitle.textContent = '正在唤醒回忆…';
+      playBtn.disabled = true;
+      yearToggle.disabled = true;
+      visibleCells.clear();
+      cellCenters.clear();
+      allPhotos = [];
+      content.style.opacity = '0';
     }
 
-    window.toggleShowMore = function (btn) {
-      const grid = btn.previousElementSibling;
-      const expanded = grid.classList.toggle('expanded');
-      const total = btn.dataset.total;
-      btn.textContent = expanded ? '收起' : '展开查看全部 ' + total + ' 张 ›';
-    };
+    const fadeStart = isFirst ? null : Date.now();
 
-    // 移动端 CSS 把 .cell 强制按 40vw 渲染（跟桌面端 pickSize 随机出来的尺寸完全无关），
-    // 缩略图分辨率要是还按桌面那个 size 算，手机上经常对不上：要小了模糊，要大了白白浪费流量
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const isMobileLayout = window.innerWidth <= 640;
-    const mobileRenderSize = window.innerWidth * 0.4;
+    fetch('/api/memories?month=' + month + '&day=' + day).then(r => r.json()).then(data => {
+      if (seq !== _memSeq) return; // 用户已切换到别的日期，丢弃过期结果
 
-    // 照片不是一次性全部弹出来，按页面上的出场顺序错开一点时间依次淡入；
-    // 延迟封顶（0.9s），照片特别多的时候后面那些不用傻等，很快就一起跟上
-    let globalCellIndex = 0;
-    content.innerHTML = data.years.map(y => {
-      const featured = pickFeatured(y.photos, FEATURED_LIMIT);
-      const extraCount = featured ? y.photos.length - featured.size : 0;
-      const cells = y.photos.map((p, pi) => {
-        // allPhotos 是按完全相同的 年->照片 嵌套顺序铺出来的，flatIndex 直接用这个递增计数器就是它在
-        // allPhotos 里的下标，不用每张照片都 findIndex 整个数组查一遍——照片一多，那是 O(n²) 的隐藏开销，
-        // 切日期时一大批照片同时算就是页面卡顿的一部分
-        const flatIndex = globalCellIndex;
-        const size = pickSize(pi + y.year.charCodeAt(0));
-        const tilt = pickTilt(pi);
-        const swayDur = (4 + (pi % 4) * 0.7).toFixed(1);
-        const swayDelay = ((pi % 5) * 0.5).toFixed(1);
-        const enterDelay = Math.min(globalCellIndex * 0.05, 0.9).toFixed(2);
-        globalCellIndex++;
-        // 不再固定 height——照片按原图比例显示，宽度定了，高度交给 frame-inner 的 aspect-ratio 撑出来
-        const style = \`width:\${size}px;--tilt-deg:\${tilt};--sway-dur:\${swayDur}s;--sway-delay:\${swayDelay}s;--enter-delay:\${enterDelay}s;\`;
-        const extraClass = featured && !featured.has(pi) ? ' extra' : '';
-        // 墙上的缩略图按实际显示尺寸 * 设备像素比要图（普通屏 1x 就不用多要 2x 的流量/解码开销，
-        // 高分屏封顶在 2x，不然 3x 机型一次性吃满带宽）；转换失败（HEIC 等）就在 onerror 里走浏览器端解码兜底
-        const thumbW = Math.round((isMobileLayout ? mobileRenderSize : size) * dpr);
-        // 不再传 h= + fit=cover 强制裁成正方形——只限宽，fit=scale-down 按原图比例缩放，不裁内容
-        const thumbSrc = p.url.replace('/img/', '/thumb/') + '?w=' + thumbW + '&q=75&fit=scale-down';
-        if (p.type === 'video') {
-          return \`<div class="cell\${extraClass}" style="\${style}" onclick="openLightbox(\${flatIndex}, false)"><div class="frame-inner"><video src="\${p.url}#t=0.5" muted loop preload="metadata" onloadeddata="this.classList.add('loaded')" onmouseenter="this.play().catch(()=>{})" onmouseleave="this.pause();this.currentTime=0.5"></video></div><span class="play-badge">▶ 视频</span><span class="frame-year">\${y.year}</span></div>\`;
+      const apply = () => {
+        document.getElementById('title').innerHTML = '<span class="date">' + data.month + '月' + data.day + '日</span>，那些年的此刻';
+
+        if (!data.years.length) {
+          subtitle.textContent = '这一天，还没有故事';
+          content.innerHTML = '<div class="empty">去拍一张，留给未来的自己</div>';
+          requestAnimationFrame(() => requestAnimationFrame(() => { content.style.opacity = '1'; }));
+          return;
         }
-        if (p.type === 'live') {
-          // Live Photo 缩略图：默认显示静态图，悬浮（桌面）/长按（移动端）才播放配对的短视频
-          // 网格缩略图上不展示 Live Photo 图标——放大（点开灯箱）才提示，网格里看起来就是张普通照片，
-          // 悬浮照样会播放配对视频，算是个不张扬的小彩蛋
-          return \`<div class="cell\${extraClass}" style="\${style}" onclick="openLightbox(\${flatIndex}, false)"><div class="frame-inner live-photo-cell" onmouseenter="this.classList.add('playing');const v=this.querySelector('video');v.currentTime=0;v.play().catch(()=>{})" onmouseleave="this.classList.remove('playing');this.querySelector('video').pause()"><img src="\${escAttr(thumbSrc)}" data-src="\${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.onerror=null;scheduleImageRetry(this,this.src,this.dataset.src)" /><video src="\${p.videoUrl}" loop preload="none" class="cell-live-video"></video></div><span class="frame-year">\${y.year}</span></div>\`;
+
+        const totalPhotos = data.years.reduce((s, y) => s + y.photos.length, 0);
+        subtitle.textContent = '横跨 ' + data.years.length + ' 个年头，' + totalPhotos + ' 个瞬间';
+        playBtn.disabled = false;
+
+        // 切日期会把整面墙的照片换掉，旧的 cell 元素马上就从 DOM 里消失了——
+        // 不清的话 visibleCells/cellCenters 里攒着的是已经被扔掉的旧元素引用，越点几次日期切换越积越多
+        if (isFirst) {
+          visibleCells.clear();
+          cellCenters.clear();
+          allPhotos = [];
         }
-        return \`<div class="cell\${extraClass}" style="\${style}" onclick="openLightbox(\${flatIndex}, false)"><div class="frame-inner"><img src="\${escAttr(thumbSrc)}" data-src="\${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.onerror=null;scheduleImageRetry(this,this.src,this.dataset.src)" /></div><span class="frame-year">\${y.year}</span></div>\`;
-      }).join('');
-      const showMoreBtn = extraCount > 0
-        ? \`<button class="show-more-btn" data-total="\${y.photos.length}" onclick="toggleShowMore(this)">展开查看全部 \${y.photos.length} 张 ›</button>\`
-        : '';
-      return \`
+        data.years.forEach(y => y.photos.forEach(p => allPhotos.push({ ...p, year: y.year })));
+
+        // 给每张图随机一个尺寸档位、轻微倾斜角度，再配一个随机的晃动周期和延迟，做出挂在墙上被风吹的参差感
+        const SIZES = [150, 190, 230, 170, 210];
+        function pickSize(seed) { return SIZES[seed % SIZES.length]; }
+        function pickTilt(seed) { const angles = [-3, -1.5, 0, 1.5, 3]; return angles[seed % angles.length]; }
+
+        // 一年的照片太多时，先精选一部分摆出来：视频/Live Photo 优先收录，然后是 AI 打过分的高分照片，
+        // 剩下名额（包括还没被 AI 打分的）按时间均匀抽样，保证不是"挤在某一段"，而是有代表性的几个瞬间
+        const FEATURED_LIMIT = 10;
+        function pickFeatured(photos, limit) {
+          if (photos.length <= limit) return null; // null 表示不需要折叠，全部都是精选
+          const featured = new Set();
+          photos.forEach((p, i) => { if ((p.type === 'video' || p.type === 'live') && featured.size < limit) featured.add(i); });
+
+          // 带坐标 + 检测到人脸的"真实拍摄"照片最优先（screenshots/表情包之类的一般没有这两样），
+          // 同样按 AI 分数从高到低排
+          const realPhotoIdx = photos
+            .map((p, i) => ({ i, score: p.score }))
+            .filter(({ i, score }) => !featured.has(i) && typeof score === 'number' && photos[i].hasFace && photos[i].place)
+            .sort((a, b) => b.score - a.score);
+          for (const { i } of realPhotoIdx) {
+            if (featured.size >= limit) break;
+            featured.add(i);
+          }
+
+          // 剩下名额里，AI 打过分的非视频照片按分数从高到低收录
+          const scoredIdx = photos
+            .map((p, i) => ({ i, score: p.score }))
+            .filter(({ i, score }) => !featured.has(i) && typeof score === 'number')
+            .sort((a, b) => b.score - a.score);
+          for (const { i } of scoredIdx) {
+            if (featured.size >= limit) break;
+            featured.add(i);
+          }
+
+          // 还没打分的照片（或者 AI 还没跑过），按时间均匀抽样补满剩下的名额
+          const remainingIdx = photos.map((_, i) => i).filter((i) => !featured.has(i));
+          const need = limit - featured.size;
+          if (need > 0 && remainingIdx.length > 0) {
+            const step = remainingIdx.length / need;
+            for (let k = 0; k < need; k++) {
+              featured.add(remainingIdx[Math.min(remainingIdx.length - 1, Math.floor(k * step))]);
+            }
+          }
+          return featured;
+        }
+
+        window.toggleShowMore = function (btn) {
+          const grid = btn.previousElementSibling;
+          const expanded = grid.classList.toggle('expanded');
+          const total = btn.dataset.total;
+          btn.textContent = expanded ? '收起' : '展开查看全部 ' + total + ' 张 ›';
+        };
+
+        // 移动端 CSS 把 .cell 强制按 40vw 渲染（跟桌面端 pickSize 随机出来的尺寸完全无关），
+        // 缩略图分辨率要是还按桌面那个 size 算，手机上经常对不上：要小了模糊，要大了白白浪费流量
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const isMobileLayout = window.innerWidth <= 640;
+        const mobileRenderSize = window.innerWidth * 0.4;
+
+        // 照片不是一次性全部弹出来，按页面上的出场顺序错开一点时间依次淡入；
+        // 延迟封顶（0.9s），照片特别多的时候后面那些不用傻等，很快就一起跟上
+        let globalCellIndex = 0;
+        content.innerHTML = data.years.map(y => {
+          const featured = pickFeatured(y.photos, FEATURED_LIMIT);
+          const extraCount = featured ? y.photos.length - featured.size : 0;
+          const cells = y.photos.map((p, pi) => {
+            // allPhotos 是按完全相同的 年->照片 嵌套顺序铺出来的，flatIndex 直接用这个递增计数器就是它在
+            // allPhotos 里的下标，不用每张照片都 findIndex 整个数组查一遍——照片一多，那是 O(n²) 的隐藏开销，
+            // 切日期时一大批照片同时算就是页面卡顿的一部分
+            const flatIndex = globalCellIndex;
+            const size = pickSize(pi + y.year.charCodeAt(0));
+            const tilt = pickTilt(pi);
+            const swayDur = (4 + (pi % 4) * 0.7).toFixed(1);
+            const swayDelay = ((pi % 5) * 0.5).toFixed(1);
+            const enterDelay = Math.min(globalCellIndex * 0.05, 0.9).toFixed(2);
+            globalCellIndex++;
+            // 不再固定 height——照片按原图比例显示，宽度定了，高度交给 frame-inner 的 aspect-ratio 撑出来
+            const style = \`width:\${size}px;--tilt-deg:\${tilt};--sway-dur:\${swayDur}s;--sway-delay:\${swayDelay}s;--enter-delay:\${enterDelay}s;\`;
+            const extraClass = featured && !featured.has(pi) ? ' extra' : '';
+            // 墙上的缩略图按实际显示尺寸 * 设备像素比要图（普通屏 1x 就不用多要 2x 的流量/解码开销，
+            // 高分屏封顶在 2x，不然 3x 机型一次性吃满带宽）；转换失败（HEIC 等）就在 onerror 里走浏览器端解码兜底
+            const thumbW = Math.round((isMobileLayout ? mobileRenderSize : size) * dpr);
+            // 不再传 h= + fit=cover 强制裁成正方形——只限宽，fit=scale-down 按原图比例缩放，不裁内容
+            const thumbSrc = p.url.replace('/img/', '/thumb/') + '?w=' + thumbW + '&q=75&fit=scale-down';
+            if (p.type === 'video') {
+              return \`<div class="cell\${extraClass}" style="\${style}" onclick="openLightbox(\${flatIndex}, false)"><div class="frame-inner"><video src="\${p.url}#t=0.5" muted loop preload="metadata" onloadeddata="this.classList.add('loaded')" onmouseenter="this.play().catch(()=>{})" onmouseleave="this.pause();this.currentTime=0.5"></video></div><span class="play-badge">▶ 视频</span><span class="frame-year">\${y.year}</span></div>\`;
+            }
+            if (p.type === 'live') {
+              // Live Photo 缩略图：默认显示静态图，悬浮（桌面）/长按（移动端）才播放配对的短视频
+              // 网格缩略图上不展示 Live Photo 图标——放大（点开灯箱）才提示，网格里看起来就是张普通照片，
+              // 悬浮照样会播放配对视频，算是个不张扬的小彩蛋
+              return \`<div class="cell\${extraClass}" style="\${style}" onclick="openLightbox(\${flatIndex}, false)"><div class="frame-inner live-photo-cell" onmouseenter="this.classList.add('playing');const v=this.querySelector('video');v.currentTime=0;v.play().catch(()=>{})" onmouseleave="this.classList.remove('playing');this.querySelector('video').pause()"><img src="\${escAttr(thumbSrc)}" data-src="\${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.onerror=null;scheduleImageRetry(this,this.src,this.dataset.src)" /><video src="\${p.videoUrl}" loop preload="none" class="cell-live-video"></video></div><span class="frame-year">\${y.year}</span></div>\`;
+            }
+            return \`<div class="cell\${extraClass}" style="\${style}" onclick="openLightbox(\${flatIndex}, false)"><div class="frame-inner"><img src="\${escAttr(thumbSrc)}" data-src="\${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.onerror=null;scheduleImageRetry(this,this.src,this.dataset.src)" /></div><span class="frame-year">\${y.year}</span></div>\`;
+          }).join('');
+          const showMoreBtn = extraCount > 0
+            ? \`<button class="show-more-btn" data-total="\${y.photos.length}" onclick="toggleShowMore(this)">展开查看全部 \${y.photos.length} 张 ›</button>\`
+            : '';
+          return \`
       <div class="year-block" id="year-\${y.year}">
         <div class="year-title">\${y.year} 年 <span class="count">（\${y.photos.length} 份）</span></div>
         <div class="grid">\${cells}</div>
         \${showMoreBtn}
       </div>
     \`;
-    }).join('');
-    content.querySelectorAll('.cell').forEach((cell) => cellObserver.observe(cell));
+        }).join('');
+        content.querySelectorAll('.cell').forEach((cell) => cellObserver.observe(cell));
 
-    // "跳到某一年"下拉菜单：照片加载完才知道有哪些年份，这时候再填充菜单内容、解锁按钮
-    yearToggle.disabled = false;
-    yearMenu.innerHTML = data.years.map((y, i) =>
-      '<button style="animation-delay:' + (i * 0.05) + 's" onclick="jumpToYear(' + y.year + ')"><span class="y">' + y.year + ' 年</span>' +
-      '<span class="c">' + y.photos.length + ' 份</span></button>'
-    ).join('');
-    window.jumpToYear = function (year) {
-      const el = document.getElementById('year-' + year);
-      if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 24, behavior: 'smooth' });
-      yearMenu.classList.remove('open');
-    };
-  });
+        // "跳到某一年"下拉菜单：照片加载完才知道有哪些年份，这时候再填充菜单内容、解锁按钮
+        yearToggle.disabled = false;
+        yearMenu.innerHTML = data.years.map((y, i) =>
+          '<button style="animation-delay:' + (i * 0.05) + 's" onclick="jumpToYear(' + y.year + ')"><span class="y">' + y.year + ' 年</span>' +
+          '<span class="c">' + y.photos.length + ' 份</span></button>'
+        ).join('');
+        window.jumpToYear = function (year) {
+          const el = document.getElementById('year-' + year);
+          if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 24, behavior: 'smooth' });
+          yearMenu.classList.remove('open');
+        };
+
+        // 双 rAF 确保浏览器已渲染 opacity:0 的帧，transition 才能从 0→1 正确播放
+        requestAnimationFrame(() => requestAnimationFrame(() => { content.style.opacity = '1'; }));
+      };
+
+      if (isFirst) {
+        // 首次加载：API 返回后淡出骨架屏，再淡入真实内容
+        content.style.opacity = '0';
+        setTimeout(apply, FADE_MS);
+      } else {
+        // 切日期：已经开始淡出了，等淡出走完剩余时间再换内容
+        const elapsed = Date.now() - fadeStart;
+        setTimeout(apply, Math.max(0, FADE_MS - elapsed));
+      }
+    });
   }
   loadMemories(month, day);
 </script>
