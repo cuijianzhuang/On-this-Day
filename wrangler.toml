@@ -1,6 +1,9 @@
 name = "memories-today"
 main = "worker.js"
 compatibility_date = "2026-06-27"
+# heic-decode 这个库的底层 WASM 胶水代码是按 Node.js 环境生成的（会引用 fs/path/crypto），
+# 开这个 flag 让 Wrangler 打包时能解析这些引用，需要 Workers Paid 套餐（CPU 时间限制更宽松）
+compatibility_flags = ["nodejs_compat"]
 
 routes = [
   { pattern = "memories.cuijianzhuang.com/*", zone_name = "cuijianzhuang.com" }
@@ -10,8 +13,55 @@ routes = [
 binding = "PHOTOS"
 bucket_name = "image"
 
+# HEIC 转出来的 JPEG 预览图单独存一个桶，跟原图分开方便单独清理/计费
+[[r2_buckets]]
+binding = "PREVIEWS"
+bucket_name = "image-previews"
+
 [ai]
 binding = "AI"
 
+# 账号级别的图片转换能力，Free 套餐也能用（跟 zone 级别的 /cdn-cgi/image/ Image Resizing 是两个不同的东西，那个需要 Pro 起步）
+[images]
+binding = "IMAGES"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "memories-db"
+database_id = "dac6d064-83bc-4cb9-b742-0938e0f58101"
+
+# 新照片落地 R2 -> R2 Event Notification 推到这个队列 -> 下面的 queue() consumer 增量写进
+# photos_index 表（见 schema.sql），免得 matchPhotosForDay 每次都要 list() 扫一遍 R2。
+# 通知规则本身是绑在 R2 桶上的，跟 wrangler.toml 无关，用
+# `wrangler r2 bucket notification create image --event-type object-create --queue photo-index-queue` 配置
+# max_batch_size 调成 1：一批塞好几条消息时，每条都要打分（喂图片给 AI 模型）/ 查地点，
+# 内存压力会在同一次调用里叠加，之前撞过好几次 exceededMemory。一条一条处理，内存预算每次都是新的
+[[queues.consumers]]
+queue = "photo-index-queue"
+max_batch_size = 1
+
+# 每 10 分钟跑一次，后台批量给照片打分/查地点，避免跟用户访问共享子请求预算
+[triggers]
+crons = ["*/10 * * * *"]
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1
+
+
+
 [vars]
 ADMIN_TOKEN = "14958fadd86643053156dff51a7dce372f921d8b99a4d5bd"
+# 这个必须是 public token（pk. 开头），会原样发给浏览器跑地图，跟反向地理编码用的 secret token（MAPBOX_TOKEN，已用 wrangler secret put 单独存）是两个完全不同的 token
+MAPBOX_PUBLIC_TOKEN = "pk.eyJ1IjoiY3VpcGx1cyIsImEiOiJjbHYxMnA0ZTAwMm5lMm5wYzJjeXJwOGQyIn0.tdHoQD-xn2jC_pY1R_1Sag"
