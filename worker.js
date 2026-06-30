@@ -2061,37 +2061,13 @@ const APP_CSS = `
   }
   .year-title .count { color: #6e6e73; font-size: 0.78rem; font-weight: 400; font-family: 'Space Grotesk', sans-serif; }
   /* 首次加载/缓存没命中时 /api/memories 可能要等几秒（库跨年头多，R2 扫描+读 EXIF 需要时间），
-     这段时间页面之前是纯空白，看起来像卡死了——先摆几个呼吸感的占位块，至少让人知道"在加载"而不是"挂了" */
-  .skeleton-grid { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 22px 18px; padding: 2rem 1.6rem; max-width: 1100px; margin: 0 auto; }
-  .skeleton-cell { position: relative; overflow: hidden; border-radius: 3px; background-color: rgba(255,255,255,0.06); }
-  /* 扫光用 ::after + transform 而不是动 background-position——transform 能丢给 GPU 合成层，
-     不会像改 background-position 那样每帧触发重绘，低端机上也不会卡 */
-  .skeleton-cell::after {
-    content: ''; position: absolute; inset: 0;
-    background-image: linear-gradient(100deg, transparent 35%, rgba(255,255,255,0.14) 50%, transparent 65%);
-    transform: translateX(-100%);
-    animation: skeletonShimmer 1.6s ease-in-out infinite;
-    animation-delay: var(--shimmer-delay, 0s);
-  }
-  /* 尺寸、错开的动画起点都放一起：宽窄不一更像挂在墙上的照片，光带依次扫过而不是齐刷刷一起闪 */
-  .skeleton-cell:nth-child(1) { width: 190px; height: 230px; --shimmer-delay: 0s; }
-  .skeleton-cell:nth-child(2) { width: 150px; height: 180px; --shimmer-delay: 0.12s; }
-  .skeleton-cell:nth-child(3) { width: 230px; height: 260px; --shimmer-delay: 0.24s; }
-  .skeleton-cell:nth-child(4) { width: 170px; height: 200px; --shimmer-delay: 0.36s; }
-  .skeleton-cell:nth-child(5) { width: 210px; height: 240px; --shimmer-delay: 0.48s; }
-  @keyframes skeletonShimmer {
-    0% { transform: translateX(-100%); }
-    100% { transform: translateX(100%); }
-  }
+     这段时间页面之前是纯空白，看起来像卡死了——之前摆的是跟正文毫不相干的灰色骨架块，
+     现在直接复用 .cell/.frame-inner 这套"墙上挂照片"的视觉语言（图钉+米白卡纸+悬挂摇摆+
+     未加载时的暖色转圈），骨架屏就是一排还没冲洗出来的照片，跟正文是同一套语言，不再是临时拼凑的占位符 */
+  .skeleton-grid { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 22px 18px; padding: 1.5rem 1.6rem; max-width: 1100px; margin: 0 auto; }
+  .skeleton-grid .cell { cursor: default; }
   @media (max-width: 640px) {
-    /* 跟真实 .grid/.cell 的移动端规则对齐——骨架屏要是还按桌面端的固定像素宽度摆，
-       两列并排在窄屏上很容易直接溢出，跟真实内容的版式也对不上 */
     .skeleton-grid { gap: 14px 10px; padding: 0.5rem 0.5rem 1.5rem; }
-    .skeleton-cell:nth-child(1) { width: 40vw; height: 48vw; }
-    .skeleton-cell:nth-child(2) { width: 40vw; height: 38vw; }
-    .skeleton-cell:nth-child(3) { width: 40vw; height: 54vw; }
-    .skeleton-cell:nth-child(4) { width: 40vw; height: 42vw; }
-    .skeleton-cell:nth-child(5) { width: 40vw; height: 50vw; }
   }
   #content { transition: opacity 0.22s ease; }
   .grid {
@@ -2947,7 +2923,18 @@ const APP_JS = `
     const isFirst = _memFirstLoad;
     _memFirstLoad = false;
 
-    const SKELETON_HTML = '<div class="skeleton-grid"><div class="skeleton-cell"></div><div class="skeleton-cell"></div><div class="skeleton-cell"></div><div class="skeleton-cell"></div><div class="skeleton-cell"></div></div>';
+    // 骨架屏的卡片直接复用真实照片用的 .cell/.frame-inner——尺寸/倾斜角/摇摆节奏的算法
+    // 也跟下面渲染真实照片时的 pickSize/pickTilt 保持一致（seed 就用数组下标），
+    // 这样骨架屏看起来就是同一套"墙上挂照片"，而不是另一套临时拼凑的占位符
+    const SKELETON_SIZES = [150, 190, 230, 170, 210];
+    const SKELETON_TILTS = [-3, -1.5, 0, 1.5, 3];
+    const SKELETON_HTML = '<div class="skeleton-grid">' + SKELETON_SIZES.map((w, i) => {
+      const swayDur = (4 + (i % 4) * 0.7).toFixed(1);
+      const swayDelay = ((i % 5) * 0.5).toFixed(1);
+      const enterDelay = (i * 0.05).toFixed(2);
+      const style = 'width:' + w + 'px;--tilt-deg:' + SKELETON_TILTS[i] + ';--sway-dur:' + swayDur + 's;--sway-delay:' + swayDelay + 's;--enter-delay:' + enterDelay + 's;';
+      return '<div class="cell" style="' + style + '"><div class="frame-inner"></div></div>';
+    }).join('') + '</div>';
 
     function fadeOut() {
       content.style.opacity = '0';
@@ -3285,11 +3272,11 @@ const HTML = `<!doctype html>
   </div>
   <div id="content">
     <div class="skeleton-grid">
-      <div class="skeleton-cell"></div>
-      <div class="skeleton-cell"></div>
-      <div class="skeleton-cell"></div>
-      <div class="skeleton-cell"></div>
-      <div class="skeleton-cell"></div>
+      <div class="cell" style="width:150px;--tilt-deg:-3;--sway-dur:4.0s;--sway-delay:0.0s;--enter-delay:0.00s;"><div class="frame-inner"></div></div>
+      <div class="cell" style="width:190px;--tilt-deg:-1.5;--sway-dur:4.7s;--sway-delay:0.5s;--enter-delay:0.05s;"><div class="frame-inner"></div></div>
+      <div class="cell" style="width:230px;--tilt-deg:0;--sway-dur:5.4s;--sway-delay:1.0s;--enter-delay:0.10s;"><div class="frame-inner"></div></div>
+      <div class="cell" style="width:170px;--tilt-deg:1.5;--sway-dur:6.1s;--sway-delay:1.5s;--enter-delay:0.15s;"><div class="frame-inner"></div></div>
+      <div class="cell" style="width:210px;--tilt-deg:3;--sway-dur:4.0s;--sway-delay:2.0s;--enter-delay:0.20s;"><div class="frame-inner"></div></div>
     </div>
   </div>
 
