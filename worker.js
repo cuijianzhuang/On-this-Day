@@ -1060,9 +1060,16 @@ async function handleThumb(request, env, url) {
   const height = url.searchParams.get("h") ? Math.min(Math.max(Number(url.searchParams.get("h")), 1), 2000) : undefined;
   const quality = Math.min(Math.max(Number(url.searchParams.get("q")) || 75, 1), 100);
   const fit = url.searchParams.get("fit") || "scale-down";
+  // 按浏览器 Accept 头协商更小的格式：同质量下 AVIF/WebP 比 JPEG 能再小 30%-50%，
+  // 不支持的浏览器（Accept 里没带）照样拿 JPEG，不强求
+  const format = pickThumbFormat(request);
 
   const cache = caches.default;
-  const cacheKey = new Request(url.toString());
+  // 缓存键要把协商出来的格式带上——边缘缓存本身不认 Vary，同一个 URL 不分格式存只会有一份，
+  // 不加这个的话谁先访问谁的格式就会被缓存下来，错发给后来不支持那个格式的浏览器
+  const cacheUrl = new URL(url.toString());
+  cacheUrl.searchParams.set("_fmt", format);
+  const cacheKey = new Request(cacheUrl.toString());
   const cachedResp = await cache.match(cacheKey);
   if (cachedResp) return cachedResp;
 
@@ -1074,17 +1081,27 @@ async function handleThumb(request, env, url) {
     // format 必须写成 "image/jpeg" 这种完整 MIME，不能只写 "jpeg" —— 这几处之前全写错了，导致每张图都转换失败
     const transformed = await env.IMAGES.input(object.body)
       .transform({ width, height, fit })
-      .output({ format: "image/jpeg", quality });
+      .output({ format, quality });
     const tResp = transformed.response();
     const headers = new Headers(tResp.headers);
     headers.set("cache-control", "public, max-age=31536000, immutable");
+    headers.set("vary", "Accept");
     const response = new Response(tResp.body, { status: tResp.status, headers });
     await cache.put(cacheKey, response.clone());
     return response;
   } catch {
-    // 转换失败（比如某些边界格式）就回退原图，别让照片整个挂掉
+    // 转换失败（比如某些边界格式，或者协商出来的格式这次解不了）就回退原图，别让照片整个挂掉
     return handleImage(request, env, new URL(url.toString().replace("/thumb/", "/img/")));
   }
+}
+
+// 按 Accept 头挑一个浏览器实际支持的格式里最小的那个，挑不出来（没带 Accept，或者是没有
+// image/avif、image/webp 的老浏览器/工具）就老实退回 JPEG
+function pickThumbFormat(request) {
+  const accept = request.headers.get("accept") || "";
+  if (accept.includes("image/avif")) return "image/avif";
+  if (accept.includes("image/webp")) return "image/webp";
+  return "image/jpeg";
 }
 
 // ---------- AI 选片：用 Workers AI 给照片打"值不值得展示"的分，离线批处理，结果存进 D1 ----------
