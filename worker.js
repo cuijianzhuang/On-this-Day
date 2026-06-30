@@ -2023,12 +2023,24 @@ const HTML = `<!doctype html>
   .year-title .count { color: #6e6e73; font-size: 0.78rem; font-weight: 400; font-family: 'Space Grotesk', sans-serif; }
   /* 首次加载/缓存没命中时 /api/memories 可能要等几秒（库跨年头多，R2 扫描+读 EXIF 需要时间），
      这段时间页面之前是纯空白，看起来像卡死了——先摆几个呼吸感的占位块，至少让人知道"在加载"而不是"挂了" */
-  .skeleton-grid { display: flex; flex-wrap: wrap; gap: 22px 18px; padding: 2rem 1.6rem; max-width: 1100px; margin: 0 auto; }
+  .skeleton-grid { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 22px 18px; padding: 2rem 1.6rem; max-width: 1100px; margin: 0 auto; }
   .skeleton-cell {
-    height: 190px; border-radius: 3px; background: rgba(255,255,255,0.06);
-    animation: skeletonPulse 1.4s ease-in-out infinite;
+    height: 190px; border-radius: 3px; background-color: rgba(255,255,255,0.06);
+    background-image: linear-gradient(100deg, transparent 35%, rgba(255,255,255,0.14) 50%, transparent 65%);
+    background-size: 200% 100%;
+    animation: skeletonShimmer 1.6s ease-in-out infinite;
+    animation-delay: var(--shimmer-delay, 0s);
   }
-  @keyframes skeletonPulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 0.9; } }
+  /* 错开每个块的动画起点，光带依次扫过而不是齐刷刷一起闪，看起来更像"正在逐个加载" */
+  .skeleton-cell:nth-child(1) { --shimmer-delay: 0s; }
+  .skeleton-cell:nth-child(2) { --shimmer-delay: 0.12s; }
+  .skeleton-cell:nth-child(3) { --shimmer-delay: 0.24s; }
+  .skeleton-cell:nth-child(4) { --shimmer-delay: 0.36s; }
+  .skeleton-cell:nth-child(5) { --shimmer-delay: 0.48s; }
+  @keyframes skeletonShimmer {
+    0% { background-position: 150% 0; }
+    100% { background-position: -50% 0; }
+  }
   #content { transition: opacity 0.22s ease; }
   .grid {
     display: flex; flex-wrap: wrap; align-items: flex-start;
@@ -2383,11 +2395,11 @@ const HTML = `<!doctype html>
   </div>
   <div id="content">
     <div class="skeleton-grid">
-      <div class="skeleton-cell" style="width:190px"></div>
-      <div class="skeleton-cell" style="width:150px"></div>
-      <div class="skeleton-cell" style="width:230px"></div>
-      <div class="skeleton-cell" style="width:170px"></div>
-      <div class="skeleton-cell" style="width:210px"></div>
+      <div class="skeleton-cell" style="width:190px;height:230px"></div>
+      <div class="skeleton-cell" style="width:150px;height:180px"></div>
+      <div class="skeleton-cell" style="width:230px;height:260px"></div>
+      <div class="skeleton-cell" style="width:170px;height:200px"></div>
+      <div class="skeleton-cell" style="width:210px;height:240px"></div>
     </div>
   </div>
 
@@ -2971,7 +2983,7 @@ const HTML = `<!doctype html>
     const isFirst = _memFirstLoad;
     _memFirstLoad = false;
 
-    const SKELETON_HTML = '<div class="skeleton-grid"><div class="skeleton-cell" style="width:190px"></div><div class="skeleton-cell" style="width:150px"></div><div class="skeleton-cell" style="width:230px"></div><div class="skeleton-cell" style="width:170px"></div><div class="skeleton-cell" style="width:210px"></div></div>';
+    const SKELETON_HTML = '<div class="skeleton-grid"><div class="skeleton-cell" style="width:190px;height:230px"></div><div class="skeleton-cell" style="width:150px;height:180px"></div><div class="skeleton-cell" style="width:230px;height:260px"></div><div class="skeleton-cell" style="width:170px;height:200px"></div><div class="skeleton-cell" style="width:210px;height:240px"></div></div>';
 
     function fadeOut() {
       content.style.opacity = '0';
