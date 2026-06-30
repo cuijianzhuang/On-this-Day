@@ -2966,25 +2966,41 @@ const HTML = `<!doctype html>
   function loadMemories(month, day) {
     const content = document.getElementById('content');
     const subtitle = document.getElementById('subtitle');
-    const FADE_MS = 180;
+    const FADE_MS = 220; // 跟 #content 的 CSS transition 时长对齐，不然淡出动画没走完就被打断，看起来像卡顿
     const seq = ++_memSeq;
     const isFirst = _memFirstLoad;
     _memFirstLoad = false;
 
+    const SKELETON_HTML = '<div class="skeleton-grid"><div class="skeleton-cell" style="width:190px"></div><div class="skeleton-cell" style="width:150px"></div><div class="skeleton-cell" style="width:230px"></div><div class="skeleton-cell" style="width:170px"></div><div class="skeleton-cell" style="width:210px"></div></div>';
+
+    function fadeOut() {
+      content.style.opacity = '0';
+      return new Promise((resolve) => setTimeout(resolve, FADE_MS));
+    }
+    function fadeIn() {
+      requestAnimationFrame(() => requestAnimationFrame(() => { content.style.opacity = '1'; }));
+    }
+
+    // 切日期：旧内容先淡出，再换成骨架屏淡入——中间不再是一片空白（衬着纯黑背景看起来像黑屏/卡死），
+    // 骨架屏的脉冲动画能让用户看出"正在加载"。首次加载本来就是骨架屏直出，不用走这一步
+    let skeletonReady = Promise.resolve();
     if (!isFirst) {
-      // 切日期：立即淡出旧内容，提前释放旧 cell 引用，禁用操作按钮防止误触
       subtitle.textContent = '正在唤醒回忆…';
       playBtn.disabled = true;
       yearToggle.disabled = true;
       visibleCells.clear();
       cellCenters.clear();
       allPhotos = [];
-      content.style.opacity = '0';
+      skeletonReady = fadeOut().then(() => {
+        if (seq !== _memSeq) return;
+        content.innerHTML = SKELETON_HTML;
+        fadeIn();
+      });
     }
 
-    const fadeStart = isFirst ? null : Date.now();
+    const fetchPromise = fetch('/api/memories?month=' + month + '&day=' + day).then(r => r.json());
 
-    fetch('/api/memories?month=' + month + '&day=' + day).then(r => r.json()).then(data => {
+    Promise.all([skeletonReady, fetchPromise]).then(([, data]) => {
       if (seq !== _memSeq) return; // 用户已切换到别的日期，丢弃过期结果
 
       const apply = () => {
@@ -2993,7 +3009,7 @@ const HTML = `<!doctype html>
         if (!data.years.length) {
           subtitle.textContent = '这一天，还没有故事';
           content.innerHTML = '<div class="empty">去拍一张，留给未来的自己</div>';
-          requestAnimationFrame(() => requestAnimationFrame(() => { content.style.opacity = '1'; }));
+          fadeIn();
           return;
         }
 
@@ -3130,19 +3146,15 @@ const HTML = `<!doctype html>
           yearMenu.classList.remove('open');
         };
 
-        // 双 rAF 确保浏览器已渲染 opacity:0 的帧，transition 才能从 0→1 正确播放
-        requestAnimationFrame(() => requestAnimationFrame(() => { content.style.opacity = '1'; }));
+        fadeIn();
       };
 
-      if (isFirst) {
-        // 首次加载：API 返回后淡出骨架屏，再淡入真实内容
-        content.style.opacity = '0';
-        setTimeout(apply, FADE_MS);
-      } else {
-        // 切日期：已经开始淡出了，等淡出走完剩余时间再换内容
-        const elapsed = Date.now() - fadeStart;
-        setTimeout(apply, Math.max(0, FADE_MS - elapsed));
-      }
+      // 不管首次加载（骨架屏是 SSR 直出的）还是切日期（骨架屏是上面刚换上的），
+      // 这时候内容区域当前都正显示着骨架屏：统一走"淡出骨架屏 -> 换真实内容 -> 淡入"
+      fadeOut().then(() => {
+        if (seq !== _memSeq) return;
+        apply();
+      });
     });
   }
   loadMemories(month, day);
