@@ -2279,6 +2279,10 @@ const HTML = `<!doctype html>
     body.custom-cursor-active, body.custom-cursor-active * { cursor: none !important; }
   }
 
+  @media (pointer: coarse) {
+    /* 触屏设备禁用摇摆动画，只保留淡入；用户滚动时卡片不乱晃 */
+    .cell { animation: cellFadeIn 0.55s ease var(--enter-delay, 0s) forwards !important; }
+  }
   @media (max-width: 640px) {
     #fingertip, #cursorDot { display: none !important; }
     body { padding: 0 0 3rem; }
