@@ -23,6 +23,8 @@
 ### 成本控制（边缘缓存）
 - `/api/memories`、`/api/map-photos` 的结果都用 Workers Cache API 缓存，避免每次访问都重新扫一遍 R2（List 是 A 类操作，比 Get 贵很多）；新文件上传/删除时队列消费者会自动清掉对应那天的缓存，不用等 30 分钟自然过期
 - `/img/` 图片字节本身也显式缓存在边缘节点，同一张照片被反复请求不会重复打 R2；206 Range 响应（视频拖动/取封面帧）不缓存——Cache API 不支持缓存 Partial Content
+- `/thumb/` 缩略图按浏览器 `Accept` 头协商输出 AVIF/WebP（同质量下比 JPEG 小 30%-50%），不支持的浏览器照样拿 JPEG；缓存键里带上协商出来的格式，避免边缘缓存不区分格式导致错发
+- 页面内联的 CSS/JS 拆成独立文件，按内容算指纹生成 `/static/app-<hash>.css|js`、`/static/map-<hash>.css|js`，走 `immutable` 强缓存；HTML 文档本身仍然 `no-store`，内容一变 hash 自动跟着变，不用手动清缓存
 - AI 打分、查地点、HEIC 转码、索引回填等批量后台处理改用 **Cron 定时任务**（每 10 分钟跑一次，见下方"后台任务"），跟用户访问页面完全分开，不会因为叠加子请求把 `/api/memories` 撞到 Workers 单次调用的子请求上限
 
 ### AI 选片 + 文案
@@ -55,6 +57,8 @@
 - 支持 URL 参数 `?month=06&day=27` 查看指定日期，不传则用浏览器本地日期
 - 移动端做了响应式适配：缩略图分辨率按视口宽度 × 设备像素比算（不再照搬桌面端的随机尺寸，省流量/更清晰）；灯箱用 `touch-action: pinch-zoom` 既能双指缩放看细节又不会被单指滑动手势带着背后整页一起滚动；顶部悬浮控件用 `env(safe-area-inset-*)` 适配刘海屏/灵动岛
 - 缩略图加载失败会按 5s/15s/45s 退避自动重试（破缓存重新请求 `/thumb/`），很多裂图只是服务端转码还没追上，不用手动刷新整页；重试用完才退回到 HEIC 现场解码/原图兜底
+- 非 Live Photo 的独立视频 cell 用 `IntersectionObserver` 懒加载（`<video>` 不支持原生 `loading="lazy"`），滚到视口才赋值 `src`，避免一进页面所有视频同时抢带宽；`preload="metadata"` 既保证没进视口前零请求，又能在赋值 `src` 后立刻取到首帧，不会卡住加载动画
+- 切换日期时用骨架屏过渡（错峰扫光 + GPU 加速的 `transform` 动画），而不是直接黑屏/白屏跳变；同时处理了快网络下骨架屏还没来得及淡入、真实内容就已经返回的竞态，避免画面闪烁
 - 副标题下方有一行"今日诗词"（接的 [jinrishici.com](https://www.jinrishici.com/doc/) 的 API），按"今天"的真实日期缓存一份，跟翻看哪个历史日期无关；第三方接口挂了不影响主页面
 
 ## 目录结构
@@ -236,7 +240,6 @@ Cloudflare 的图片处理（Images binding、Image Resizing）都不支持 HEIC
 ## 已知限制
 
 - HEIC 的 EXIF 解析是按 ISOBMFF 容器结构手写的 box 解析（meta/iinf/iloc），对非典型编码方式的 HEIC 文件可能解析失败，失败会静默回退到 R2 上传时间近似，不会报错
-- 月份目录下文件较多且大量缺日期文件名时，首次访问会因逐个判断拍摄日期而变慢（命中缓存后会快很多）；`matchPhotosForDay`（页面实际展示用的匹配逻辑）目前仍然现场扫 R2 + 限并发（8）读 EXIF，没有切到 `photos_index`，库特别大时这部分仍有压到子请求/内存上限的风险，后台任务（Cron）已经切过去了
 - 未做存储层的访问控制，必须配合 Cloudflare Access 或同等方案保护隐私
 - AI 打分、反向地理编码都会产生外部调用费用（超出免费额度部分），自动处理只在 Cron 里小批量跑，不会扫全量库，但仍建议关注 Cloudflare / Mapbox 账单
 - Mapbox 的 secret token 创建时要勾上 **Geocoding** 权限范围，没勾会一直 403（跟 token 过期/拼错无关，是权限范围没给对）
