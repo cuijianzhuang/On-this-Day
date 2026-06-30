@@ -2929,6 +2929,18 @@ const HTML = `<!doctype html>
     }
   }, { rootMargin: '200px' });
 
+  // 独立视频 cell 用 data-src 占位，进视口附近才真正赋值触发加载——<video> 标签本身不支持
+  // loading="lazy"，不接这个的话一进页面所有视频会同时发起 Range 请求抢带宽，体感卡顿
+  const videoLazyObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const v = entry.target;
+      v.src = v.dataset.src;
+      v.removeAttribute('data-src');
+      videoLazyObserver.unobserve(v);
+    }
+  }, { rootMargin: '300px' });
+
   function wallTick() {
     requestAnimationFrame(wallTick);
 
@@ -3123,7 +3135,7 @@ const HTML = `<!doctype html>
             // 不再传 h= + fit=cover 强制裁成正方形——只限宽，fit=scale-down 按原图比例缩放，不裁内容
             const thumbSrc = p.url.replace('/img/', '/thumb/') + '?w=' + thumbW + '&q=75&fit=scale-down';
             if (p.type === 'video') {
-              return \`<div class="cell\${extraClass}" style="\${style}" onclick="openLightbox(\${flatIndex}, false)"><div class="frame-inner"><video src="\${p.url}#t=0.5" muted loop preload="metadata" onloadeddata="this.classList.add('loaded')" onmouseenter="this.play().catch(()=>{})" onmouseleave="this.pause();this.currentTime=0.5"></video></div><span class="play-badge">▶ 视频</span><span class="frame-year">\${y.year}</span></div>\`;
+              return \`<div class="cell\${extraClass}" style="\${style}" onclick="openLightbox(\${flatIndex}, false)"><div class="frame-inner"><video data-src="\${escAttr(p.url)}#t=0.5" muted loop preload="none" onloadeddata="this.classList.add('loaded')" onmouseenter="this.play().catch(()=>{})" onmouseleave="this.pause();this.currentTime=0.5"></video></div><span class="play-badge">▶ 视频</span><span class="frame-year">\${y.year}</span></div>\`;
             }
             if (p.type === 'live') {
               // Live Photo 缩略图：默认显示静态图，悬浮（桌面）/长按（移动端）才播放配对的短视频
@@ -3145,6 +3157,7 @@ const HTML = `<!doctype html>
     \`;
         }).join('');
         content.querySelectorAll('.cell').forEach((cell) => cellObserver.observe(cell));
+        content.querySelectorAll('.cell video[data-src]').forEach((v) => videoLazyObserver.observe(v));
 
         // "跳到某一年"下拉菜单：照片加载完才知道有哪些年份，这时候再填充菜单内容、解锁按钮
         yearToggle.disabled = false;
