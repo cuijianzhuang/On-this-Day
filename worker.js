@@ -51,7 +51,6 @@ async function decodeHeicToJpeg(buffer, quality = 85) {
 const IMAGE_EXT = /\.(jpe?g|png|heic|gif|webp)$/i;
 const VIDEO_EXT = /\.(mov|mp4)$/i;
 const BASE_PREFIX = "Photos/MobileBackup/iPhone/";
-const DATE_IN_NAME = /(19|20)\d{6}/; // 文件名里是否带 YYYYMMDD 风格的日期
 
 // 记录最近一次有人查看的 month/day（存在 D1 的 meta 表），给 Cron 任务做优先级参考
 async function getLastViewedDay(env) {
@@ -208,9 +207,8 @@ async function runBackgroundMaintenance(env) {
   // 之前这里用 listAll() 扫一遍整个 R2 桶 + matchPhotosForDay() 对每个年份再扫一遍、
   // 并发读一批 EXIF——8000+ 张照片之后这套组合在 Cron 里稳定触发 exceededMemory，
   // 整个 Cron 任务直接被杀掉，打分/查地点/HEIC 转码全都没跑成。改成查 photos_index 表，
-  // 只是个候选池（回填还没跑完，不是 100% 全），但便宜、不占内存，不会再把 Cron 炸掉。
-  // 等 /admin/backfill-photos-index 跑完、matchPhotosForDay 也切到这张表之后，
-  // 这里的"今天优先"就能恢复到完整覆盖
+  // 候选池准不准全看回填有没有跑完——没跑完之前只是子集，跑完之后这里的"今天优先"就是完整覆盖了
+  // （matchPhotosForDay 现在也改查这张表了，两边口径一致）
   const now = new Date();
   const realToday = { month: String(now.getMonth() + 1).padStart(2, "0"), day: String(now.getDate()).padStart(2, "0") };
   const lastViewed = await getLastViewedDay(env);
@@ -270,8 +268,8 @@ async function runBackgroundMaintenance(env) {
   }
 }
 
-// 扫一遍所有年份，找出某个 month/day 匹配到的照片/视频（不含打分、地点等附加信息，
-// 那些是按场景分别合并的）。handleMemories 和"地图只看当天"功能共用同一份匹配逻辑，避免逻辑分叉
+// 找出某个 month/day 匹配到的照片/视频（不含打分、地点等附加信息，那些是按场景分别合并的）。
+// handleMemories 和"地图只看当天"功能共用同一份匹配逻辑，避免逻辑分叉
 // 去掉扩展名的文件名，用来配对 Live Photo——iPhone 的 Live Photo 在 R2 里是两个独立文件，
 // 同目录、文件名（去掉扩展名）完全相同的一张 HEIC/JPEG + 一段 MOV，例如
 // IMG_1234.HEIC 配 IMG_1234.MOV
@@ -336,35 +334,29 @@ async function mapWithConcurrency(items, limit, fn) {
 }
 
 async function matchPhotosForDay(env, month, day) {
-  const yearPrefixes = await listYears(env.PHOTOS);
-  // 年份之间完全互不依赖（各自 list 一遍当年当月、各自判断当天），之前是一个年份处理完才轮到下一个，
-  // 库跨了好几个年头时这个累加延迟很容易让 /api/memories 第一次（缓存没命中）要等好几秒，页面空白卡在
-  // "正在唤醒回忆"。改成年份之间也并发跑（限流 4 个年份一起，里面每个年份再限流 8 个 EXIF 请求，
-  // 最坏情况下 32 个并发子请求，远低于 Workers 的上限）
-  const byYearResults = await mapWithConcurrency(yearPrefixes, 4, async (year) => {
-    // 月份下没有按天分文件夹，列出整月再判断每个文件是否是当天拍的
-    const prefix = `${BASE_PREFIX}${year}/${month}/`;
-    const dateTag = `${year}${month}${day}`;
-    const items = await listAll(env.PHOTOS, prefix);
-    const candidates = items.filter((obj) => IMAGE_EXT.test(obj.key) || VIDEO_EXT.test(obj.key));
+  // photos_index 在写入时就用跟这里完全相同的规则算好了拍摄日（文件名带日期直接解析，没带的
+  // 走 EXIF/上传时间兜底，见 computePhotoMeta），所以这里直接按索引查，不用再现场 list() 扫 R2 +
+  // 对每个没带日期的文件单独读一次 EXIF——之前这套组合是"切日期卡顿/首次加载等好几秒"的根源
+  const { results } = await env.DB.prepare(
+    "SELECT key, year, size, uploaded FROM photos_index WHERE month = ? AND day = ?"
+  )
+    .bind(month, day)
+    .all();
 
-    const matched = await mapWithConcurrency(candidates, 8, async (obj) => {
-      const basename = obj.key.split("/").pop();
-      if (DATE_IN_NAME.test(basename)) {
-        // 文件名自带日期，直接字符串匹配
-        return basename.includes(dateTag) ? obj : null;
-      }
-      // 文件名没有日期（如 IMG_1017.JPG），尝试读 EXIF 拍摄时间
-      const md = await getCapturedMonthDay(env.PHOTOS, obj.key);
-      return md && md.month === month && md.day === day ? obj : null;
-    });
+  const byYearRows = new Map();
+  for (const row of results) {
+    if (!byYearRows.has(row.year)) byYearRows.set(row.year, []);
+    byYearRows.get(row.year).push(row);
+  }
 
-    const photos = pairLivePhotos(matched.filter(Boolean), year)
-      // 按文件名/上传时间排一下序，同一年的照片别再乱序出现
-      .sort((a, b) => a.key.localeCompare(b.key));
-    return photos.length > 0 ? { year, month, day, photos } : null;
-  });
-  const byYear = byYearResults.filter(Boolean);
+  const byYear = [...byYearRows.entries()]
+    .map(([year, rows]) => {
+      const photos = pairLivePhotos(rows, year)
+        // 按文件名排一下序，同一年的照片别再乱序出现
+        .sort((a, b) => a.key.localeCompare(b.key));
+      return photos.length > 0 ? { year, month, day, photos } : null;
+    })
+    .filter(Boolean);
   byYear.sort((a, b) => Number(b.year) - Number(a.year));
   return byYear;
 }
@@ -381,19 +373,21 @@ async function handleMemories(request, env, url, ctx) {
     });
   }
 
-  // R2 的 list() 是 A 类操作（比 get 贵很多），同一天会被反复访问，
-  // 用边缘缓存挡住重复请求，避免每次访问都重新扫一遍年份+整月文件
+  // 同一天会被反复访问，用边缘缓存挡住重复请求，避免每次访问都重新查一遍 D1
   const cache = caches.default;
   const cacheKey = new Request(url.toString());
   const cachedResp = await cache.match(cacheKey);
   if (cachedResp) return cachedResp;
 
-  // AI 离线打分的结果（没跑过 /admin/score-photos 或某张图还没轮到时，对应分数就是 undefined）
-  const scores = await loadScores(env);
-  // 拍摄地点（反向地理编码结果），同样是离线缓存，没查过的是 undefined，查过但没 GPS 信息的是空字符串
-  const places = await loadPlaces(env);
-
   const matchedByYear = await matchPhotosForDay(env, month, day);
+  // 只查这一天命中的那几十张照片，不用把整张 photo_scores/photo_places 表都读出来——
+  // 这两张表是跟着整个库的年头一起涨的，按 key 过滤之后查询成本只跟"今天"的照片数挂钩
+  const matchedKeys = matchedByYear.flatMap((y) => y.photos.map((p) => p.key));
+  // AI 离线打分的结果（没跑过 /admin/score-photos 或某张图还没轮到时，对应分数就是 undefined）
+  const scores = await loadScoresForKeys(env, matchedKeys);
+  // 拍摄地点（反向地理编码结果），同样是离线缓存，没查过的是 undefined，查过但没 GPS 信息的是空字符串
+  const places = await loadPlacesForKeys(env, matchedKeys);
+
   const results = matchedByYear.map((y) => ({
     ...y,
     photos: y.photos.map((p) => {
@@ -427,26 +421,6 @@ async function handleMemories(request, env, url, ctx) {
   }
 
   return response;
-}
-
-// 列出 BASE_PREFIX 下的年份子目录（用 delimiter 实现"目录"语义）
-async function listYears(bucket) {
-  const years = new Set();
-  let cursor;
-  const yearRegex = new RegExp(`^${BASE_PREFIX.replace(/\//g, "\\/")}(\\d{4})\\/$`);
-  do {
-    const listing = await bucket.list({
-      prefix: BASE_PREFIX,
-      delimiter: "/",
-      cursor,
-    });
-    for (const p of listing.delimitedPrefixes || []) {
-      const m = p.match(yearRegex);
-      if (m) years.add(m[1]);
-    }
-    cursor = listing.truncated ? listing.cursor : undefined;
-  } while (cursor);
-  return Array.from(years);
 }
 
 // 列出某 prefix 下所有对象（自动翻页）
@@ -1131,6 +1105,28 @@ async function loadScores(env) {
   return scores;
 }
 
+// 只查指定 key 列表（用于 /api/memories：一天命中的照片就几十张，不用每次把整张表读出来）
+async function loadScoresForKeys(env, keys) {
+  if (keys.length === 0) return {};
+  const placeholders = keys.map(() => "?").join(",");
+  const { results } = await env.DB.prepare(
+    `SELECT key, score, has_face, caption, raw_response, updated_at FROM photo_scores WHERE key IN (${placeholders})`
+  )
+    .bind(...keys)
+    .all();
+  const scores = {};
+  for (const row of results) {
+    scores[row.key] = {
+      score: row.score,
+      hasFace: !!row.has_face,
+      caption: row.caption || "",
+      rawResponse: row.raw_response || "",
+      updatedAt: row.updated_at || "",
+    };
+  }
+  return scores;
+}
+
 async function saveScore(env, key, info) {
   await env.DB.prepare(
     "INSERT INTO photo_scores (key, score, has_face, caption, raw_response, updated_at) VALUES (?, ?, ?, ?, ?, ?) " +
@@ -1232,6 +1228,22 @@ async function scoreKeys(env, keys) {
 // ---------- 拍摄地点：从 EXIF GPS 反向地理编码成地名，离线批处理，结果存进 D1 ----------
 async function loadPlaces(env) {
   const { results } = await env.DB.prepare("SELECT key, lat, lon, name FROM photo_places").all();
+  const places = {};
+  for (const row of results) {
+    places[row.key] = { lat: row.lat, lon: row.lon, name: row.name || "" };
+  }
+  return places;
+}
+
+// 同 loadScoresForKeys：只查指定 key 列表
+async function loadPlacesForKeys(env, keys) {
+  if (keys.length === 0) return {};
+  const placeholders = keys.map(() => "?").join(",");
+  const { results } = await env.DB.prepare(
+    `SELECT key, lat, lon, name FROM photo_places WHERE key IN (${placeholders})`
+  )
+    .bind(...keys)
+    .all();
   const places = {};
   for (const row of results) {
     places[row.key] = { lat: row.lat, lon: row.lon, name: row.name || "" };
@@ -1569,8 +1581,7 @@ async function handlePoem(request, env, url) {
 
 // ---------- 地图页用的数据接口：把所有查到过经纬度的照片列出来，给前端打点 ----------
 // 地图只展示某一天（默认今天）匹配到的照片，不是整个照片库——
-// 跟 /api/memories 共用同一套日期匹配逻辑（matchPhotosForDay），并且同样做边缘缓存，
-// 避免每次开地图都重新扫一遍年份+整月文件，撞上 Workers 的子请求上限
+// 跟 /api/memories 共用同一套日期匹配逻辑（matchPhotosForDay），并且同样做边缘缓存
 async function handleMapPhotos(request, env, url) {
   const month = url.searchParams.get("month");
   const day = url.searchParams.get("day");
@@ -1586,8 +1597,9 @@ async function handleMapPhotos(request, env, url) {
   const cachedResp = await cache.match(cacheKey);
   if (cachedResp) return cachedResp;
 
-  const places = await loadPlaces(env);
   const matchedByYear = await matchPhotosForDay(env, month, day);
+  const matchedKeys = matchedByYear.flatMap((y) => y.photos.map((p) => p.key));
+  const places = await loadPlacesForKeys(env, matchedKeys);
 
   const photos = matchedByYear
     .flatMap((y) => y.photos)
