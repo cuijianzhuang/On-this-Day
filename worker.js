@@ -1150,24 +1150,39 @@ async function loadScores(env) {
   return scores;
 }
 
+// D1 单条语句的绑定参数上限是 100 个——年头跨度大、某天又凑巧拍得多时，一天命中的 key 数量
+// 完全可能超过 100，IN (?,?,...) 一超就直接报错（之前是这里把整个 /api/memories 拖成 500）。
+// 按 100 个一批拆开查，并行发出去再合并结果
+function chunkArray(arr, size) {
+  const chunks = [];
+  for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
+  return chunks;
+}
+
 // 只查指定 key 列表（用于 /api/memories：一天命中的照片就几十张，不用每次把整张表读出来）
 async function loadScoresForKeys(env, keys) {
   if (keys.length === 0) return {};
-  const placeholders = keys.map(() => "?").join(",");
-  const { results } = await env.DB.prepare(
-    `SELECT key, score, has_face, caption, raw_response, updated_at FROM photo_scores WHERE key IN (${placeholders})`
-  )
-    .bind(...keys)
-    .all();
+  const batches = await Promise.all(
+    chunkArray(keys, 100).map((batch) => {
+      const placeholders = batch.map(() => "?").join(",");
+      return env.DB.prepare(
+        `SELECT key, score, has_face, caption, raw_response, updated_at FROM photo_scores WHERE key IN (${placeholders})`
+      )
+        .bind(...batch)
+        .all();
+    })
+  );
   const scores = {};
-  for (const row of results) {
-    scores[row.key] = {
-      score: row.score,
-      hasFace: !!row.has_face,
-      caption: row.caption || "",
-      rawResponse: row.raw_response || "",
-      updatedAt: row.updated_at || "",
-    };
+  for (const { results } of batches) {
+    for (const row of results) {
+      scores[row.key] = {
+        score: row.score,
+        hasFace: !!row.has_face,
+        caption: row.caption || "",
+        rawResponse: row.raw_response || "",
+        updatedAt: row.updated_at || "",
+      };
+    }
   }
   return scores;
 }
@@ -1283,15 +1298,21 @@ async function loadPlaces(env) {
 // 同 loadScoresForKeys：只查指定 key 列表
 async function loadPlacesForKeys(env, keys) {
   if (keys.length === 0) return {};
-  const placeholders = keys.map(() => "?").join(",");
-  const { results } = await env.DB.prepare(
-    `SELECT key, lat, lon, name FROM photo_places WHERE key IN (${placeholders})`
-  )
-    .bind(...keys)
-    .all();
+  const batches = await Promise.all(
+    chunkArray(keys, 100).map((batch) => {
+      const placeholders = batch.map(() => "?").join(",");
+      return env.DB.prepare(
+        `SELECT key, lat, lon, name FROM photo_places WHERE key IN (${placeholders})`
+      )
+        .bind(...batch)
+        .all();
+    })
+  );
   const places = {};
-  for (const row of results) {
-    places[row.key] = { lat: row.lat, lon: row.lon, name: row.name || "" };
+  for (const { results } of batches) {
+    for (const row of results) {
+      places[row.key] = { lat: row.lat, lon: row.lon, name: row.name || "" };
+    }
   }
   return places;
 }
