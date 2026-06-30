@@ -1790,7 +1790,8 @@ const HTML = `<!doctype html>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
-  html, body { scrollbar-width: none; -ms-overflow-style: none; }
+  html, body { scrollbar-width: none; -ms-overflow-style: none; overflow-x: hidden; }
+  body { touch-action: pan-y; }
   html::-webkit-scrollbar, body::-webkit-scrollbar { display: none; }
   body {
     font-family: "SF Pro Display", -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
