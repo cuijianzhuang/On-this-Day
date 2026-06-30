@@ -126,6 +126,30 @@ export default {
       });
     }
 
+    if (url.pathname === `/static/app-${APP_CSS_HASH}.css`) {
+      return new Response(APP_CSS, {
+        headers: { "content-type": "text/css; charset=utf-8", "cache-control": "public, max-age=31536000, immutable" },
+      });
+    }
+
+    if (url.pathname === `/static/app-${APP_JS_HASH}.js`) {
+      return new Response(APP_JS, {
+        headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=31536000, immutable" },
+      });
+    }
+
+    if (url.pathname === `/static/map-${MAP_CSS_HASH}.css`) {
+      return new Response(MAP_CSS, {
+        headers: { "content-type": "text/css; charset=utf-8", "cache-control": "public, max-age=31536000, immutable" },
+      });
+    }
+
+    if (url.pathname === `/static/map-${MAP_JS_HASH}.js`) {
+      return new Response(MAP_JS, {
+        headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=31536000, immutable" },
+      });
+    }
+
     if (url.pathname === "/" || url.pathname === "/index.html") {
       return new Response(HTML, {
         headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
@@ -1085,9 +1109,13 @@ async function handleThumb(request, env, url) {
     const tResp = transformed.response();
     const headers = new Headers(tResp.headers);
     headers.set("cache-control", "public, max-age=31536000, immutable");
-    headers.set("vary", "Accept");
     const response = new Response(tResp.body, { status: tResp.status, headers });
-    await cache.put(cacheKey, response.clone());
+    // cache.put() 只认 Vary: Accept-Encoding，塞别的值（包括 Accept）会直接抛 TypeError——
+    // 之前在 clone 前就设了这个头，等于连缓存进去的那份也带着它，每次都在这步炸掉、
+    // 掉进 catch 退回原图，缩略图转换/缓存整个失效。改成只在真正回给浏览器的这份上设
+    const cachedResponse = response.clone();
+    response.headers.set("vary", "Accept");
+    await cache.put(cacheKey, cachedResponse);
     return response;
   } catch {
     // 转换失败（比如某些边界格式，或者协商出来的格式这次解不了）就回退原图，别让照片整个挂掉
@@ -1655,20 +1683,24 @@ const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"
   </g>
 </svg>`;
 
-// ---------- 地图页：把所有带 GPS 的照片打点在地图上 ----------
-// 这里用的 token 必须是 public token（pk. 开头），跟服务端反向地理编码用的 secret token 是两个东西，
-// 因为这段代码会原样发到浏览器执行，secret token 绝对不能出现在这里
-const MAP_HTML = (mapboxPublicToken) => `<!doctype html>
-<html lang="zh">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>足迹 · 那年今日</title>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-<link href="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.css" rel="stylesheet" />
-<script src="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/heic2any/dist/heic2any.min.js" defer></script>
-<style>
+// ---------- 静态资源：把页面里原本内联的 CSS/JS 拆出来，按内容算个指纹挂在 URL 上长期强缓存 ----------
+// 之前 HTML/MAP_HTML 整页都是 no-store（保证内容跟着每次部署更新），代价是几十 KB 的 CSS/JS
+// 每次切日期/每次访问都要重新传一遍。拆出来之后页面本体还是 no-store（永远拿到最新的资源链接），
+// 但 CSS/JS 本身按内容 hash 出一个不会变的 URL，可以 immutable 缓存一整年——内容没变 hash 就不变，
+// 浏览器命中本地缓存直接不发请求；内容变了 hash 跟着变，又不会有缓存不过期吃到旧版本的问题
+function fingerprint(str) {
+  let h1 = 0xdeadbeef ^ str.length, h2 = 0x41c6ce57 ^ str.length;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+
+const MAP_CSS = `
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   body {
@@ -1706,16 +1738,8 @@ const MAP_HTML = (mapboxPublicToken) => `<!doctype html>
   .popup-caption { padding: 0.5rem 0.7rem; font-size: 0.78rem; color: #c7c7cc; }
   .mapboxgl-popup-close-button { color: #fff; font-size: 1.1rem; padding: 0.2rem 0.5rem; }
   .mapboxgl-ctrl-attrib { font-size: 0.65rem; }
-</style>
-</head>
-<body>
-  <a class="back-btn" href="/" title="回到回忆墙">
-    <svg viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
-  </a>
-  <div id="map"></div>
-  <div class="map-empty" id="mapEmpty">这一天还没有带定位信息的照片<br />去 /admin/locate-photos 跑一下批量查询，或者等 Cron 任务慢慢处理</div>
-
-<script>
+`;
+const MAP_JS = `
   // 拼 HTML 字符串时用来转义属性值，避免文件名/路径里万一带了引号之类的字符把属性或内嵌脚本弄断
   function escAttr(s) { return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;'); }
 
@@ -1747,7 +1771,7 @@ const MAP_HTML = (mapboxPublicToken) => `<!doctype html>
   const mapMonth = mapParams.get('month') || String(mapNow.getMonth() + 1).padStart(2, '0');
   const mapDay = mapParams.get('day') || String(mapNow.getDate()).padStart(2, '0');
 
-  mapboxgl.accessToken = ${JSON.stringify(mapboxPublicToken)};
+  mapboxgl.accessToken = window.MAPBOX_TOKEN;
   const map = new mapboxgl.Map({
     container: 'map',
     style: 'mapbox://styles/mapbox/dark-v11',
@@ -1801,22 +1825,8 @@ const MAP_HTML = (mapboxPublicToken) => `<!doctype html>
       map.fitBounds([[minLon, minLat], [maxLon, maxLat]], { padding: 60, maxZoom: 12 });
     }
   });
-</script>
-</body>
-</html>`;
-
-// ---------- 前端页面 ----------
-const HTML = `<!doctype html>
-<html lang="zh">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>那年今日</title>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet" />
-<script src="https://cdn.jsdelivr.net/npm/heic2any/dist/heic2any.min.js" defer></script>
-<style>
+`;
+const APP_CSS = `
   :root { color-scheme: dark; }
   * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
   html, body { scrollbar-width: none; -ms-overflow-style: none; }
@@ -2053,22 +2063,35 @@ const HTML = `<!doctype html>
   /* 首次加载/缓存没命中时 /api/memories 可能要等几秒（库跨年头多，R2 扫描+读 EXIF 需要时间），
      这段时间页面之前是纯空白，看起来像卡死了——先摆几个呼吸感的占位块，至少让人知道"在加载"而不是"挂了" */
   .skeleton-grid { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 22px 18px; padding: 2rem 1.6rem; max-width: 1100px; margin: 0 auto; }
-  .skeleton-cell {
-    height: 190px; border-radius: 3px; background-color: rgba(255,255,255,0.06);
+  .skeleton-cell { position: relative; overflow: hidden; border-radius: 3px; background-color: rgba(255,255,255,0.06); }
+  /* 扫光用 ::after + transform 而不是动 background-position——transform 能丢给 GPU 合成层，
+     不会像改 background-position 那样每帧触发重绘，低端机上也不会卡 */
+  .skeleton-cell::after {
+    content: ''; position: absolute; inset: 0;
     background-image: linear-gradient(100deg, transparent 35%, rgba(255,255,255,0.14) 50%, transparent 65%);
-    background-size: 200% 100%;
+    transform: translateX(-100%);
     animation: skeletonShimmer 1.6s ease-in-out infinite;
     animation-delay: var(--shimmer-delay, 0s);
   }
-  /* 错开每个块的动画起点，光带依次扫过而不是齐刷刷一起闪，看起来更像"正在逐个加载" */
-  .skeleton-cell:nth-child(1) { --shimmer-delay: 0s; }
-  .skeleton-cell:nth-child(2) { --shimmer-delay: 0.12s; }
-  .skeleton-cell:nth-child(3) { --shimmer-delay: 0.24s; }
-  .skeleton-cell:nth-child(4) { --shimmer-delay: 0.36s; }
-  .skeleton-cell:nth-child(5) { --shimmer-delay: 0.48s; }
+  /* 尺寸、错开的动画起点都放一起：宽窄不一更像挂在墙上的照片，光带依次扫过而不是齐刷刷一起闪 */
+  .skeleton-cell:nth-child(1) { width: 190px; height: 230px; --shimmer-delay: 0s; }
+  .skeleton-cell:nth-child(2) { width: 150px; height: 180px; --shimmer-delay: 0.12s; }
+  .skeleton-cell:nth-child(3) { width: 230px; height: 260px; --shimmer-delay: 0.24s; }
+  .skeleton-cell:nth-child(4) { width: 170px; height: 200px; --shimmer-delay: 0.36s; }
+  .skeleton-cell:nth-child(5) { width: 210px; height: 240px; --shimmer-delay: 0.48s; }
   @keyframes skeletonShimmer {
-    0% { background-position: 150% 0; }
-    100% { background-position: -50% 0; }
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+  }
+  @media (max-width: 640px) {
+    /* 跟真实 .grid/.cell 的移动端规则对齐——骨架屏要是还按桌面端的固定像素宽度摆，
+       两列并排在窄屏上很容易直接溢出，跟真实内容的版式也对不上 */
+    .skeleton-grid { gap: 14px 10px; padding: 0.5rem 0.5rem 1.5rem; }
+    .skeleton-cell:nth-child(1) { width: 40vw; height: 48vw; }
+    .skeleton-cell:nth-child(2) { width: 40vw; height: 38vw; }
+    .skeleton-cell:nth-child(3) { width: 40vw; height: 54vw; }
+    .skeleton-cell:nth-child(4) { width: 40vw; height: 42vw; }
+    .skeleton-cell:nth-child(5) { width: 40vw; height: 50vw; }
   }
   #content { transition: opacity 0.22s ease; }
   .grid {
@@ -2356,108 +2379,8 @@ const HTML = `<!doctype html>
       -webkit-tap-highlight-color: transparent;
     }
   }
-</style>
-</head>
-<body>
-  <div class="sunlight">
-    <div class="glow"></div>
-    <div class="video-layer">
-      <video id="leafVideo" autoplay muted loop playsinline>
-        <source src="https://image.cuijianzhuang.com/leaves.mp4" type="video/mp4" />
-      </video>
-    </div>
-  </div>
-  <div class="sun-sweep" id="sunSweep"></div>
-  <header>
-    <div class="eyebrow">回忆 · Memories</div>
-    <h1 id="title">那年今日</h1>
-    <div class="subtitle" id="subtitle">正在唤醒回忆</div>
-    <div class="daily-poem" id="dailyPoem"></div>
-    <button class="play-memories" id="playMemories" title="播放回忆" disabled>
-      <svg id="playIconPlay" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z" stroke-linejoin="round"/></svg>
-      <svg id="playIconPause" viewBox="0 0 24 24" style="display:none"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
-    </button>
-    <div class="header-controls">
-      <div class="sunlight-switch">
-        <span id="sunlightLabel">LET THE SUN IN</span>
-        <label class="switch">
-          <input type="checkbox" id="sunlightSwitch" checked />
-          <span class="track"></span>
-        </label>
-      </div>
-      <a class="date-toggle" href="/map" id="mapLink" title="看看拍照的地方">
-        <svg viewBox="0 0 24 24"><path d="M9 18l-5 2V4l5-2 6 2 5-2v16l-5 2-6-2z"/><line x1="9" y1="2" x2="9" y2="18"/><line x1="15" y1="4" x2="15" y2="20"/></svg>
-      </a>
-      <button class="date-toggle" id="yearToggle" title="跳到某一年" disabled>
-        <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><circle cx="8.2" cy="14" r="1.1" fill="currentColor" stroke="none"/><circle cx="12" cy="14" r="1.1" fill="currentColor" stroke="none"/><circle cx="15.8" cy="14" r="1.1" fill="currentColor" stroke="none"/></svg>
-      </button>
-      <button class="date-toggle" id="dateToggle" title="查看某一天">
-        <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/></svg>
-      </button>
-    </div>
-    <div class="year-menu" id="yearMenu"></div>
-    <audio id="ambientAudio" loop preload="none">
-      <source src="https://image.cuijianzhuang.com/forest.mp3" type="audio/mpeg" />
-    </audio>
-    <div class="date-picker" id="datePicker">
-      <div class="cal-header">
-        <button class="cal-nav-btn" id="calPrevMonth" type="button">‹</button>
-        <span class="cal-month-label" id="calMonthLabel"></span>
-        <button class="cal-nav-btn" id="calNextMonth" type="button">›</button>
-      </div>
-      <div class="cal-weekdays">
-        <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
-      </div>
-      <div class="cal-grid" id="calGrid"></div>
-      <div class="row">
-        <a class="action-btn" id="datePickerToday" href="/">回到今天</a>
-      </div>
-    </div>
-  </header>
-  <div id="fingertip"></div>
-  <div id="cursorDot">
-    <span class="br tl"></span>
-    <span class="br tr"></span>
-    <span class="br bl"></span>
-    <span class="br brc"></span>
-    <span class="center-dot"></span>
-  </div>
-  <div id="content">
-    <div class="skeleton-grid">
-      <div class="skeleton-cell" style="width:190px;height:230px"></div>
-      <div class="skeleton-cell" style="width:150px;height:180px"></div>
-      <div class="skeleton-cell" style="width:230px;height:260px"></div>
-      <div class="skeleton-cell" style="width:170px;height:200px"></div>
-      <div class="skeleton-cell" style="width:210px;height:240px"></div>
-    </div>
-  </div>
-
-  <div class="lightbox" id="lightbox">
-    <div class="lightbox-actions">
-      <a class="lightbox-btn" id="lightboxShare" title="分享">
-        <svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/><line x1="15.4" y1="6.5" x2="8.6" y2="10.5"/></svg>
-      </a>
-      <a class="lightbox-btn" id="lightboxDownload" title="下载">
-        <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
-      </a>
-      <span class="lightbox-btn close" id="lightboxClose" title="关闭">
-        <svg viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
-      </span>
-    </div>
-    <span class="lightbox-nav prev" id="navPrev">‹</span>
-    <span class="lightbox-nav next" id="navNext">›</span>
-    <div class="lightbox-stage">
-      <div id="lightboxBody"></div>
-      <div class="lightbox-caption" id="lightboxCaption"></div>
-      <div class="lightbox-ai-caption" id="lightboxAiCaption"></div>
-    </div>
-  </div>
-  <div class="toast" id="toast"></div>
-  <button class="back-to-top" id="backToTop" title="回到顶部">
-    <svg viewBox="0 0 24 24"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
-  </button>
-
-<script>
+`;
+const APP_JS = `
   // 拼 HTML 字符串时用来转义属性值，避免文件名/路径里万一带了引号之类的字符把属性或内嵌脚本弄断
   function escAttr(s) { return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;'); }
 
@@ -3024,7 +2947,7 @@ const HTML = `<!doctype html>
     const isFirst = _memFirstLoad;
     _memFirstLoad = false;
 
-    const SKELETON_HTML = '<div class="skeleton-grid"><div class="skeleton-cell" style="width:190px;height:230px"></div><div class="skeleton-cell" style="width:150px;height:180px"></div><div class="skeleton-cell" style="width:230px;height:260px"></div><div class="skeleton-cell" style="width:170px;height:200px"></div><div class="skeleton-cell" style="width:210px;height:240px"></div></div>';
+    const SKELETON_HTML = '<div class="skeleton-grid"><div class="skeleton-cell"></div><div class="skeleton-cell"></div><div class="skeleton-cell"></div><div class="skeleton-cell"></div><div class="skeleton-cell"></div></div>';
 
     function fadeOut() {
       content.style.opacity = '0';
@@ -3033,6 +2956,13 @@ const HTML = `<!doctype html>
     function fadeIn() {
       requestAnimationFrame(() => requestAnimationFrame(() => { content.style.opacity = '1'; }));
     }
+
+    // showedSkeleton 记的是骨架屏有没有真的画出来过；fetchSettled 记数据是不是已经落定（成功或失败都算）。
+    // 网络够快时，220ms 的退场动画还没跑完数据就已经到了——这时候没必要再画一遍骨架屏自己又淡入，
+    // 不然真实内容马上又要把它淡出换掉，平白多一轮闪烁；骨架屏那边的淡入还用的是双 rAF（下一帧才生效），
+    // 跟真实内容几乎同时触发的淡入抢着改 opacity，谁后跑谁赢，体感就是"数据明明到了却还卡一下骨架屏"
+    let showedSkeleton = false;
+    let fetchSettled = false;
 
     // 切日期：旧内容先淡出，再换成骨架屏淡入——中间不再是一片空白（衬着纯黑背景看起来像黑屏/卡死），
     // 骨架屏的脉冲动画能让用户看出"正在加载"。首次加载本来就是骨架屏直出，不用走这一步
@@ -3046,12 +2976,20 @@ const HTML = `<!doctype html>
       allPhotos = [];
       skeletonReady = fadeOut().then(() => {
         if (seq !== _memSeq) return;
-        content.innerHTML = SKELETON_HTML;
-        fadeIn();
+        if (!fetchSettled) {
+          showedSkeleton = true;
+          content.innerHTML = SKELETON_HTML;
+          fadeIn();
+        }
       });
     }
 
-    const fetchPromise = fetch('/api/memories?month=' + month + '&day=' + day).then(r => r.json());
+    const fetchPromise = fetch('/api/memories?month=' + month + '&day=' + day).then(r => {
+      if (!r.ok) throw new Error('memories fetch failed: ' + r.status);
+      return r.json();
+    });
+    // 独立的旁路 .then，只用来记"落没落定"，不影响 fetchPromise 本身往 Promise.all 传播的 resolve/reject
+    fetchPromise.then(() => { fetchSettled = true; }, () => { fetchSettled = true; });
 
     Promise.all([skeletonReady, fetchPromise]).then(([, data]) => {
       if (seq !== _memSeq) return; // 用户已切换到别的日期，丢弃过期结果
@@ -3164,7 +3102,7 @@ const HTML = `<!doctype html>
             // 不再传 h= + fit=cover 强制裁成正方形——只限宽，fit=scale-down 按原图比例缩放，不裁内容
             const thumbSrc = p.url.replace('/img/', '/thumb/') + '?w=' + thumbW + '&q=75&fit=scale-down';
             if (p.type === 'video') {
-              return \`<div class="cell\${extraClass}" style="\${style}" onclick="openLightbox(\${flatIndex}, false)"><div class="frame-inner"><video data-src="\${escAttr(p.url)}#t=0.5" muted loop preload="none" onloadeddata="this.classList.add('loaded')" onmouseenter="this.play().catch(()=>{})" onmouseleave="this.pause();this.currentTime=0.5"></video></div><span class="play-badge">▶ 视频</span><span class="frame-year">\${y.year}</span></div>\`;
+              return \`<div class="cell\${extraClass}" style="\${style}" onclick="openLightbox(\${flatIndex}, false)"><div class="frame-inner"><video data-src="\${escAttr(p.url)}#t=0.5" muted loop preload="metadata" onloadeddata="this.classList.add('loaded')" onmouseenter="this.play().catch(()=>{})" onmouseleave="this.pause();this.currentTime=0.5"></video></div><span class="play-badge">▶ 视频</span><span class="frame-year">\${y.year}</span></div>\`;
             }
             if (p.type === 'live') {
               // Live Photo 缩略图：默认显示静态图，悬浮（桌面）/长按（移动端）才播放配对的短视频
@@ -3203,15 +3141,183 @@ const HTML = `<!doctype html>
         fadeIn();
       };
 
-      // 不管首次加载（骨架屏是 SSR 直出的）还是切日期（骨架屏是上面刚换上的），
-      // 这时候内容区域当前都正显示着骨架屏：统一走"淡出骨架屏 -> 换真实内容 -> 淡入"
-      fadeOut().then(() => {
-        if (seq !== _memSeq) return;
+      // 首次加载（骨架屏是 SSR 直出的）或者确实画出过骨架屏，这时候内容区域当前还显示着骨架屏，
+      // 要先淡出再换真实内容；网络够快、上面跳过了骨架屏绘制的情况，内容这时候已经是淡出状态了
+      // （进 loadMemories 时就 fadeOut 过一次），不用再多走一轮，直接换内容更快也不会有额外的视觉跳动
+      if (isFirst || showedSkeleton) {
+        fadeOut().then(() => {
+          if (seq !== _memSeq) return;
+          apply();
+        });
+      } else {
         apply();
-      });
+      }
+    }).catch((err) => {
+      if (seq !== _memSeq) return; // 已经被新的切换顶替，不用管这次失败
+      console.error('loadMemories failed', err);
+      const showError = () => {
+        subtitle.textContent = '加载失败，请稍后重试';
+        content.innerHTML = '<div class="empty">这天的回忆没能加载出来，请检查网络后重试</div>';
+        fadeIn();
+      };
+      if (isFirst || showedSkeleton) {
+        fadeOut().then(() => {
+          if (seq !== _memSeq) return;
+          showError();
+        });
+      } else {
+        showError();
+      }
     });
   }
   loadMemories(month, day);
-</script>
+`;
+const MAP_CSS_HASH = fingerprint(MAP_CSS);
+const MAP_JS_HASH = fingerprint(MAP_JS);
+const APP_CSS_HASH = fingerprint(APP_CSS);
+const APP_JS_HASH = fingerprint(APP_JS);
+
+
+
+// ---------- 地图页：把所有带 GPS 的照片打点在地图上 ----------
+// 这里用的 token 必须是 public token（pk. 开头），跟服务端反向地理编码用的 secret token 是两个东西，
+// 因为这段代码会原样发到浏览器执行，secret token 绝对不能出现在这里
+const MAP_HTML = (mapboxPublicToken) => `<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>足迹 · 那年今日</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.css" rel="stylesheet" />
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/heic2any/dist/heic2any.min.js" defer></script>
+<link rel="stylesheet" href="/static/map-${MAP_CSS_HASH}.css" />
+</head>
+<body>
+  <a class="back-btn" href="/" title="回到回忆墙">
+    <svg viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+  </a>
+  <div id="map"></div>
+  <div class="map-empty" id="mapEmpty">这一天还没有带定位信息的照片<br />去 /admin/locate-photos 跑一下批量查询，或者等 Cron 任务慢慢处理</div>
+
+<script>window.MAPBOX_TOKEN = ${JSON.stringify(mapboxPublicToken)};</script>
+<script src="/static/map-${MAP_JS_HASH}.js" defer></script>
+</body>
+</html>`;
+
+// ---------- 前端页面 ----------
+const HTML = `<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>那年今日</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/heic2any/dist/heic2any.min.js" defer></script>
+<link rel="stylesheet" href="/static/app-${APP_CSS_HASH}.css" />
+</head>
+<body>
+  <div class="sunlight">
+    <div class="glow"></div>
+    <div class="video-layer">
+      <video id="leafVideo" autoplay muted loop playsinline>
+        <source src="https://image.cuijianzhuang.com/leaves.mp4" type="video/mp4" />
+      </video>
+    </div>
+  </div>
+  <div class="sun-sweep" id="sunSweep"></div>
+  <header>
+    <div class="eyebrow">回忆 · Memories</div>
+    <h1 id="title">那年今日</h1>
+    <div class="subtitle" id="subtitle">正在唤醒回忆</div>
+    <div class="daily-poem" id="dailyPoem"></div>
+    <button class="play-memories" id="playMemories" title="播放回忆" disabled>
+      <svg id="playIconPlay" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z" stroke-linejoin="round"/></svg>
+      <svg id="playIconPause" viewBox="0 0 24 24" style="display:none"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+    </button>
+    <div class="header-controls">
+      <div class="sunlight-switch">
+        <span id="sunlightLabel">LET THE SUN IN</span>
+        <label class="switch">
+          <input type="checkbox" id="sunlightSwitch" checked />
+          <span class="track"></span>
+        </label>
+      </div>
+      <a class="date-toggle" href="/map" id="mapLink" title="看看拍照的地方">
+        <svg viewBox="0 0 24 24"><path d="M9 18l-5 2V4l5-2 6 2 5-2v16l-5 2-6-2z"/><line x1="9" y1="2" x2="9" y2="18"/><line x1="15" y1="4" x2="15" y2="20"/></svg>
+      </a>
+      <button class="date-toggle" id="yearToggle" title="跳到某一年" disabled>
+        <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><circle cx="8.2" cy="14" r="1.1" fill="currentColor" stroke="none"/><circle cx="12" cy="14" r="1.1" fill="currentColor" stroke="none"/><circle cx="15.8" cy="14" r="1.1" fill="currentColor" stroke="none"/></svg>
+      </button>
+      <button class="date-toggle" id="dateToggle" title="查看某一天">
+        <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/></svg>
+      </button>
+    </div>
+    <div class="year-menu" id="yearMenu"></div>
+    <audio id="ambientAudio" loop preload="none">
+      <source src="https://image.cuijianzhuang.com/forest.mp3" type="audio/mpeg" />
+    </audio>
+    <div class="date-picker" id="datePicker">
+      <div class="cal-header">
+        <button class="cal-nav-btn" id="calPrevMonth" type="button">‹</button>
+        <span class="cal-month-label" id="calMonthLabel"></span>
+        <button class="cal-nav-btn" id="calNextMonth" type="button">›</button>
+      </div>
+      <div class="cal-weekdays">
+        <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+      </div>
+      <div class="cal-grid" id="calGrid"></div>
+      <div class="row">
+        <a class="action-btn" id="datePickerToday" href="/">回到今天</a>
+      </div>
+    </div>
+  </header>
+  <div id="fingertip"></div>
+  <div id="cursorDot">
+    <span class="br tl"></span>
+    <span class="br tr"></span>
+    <span class="br bl"></span>
+    <span class="br brc"></span>
+    <span class="center-dot"></span>
+  </div>
+  <div id="content">
+    <div class="skeleton-grid">
+      <div class="skeleton-cell"></div>
+      <div class="skeleton-cell"></div>
+      <div class="skeleton-cell"></div>
+      <div class="skeleton-cell"></div>
+      <div class="skeleton-cell"></div>
+    </div>
+  </div>
+
+  <div class="lightbox" id="lightbox">
+    <div class="lightbox-actions">
+      <a class="lightbox-btn" id="lightboxShare" title="分享">
+        <svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/><line x1="15.4" y1="6.5" x2="8.6" y2="10.5"/></svg>
+      </a>
+      <a class="lightbox-btn" id="lightboxDownload" title="下载">
+        <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+      </a>
+      <span class="lightbox-btn close" id="lightboxClose" title="关闭">
+        <svg viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+      </span>
+    </div>
+    <span class="lightbox-nav prev" id="navPrev">‹</span>
+    <span class="lightbox-nav next" id="navNext">›</span>
+    <div class="lightbox-stage">
+      <div id="lightboxBody"></div>
+      <div class="lightbox-caption" id="lightboxCaption"></div>
+      <div class="lightbox-ai-caption" id="lightboxAiCaption"></div>
+    </div>
+  </div>
+  <div class="toast" id="toast"></div>
+  <button class="back-to-top" id="backToTop" title="回到顶部">
+    <svg viewBox="0 0 24 24"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+  </button>
+
+<script src="/static/app-${APP_JS_HASH}.js" defer></script>
 </body>
 </html>`;
