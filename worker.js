@@ -2471,6 +2471,27 @@ const HTML = `<!doctype html>
     }
   };
 
+  window.livePhotoTouchStart = function(el, e) {
+    if (e.touches.length > 1) return; // ignore pinch
+    el._lpTimer = setTimeout(() => {
+      el._lpPlaying = true;
+      el.classList.add('playing');
+      const v = el.querySelector('video');
+      v.currentTime = 0;
+      v.play().catch(() => {});
+      if (navigator.vibrate) navigator.vibrate(10);
+    }, 350);
+  };
+  window.livePhotoTouchEnd = function(el, e) {
+    clearTimeout(el._lpTimer);
+    if (el._lpPlaying) {
+      el._lpPlaying = false;
+      el.classList.remove('playing');
+      el.querySelector('video').pause();
+      e.preventDefault(); // suppress click→lightbox after long-press
+    }
+  };
+
   // 今日诗词：跟翻看哪个历史日期无关，配的是"今天"这句——挂个第三方接口失败/204 都不影响主功能
   fetch('/api/poem').then(r => r.status === 204 ? null : r.json()).then(poem => {
     if (!poem) return;
@@ -3074,7 +3095,7 @@ const HTML = `<!doctype html>
               // Live Photo 缩略图：默认显示静态图，悬浮（桌面）/长按（移动端）才播放配对的短视频
               // 网格缩略图上不展示 Live Photo 图标——放大（点开灯箱）才提示，网格里看起来就是张普通照片，
               // 悬浮照样会播放配对视频，算是个不张扬的小彩蛋
-              return \`<div class="cell\${extraClass}" style="\${style}" onclick="openLightbox(\${flatIndex}, false)"><div class="frame-inner live-photo-cell" onmouseenter="this.classList.add('playing');const v=this.querySelector('video');v.currentTime=0;v.play().catch(()=>{})" onmouseleave="this.classList.remove('playing');this.querySelector('video').pause()"><img src="\${escAttr(thumbSrc)}" data-src="\${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.onerror=null;scheduleImageRetry(this,this.src,this.dataset.src)" /><video src="\${p.videoUrl}" loop preload="none" class="cell-live-video"></video></div><span class="frame-year">\${y.year}</span></div>\`;
+              return \`<div class="cell\${extraClass}" style="\${style}" onclick="openLightbox(\${flatIndex}, false)"><div class="frame-inner live-photo-cell" onmouseenter="this.classList.add('playing');const v=this.querySelector('video');v.currentTime=0;v.play().catch(()=>{})" onmouseleave="this.classList.remove('playing');this.querySelector('video').pause()" ontouchstart="livePhotoTouchStart(this,event)" ontouchend="livePhotoTouchEnd(this,event)" ontouchcancel="livePhotoTouchEnd(this,event)"><img src="\${escAttr(thumbSrc)}" data-src="\${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.onerror=null;scheduleImageRetry(this,this.src,this.dataset.src)" /><video src="\${p.videoUrl}" loop preload="none" class="cell-live-video"></video></div><span class="frame-year">\${y.year}</span></div>\`;
             }
             return \`<div class="cell\${extraClass}" style="\${style}" onclick="openLightbox(\${flatIndex}, false)"><div class="frame-inner"><img src="\${escAttr(thumbSrc)}" data-src="\${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.onerror=null;scheduleImageRetry(this,this.src,this.dataset.src)" /></div><span class="frame-year">\${y.year}</span></div>\`;
           }).join('');

@@ -1,0 +1,10 @@
+{
+  "name": "memories-today",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "heic-decode": "^2.1.0",
+    "jpeg-js": "^0.4.4",
+    "libheif-js": "^1.19.8"
+  }
+}

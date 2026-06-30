@@ -9,6 +9,10 @@ routes = [
   { pattern = "memories.cuijianzhuang.com/*", zone_name = "cuijianzhuang.com" }
 ]
 
+# wrangler versions upload / wrangler deploy 前先跑这个，确保 CI 环境里 npm 依赖都装好
+[build]
+command = "npm install"
+
 [[r2_buckets]]
 binding = "PHOTOS"
 bucket_name = "image"
