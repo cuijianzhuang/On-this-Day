@@ -5,6 +5,6 @@
   "dependencies": {
     "heic-decode": "^2.1.0",
     "jpeg-js": "^0.4.4",
-    "libheif-js": "^2.1.2"
+    "libheif-js": "^1.19.8"
   }
 }
