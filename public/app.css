@@ -352,7 +352,7 @@
   }
   /* ── 在线徽章 ─────────────────────────────────────────────── */
   .online-badge {
-    position: fixed; top: 1rem; left: 1rem; z-index: 20;
+    position: absolute; top: 1.3rem; left: calc(1.4rem + 32px + 8px); z-index: 10;
     background: rgba(20,20,22,0.72); backdrop-filter: blur(14px) saturate(1.4);
     border: 1px solid rgba(255,255,255,0.10);
     border-radius: 999px;
@@ -610,6 +610,7 @@
     .date-toggle, .sunlight-switch .switch { transform: scale(1.05); }
     .sunlight-switch span { display: none; }
     .play-memories { top: max(0.9rem, env(safe-area-inset-top)); left: max(0.8rem, env(safe-area-inset-left)); width: 34px; height: 34px; }
+    .online-badge { top: max(0.9rem, env(safe-area-inset-top)); left: calc(max(0.8rem, env(safe-area-inset-left)) + 34px + 8px); }
     .date-picker { top: 3.4rem; right: 0.8rem; left: 0.8rem; width: auto; }
     .back-to-top { bottom: max(1.2rem, env(safe-area-inset-bottom)); right: max(1rem, env(safe-area-inset-right)); }
     .cell, .date-toggle, .play-memories, .play-memories button, .lightbox-btn, .lightbox-nav, .sunlight-switch .track {
