@@ -305,6 +305,55 @@
     return dt.slice(0, 10).replace(/:/g, '/') + ' ' + dt.slice(11, 16);
   }
 
+  // SVG icon paths for lightbox panel labels
+  const LP_ICONS = {
+    '文件名':  '<path d="M6 2H14L18 6V20a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2zm0 0v4h4"/>',
+    '年份':    '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+    '地点':    '<path d="M12 2C8.134 2 5 5.134 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.866-3.134-7-7-7zm0 9.5a2.5 2.5 0 110-5 2.5 2.5 0 010 5z"/>',
+    '文件大小':'<path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+    '分辨率':  '<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/>',
+    '像素':    '<circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>',
+    '拍摄时间':'<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
+    '时区':    '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/>',
+    '色彩空间':'<circle cx="12" cy="12" r="10"/><circle cx="8.5" cy="11" r="2.5" fill="none"/><circle cx="15.5" cy="11" r="2.5" fill="none"/><circle cx="12" cy="16" r="2.5" fill="none"/>',
+    '纬度':    '<line x1="12" y1="2" x2="12" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/>',
+    '经度':    '<line x1="12" y1="2" x2="12" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/>',
+    '海拔':    '<polyline points="23 6 13 16 8 11 1 18"/><polyline points="17 6 23 6 23 12"/>',
+    '软件':    '<rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>',
+    '焦距':    '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>',
+    '光圈':    '<circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>',
+    '曝光时间':'<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+    'ISO':     '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
+    '亮度':    '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>',
+    '感光方式':'<rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>',
+    '相机':    '<path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/>',
+    '最大光圈':'<circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>',
+    '35mm 等效':'<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>',
+    '镜头':    '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+    '白平衡':  '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>',
+    '曝光程序':'<path d="M1 6v16l7-4 8 4 7-4V2l-7 4-8-4-7 4z"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/>',
+    '曝光模式':'<path d="M1 6v16l7-4 8 4 7-4V2l-7 4-8-4-7 4z"/><line x1="8" y1="2" x2="8" y2="18"/>',
+    '测光模式':'<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="12" x2="16" y2="14"/>',
+    '闪光灯':  '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+    '场景捕捉':'<path d="M1 6v16l7-4 8 4 7-4V2l-7 4-8-4-7 4z"/>',
+  };
+
+  function _lpIcon(label) {
+    const path = LP_ICONS[label];
+    if (!path) return '';
+    return `<svg class="lp-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
+  }
+
+  function _lpRow(label, value, cls) {
+    const icon = _lpIcon(label);
+    const valCls = cls ? ` ${cls}` : '';
+    return `<div class="lp-row"><span class="lp-label">${icon}${label}</span><span class="lp-value${valCls}">${escHtml(String(value))}</span></div>`;
+  }
+
+  function _lpSec(title, rows) {
+    return `<div class="lp-section-title">${title}</div><div class="lp-info-table">${rows.map(([l,v,cls]) => _lpRow(l,v,cls)).join('')}</div>`;
+  }
+
   // 缩略图第一次加载失败，先按 5s/15s/45s 退避重试原来的 /thumb/ 链接几次（破一下缓存强制重新请求）——
   // 很多裂图只是服务端转码/边缘缓存这会儿还没跟上，过一会儿自己就好了，不用等用户手动刷新整页。
   // 重试次数用完还是不行，才真正走 heicFallback 的现场解码/原图兜底
@@ -650,10 +699,10 @@
     if (!infoEl) return;
     const filename = p.key.split('/').pop();
     const rows = [
-      `<div class="lp-row"><span class="lp-label">文件名</span><span class="lp-value lp-mono lp-small">${escHtml(filename)}</span></div>`,
-      `<div class="lp-row"><span class="lp-label">年份</span><span class="lp-value">${escHtml(p.year)} 年</span></div>`,
+      _lpRow('文件名', filename, 'lp-mono lp-small'),
+      _lpRow('年份', p.year + ' 年'),
     ];
-    if (p.place) rows.push(`<div class="lp-row"><span class="lp-label">地点</span><span class="lp-value">${escHtml(p.place)}</span></div>`);
+    if (p.place) rows.push(_lpRow('地点', p.place));
     infoEl.innerHTML =
       '<div id="lpMapPlaceholder"></div>' +
       '<div class="lp-section-title">基本信息</div>' +
@@ -681,21 +730,18 @@
         extras.push(['像素', `${(exif.width * exif.height / 1e6).toFixed(2)} MP`]);
       }
       if (exif.dateTime) extras.push(['拍摄时间', _formatExifDate(exif.dateTime)]);
+      if (exif.offsetTime) extras.push(['时区', exif.offsetTime]);
       if (exif.colorSpace) extras.push(['色彩空间', exif.colorSpace]);
+      if (exif.software) extras.push(['软件', exif.software, 'lp-small']);
       if (exif.latDMS) extras.push(['纬度', exif.latDMS]);
       if (exif.lngDMS) extras.push(['经度', exif.lngDMS]);
       if (exif.altitude !== undefined) extras.push(['海拔', `${exif.altitude} m`]);
-      for (const [lbl, val] of extras) {
+      for (const [lbl, val, cls] of extras) {
         const div = document.createElement('div');
         div.className = 'lp-row';
-        div.innerHTML = `<span class="lp-label">${lbl}</span><span class="lp-value">${escHtml(String(val))}</span>`;
+        div.innerHTML = `<span class="lp-label">${_lpIcon(lbl)}${lbl}</span><span class="lp-value${cls ? ' ' + cls : ''}">${escHtml(String(val))}</span>`;
         basicTable.appendChild(div);
       }
-    }
-
-    // Helper for section HTML
-    function sec(title, rows) {
-      return `<div class="lp-section-title">${title}</div><div class="lp-info-table">${rows.map(([l,v,cls]) => `<div class="lp-row"><span class="lp-label">${l}</span><span class="lp-value${cls?' '+cls:''}">${escHtml(String(v))}</span></div>`).join('')}</div>`;
     }
 
     let html = '';
@@ -707,10 +753,17 @@
     if (exif.aperture) shotRows.push(['光圈', 'f/' + exif.aperture.toFixed(1)]);
     if (exif.shutterSpeed) shotRows.push(['曝光时间', _formatShutter(exif.shutterSpeed)]);
     if (exif.iso) shotRows.push(['ISO', String(exif.iso)]);
-    if (shotRows.length) html += sec('拍摄参数', shotRows);
+    if (shotRows.length) html += _lpSec('拍摄参数', shotRows);
 
     // 直方图
     html += '<div class="lp-section-title">直方图</div><div class="lp-histogram-wrap"><canvas class="lp-histogram" id="lbHistogram" width="296" height="80"></canvas></div>';
+
+    // 技术参数
+    const SM_NAMES = ['','单区域','单次线阵','多区域线阵','一次区域','二维面阵','色线感应'];
+    const techRows = [];
+    if (exif.brightnessValue !== undefined) techRows.push(['亮度', exif.brightnessValue.toFixed(2) + ' EV']);
+    if (exif.sensingMethod !== undefined) techRows.push(['感光方式', SM_NAMES[exif.sensingMethod] || '其他']);
+    if (techRows.length) html += _lpSec('技术参数', techRows);
 
     // 设备信息
     const devRows = [];
@@ -719,19 +772,21 @@
     if (exif.focalLength) devRows.push(['焦距', exif.focalLength.toFixed(1) + ' mm']);
     if (exif.focalLength35) devRows.push(['35mm 等效', exif.focalLength35 + ' mm']);
     if (exif.lens) devRows.push(['镜头', exif.lens, 'lp-small']);
-    if (devRows.length) html += sec('设备信息', devRows);
+    if (devRows.length) html += _lpSec('设备信息', devRows);
 
     // 拍摄模式
     const EP_NAMES = ['不定义','手动','程序自动曝光','光圈优先','快门优先','创意模式','运动模式','人像模式','风景模式'];
+    const EM_NAMES = ['自动曝光','手动曝光','自动包围曝光'];
     const MM_NAMES = ['未知','平均','中央重点平均测光','点测光','多点测光','多区域测光','局部测光'];
     const SCT_NAMES = ['标准','风景','人像','夜景'];
     const modeRows = [];
     if (exif.whiteBalance !== undefined) modeRows.push(['白平衡', exif.whiteBalance === 0 ? '自动' : '手动']);
     if (exif.exposureProgram !== undefined) modeRows.push(['曝光程序', EP_NAMES[exif.exposureProgram] || '未知']);
+    if (exif.exposureMode !== undefined) modeRows.push(['曝光模式', EM_NAMES[exif.exposureMode] || '未知']);
     if (exif.meteringMode !== undefined) modeRows.push(['测光模式', MM_NAMES[exif.meteringMode] || '未知']);
     if (exif.flash !== undefined) modeRows.push(['闪光灯', (exif.flash & 1) ? '已闪光' : '关闭, 不闪光']);
     if (exif.sceneCaptureType !== undefined) modeRows.push(['场景捕捉', SCT_NAMES[exif.sceneCaptureType] || '标准']);
-    if (modeRows.length) html += sec('拍摄模式', modeRows);
+    if (modeRows.length) html += _lpSec('拍摄模式', modeRows);
 
     el.innerHTML = html;
 
