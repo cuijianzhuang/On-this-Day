@@ -2396,19 +2396,14 @@ const APP_CSS = `
   }
 `;
 const APP_JS = `
-  // iOS Safari 忽略 viewport user-scalable=no，需要 JS 拦截：
-  // gesturestart/gesturechange 是 Safari 私有事件，直接阻断捏合手势；
-  // touchmove 多指时阻断可覆盖 Chrome/Firefox；
-  // dblclick preventDefault 阻断双击放大（部分安卓浏览器）
+  // iOS Safari 忽略 viewport user-scalable=no，用 gesturestart 阻断捏合手势。
+  // gesturechange 不拦截——gesturestart 已足够取消整个手势，继续拦截 change 反而
+  // 会干扰滚动状态机，造成滚动中触碰第二根手指时意外触发缩放。
+  // touchend 双击拦截也去掉：用户滚动抬手后 300ms 内再次触屏继续滚是正常操作，
+  // 误判 preventDefault 会打断手势状态，让浏览器把下次触碰重新解读成缩放。
   document.addEventListener('gesturestart', (e) => e.preventDefault(), { passive: false });
-  document.addEventListener('gesturechange', (e) => e.preventDefault(), { passive: false });
+  // touchmove 多指时阻断：覆盖 Chrome/Firefox 等不支持 gesture* 事件的浏览器
   document.addEventListener('touchmove', (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
-  let lastTap = 0;
-  document.addEventListener('touchend', (e) => {
-    const now = Date.now();
-    if (now - lastTap < 300) e.preventDefault();
-    lastTap = now;
-  }, { passive: false });
 
   // 拼 HTML 字符串时用来转义属性值，避免文件名/路径里万一带了引号之类的字符把属性或内嵌脚本弄断
   function escAttr(s) { return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;'); }
