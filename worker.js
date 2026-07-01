@@ -1697,10 +1697,11 @@ const MAP_HTML = (mapboxPublicToken) => `<!doctype html>
 
 // ── Durable Object：实时共享房间 ─────────────────────────────────────────────────
 // 每个日期（"MM-DD"）对应一个 DO 实例。家人同时打开同一天的回忆时：
-//   · 页面顶部显示"👥 N 人在看"
+//   · 页面顶部显示"👥 N 人在看"（按唯一用户去重，同一人多个 Tab 只算 1 人）
 //   · 每张照片右下角有 ❤️ 按钮，点击全员实时看到计数增长
 // 反应数持久化存在 DO Storage，换一天再回来还能看到。
-// 不需要登录：匿名访问，只统计人数，不存用户信息。
+// 用户身份：优先读 Cloudflare Access 注入的 Cf-Access-Authenticated-User-Email；
+// 未启用 Access 时回退到随机 UUID，行为与之前一致（每条连接独立计数）。
 export class MemoryRoom {
   constructor(state, env) {
     this.state = state;
@@ -1710,15 +1711,21 @@ export class MemoryRoom {
     if (request.headers.get("Upgrade") !== "websocket") {
       return new Response("WebSocket required", { status: 426 });
     }
+    // Cloudflare Access 验证通过后会注入此 header；未启用时用随机 UUID 保持每连接独立
+    const userId = request.headers.get("Cf-Access-Authenticated-User-Email")
+      || crypto.randomUUID();
+
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    this.state.acceptWebSocket(server);
+    // 把 userId 作为 tag 绑在这个 WebSocket 上，用于去重计数
+    this.state.acceptWebSocket(server, [userId]);
 
     const reactions = (await this.state.storage.get("reactions")) || {};
-    // getWebSockets() 此时已包含刚 accept 的这个，所以 length 就是含自己的在线人数
-    const count = this.state.getWebSockets().length;
-    server.send(JSON.stringify({ type: "init", count, reactions }));
-    this._broadcast({ type: "users", count }, server);
+    // acceptWebSocket 之后 getWebSockets() 已含刚加入的这个，直接计算唯一用户数
+    const { count, list } = this._usersInfo();
+    // you: 告知客户端自己的 userId，用于在头像列表里标"你"
+    server.send(JSON.stringify({ type: "init", count, reactions, you: userId, list }));
+    this._broadcast({ type: "users", count, list }, server);
 
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -1736,12 +1743,35 @@ export class MemoryRoom {
   }
 
   webSocketClose(ws) {
-    // 断开时广播最新人数（减去正在关闭的这个）
-    const count = Math.max(0, this.state.getWebSockets().length - 1);
-    this._broadcast({ type: "users", count }, ws);
+    const { count, list } = this._usersInfoExcluding(ws);
+    this._broadcast({ type: "users", count, list }, ws);
   }
 
-  webSocketError() {}
+  webSocketError(ws) {
+    const { count, list } = this._usersInfoExcluding(ws);
+    this._broadcast({ type: "users", count, list }, ws);
+  }
+
+  // 返回当前所有连接的 { count, list }，按唯一 userId 去重
+  _usersInfo() {
+    const ids = new Set();
+    for (const ws of this.state.getWebSockets()) {
+      const tags = this.state.getTags(ws);
+      if (tags?.[0]) ids.add(tags[0]);
+    }
+    return { count: ids.size, list: [...ids] };
+  }
+
+  // 排除某个连接后重算（该连接即将离开的场景）
+  _usersInfoExcluding(excludeWs) {
+    const ids = new Set();
+    for (const ws of this.state.getWebSockets()) {
+      if (ws === excludeWs) continue;
+      const tags = this.state.getTags(ws);
+      if (tags?.[0]) ids.add(tags[0]);
+    }
+    return { count: ids.size, list: [...ids] };
+  }
 
   _broadcast(msg, excludeWs) {
     const txt = JSON.stringify(msg);

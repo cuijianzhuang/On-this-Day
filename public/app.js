@@ -2,6 +2,8 @@
   let _room = null;           // 当前 WebSocket 连接
   let _roomKey = null;        // 当前连接的日期 key（"MM-DD"）
   let _roomReactions = {};    // 从服务端同步来的点赞数 {photoKey: count}
+  let _myIdentity = null;     // 当前用户的 userId（Access 邮箱或匿名 UUID）
+  let _onlineList = [];       // 当前在线用户列表（唯一 userId 数组）
 
   function _joinRoom(dateKey) {
     if (_room) { try { _room.close(1000); } catch (_) {} }
@@ -21,22 +23,56 @@
   function _handleRoomMsg(msg) {
     if (msg.type === 'init') {
       _roomReactions = msg.reactions || {};
-      _updateBadge(msg.count);
+      _myIdentity = msg.you || null;
+      _onlineList = msg.list || [];
+      _updateBadge(msg.count, _onlineList);
       _syncAllCounts();
     } else if (msg.type === 'users') {
-      _updateBadge(msg.count);
+      _onlineList = msg.list || [];
+      _updateBadge(msg.count, _onlineList);
     } else if (msg.type === 'react') {
       _roomReactions[msg.key] = msg.count;
       _syncCount(msg.key, msg.count, true);
     }
   }
 
-  function _updateBadge(count) {
+  // 从 userId 派生显示名：邮箱取 @ 前缀，UUID 匿名用户显示"访"
+  function _displayName(userId) {
+    if (!userId) return '?';
+    const at = userId.indexOf('@');
+    return at > 0 ? userId.slice(0, at) : '访';
+  }
+
+  // 把 userId 字符串哈希为一个 HSL 颜色，同一人永远是同一颜色
+  function _avatarColor(str) {
+    let h = 0;
+    for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
+    return `hsl(${h % 360},55%,52%)`;
+  }
+
+  function _updateBadge(count, list) {
     const badge = document.getElementById('onlineBadge');
     if (!badge) return;
-    badge.style.display = count > 1 ? '' : 'none';
-    const el = document.getElementById('onlineCount');
-    if (el) el.textContent = count;
+    // 只要知道自己是谁就显示徽章（哪怕只有 1 人）
+    badge.style.display = list && list.length > 0 ? '' : 'none';
+
+    const avatarsEl = document.getElementById('onlineAvatars');
+    if (avatarsEl && list) {
+      avatarsEl.innerHTML = list.map(uid => {
+        const name = _displayName(uid);
+        const isMe = uid === _myIdentity;
+        const title = isMe
+          ? `你 · ${uid.includes('@') ? uid : '访客'}`
+          : uid.includes('@') ? uid : '访客';
+        return `<span class="online-avatar${isMe ? ' me' : ''}" style="background:${_avatarColor(uid)}" title="${title}">${(name[0] || '?').toUpperCase()}</span>`;
+      }).join('');
+    }
+
+    const labelEl = document.getElementById('onlineLabel');
+    if (labelEl) {
+      // 多于 1 人才显示"N 人在看"文字
+      labelEl.textContent = count > 1 ? `${count} 人在看` : '';
+    }
   }
 
   function _syncAllCounts() {
