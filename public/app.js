@@ -754,7 +754,7 @@
             const enterDelay = Math.min(globalCellIndex * 0.05, 0.9).toFixed(2);
             globalCellIndex++;
             // 不再固定 height——照片按原图比例显示，宽度定了，高度交给 frame-inner 的 aspect-ratio 撑出来
-            const style = \`width:\${size}px;--tilt-deg:\${tilt};--sway-dur:\${swayDur}s;--sway-delay:\${swayDelay}s;--enter-delay:\${enterDelay}s;\`;
+            const style = `width:${size}px;--tilt-deg:${tilt};--sway-dur:${swayDur}s;--sway-delay:${swayDelay}s;--enter-delay:${enterDelay}s;`;
             const extraClass = featured && !featured.has(pi) ? ' extra' : '';
             // 墙上的缩略图按实际显示尺寸 * 设备像素比要图（普通屏 1x 就不用多要 2x 的流量/解码开销，
             // 高分屏封顶在 2x，不然 3x 机型一次性吃满带宽）；转换失败（HEIC 等）就在 onerror 里走浏览器端解码兜底
@@ -762,26 +762,26 @@
             // 不再传 h= + fit=cover 强制裁成正方形——只限宽，fit=scale-down 按原图比例缩放，不裁内容
             const thumbSrc = p.url.replace('/img/', '/thumb/') + '?w=' + thumbW + '&q=75&fit=scale-down';
             if (p.type === 'video') {
-              return \`<div class="cell\${extraClass}" style="\${style}" onclick="openLightbox(\${flatIndex}, false)"><div class="frame-inner"><video data-src="\${escAttr(p.url)}#t=0.5" muted loop preload="metadata" onloadeddata="this.classList.add('loaded')" onmouseenter="this.play().catch(()=>{})" onmouseleave="this.pause();this.currentTime=0.5"></video></div><span class="play-badge">▶ 视频</span><span class="frame-year">\${y.year}</span></div>\`;
+              return `<div class="cell${extraClass}" style="${style}" onclick="openLightbox(${flatIndex}, false)"><div class="frame-inner"><video data-src="${escAttr(p.url)}#t=0.5" muted loop preload="metadata" onloadeddata="this.classList.add('loaded')" onmouseenter="this.play().catch(()=>{})" onmouseleave="this.pause();this.currentTime=0.5"></video></div><span class="play-badge">▶ 视频</span><span class="frame-year">${y.year}</span></div>`;
             }
             if (p.type === 'live') {
               // Live Photo 缩略图：默认显示静态图，悬浮（桌面）/长按（移动端）才播放配对的短视频
               // 网格缩略图上不展示 Live Photo 图标——放大（点开灯箱）才提示，网格里看起来就是张普通照片，
               // 悬浮照样会播放配对视频，算是个不张扬的小彩蛋
-              return \`<div class="cell\${extraClass}" style="\${style}" onclick="openLightbox(\${flatIndex}, false)"><div class="frame-inner live-photo-cell" onmouseenter="this.classList.add('playing');const v=this.querySelector('video');v.currentTime=0;v.play().catch(()=>{})" onmouseleave="this.classList.remove('playing');this.querySelector('video').pause()" ontouchstart="livePhotoTouchStart(this,event)" ontouchend="livePhotoTouchEnd(this,event)" ontouchcancel="livePhotoTouchEnd(this,event)"><img src="\${escAttr(thumbSrc)}" data-src="\${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.onerror=null;scheduleImageRetry(this,this.src,this.dataset.src)" /><video src="\${p.videoUrl}" loop preload="none" class="cell-live-video"></video></div><span class="frame-year">\${y.year}</span></div>\`;
+              return `<div class="cell${extraClass}" style="${style}" onclick="openLightbox(${flatIndex}, false)"><div class="frame-inner live-photo-cell" onmouseenter="this.classList.add('playing');const v=this.querySelector('video');v.currentTime=0;v.play().catch(()=>{})" onmouseleave="this.classList.remove('playing');this.querySelector('video').pause()" ontouchstart="livePhotoTouchStart(this,event)" ontouchend="livePhotoTouchEnd(this,event)" ontouchcancel="livePhotoTouchEnd(this,event)"><img src="${escAttr(thumbSrc)}" data-src="${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.onerror=null;scheduleImageRetry(this,this.src,this.dataset.src)" /><video src="${p.videoUrl}" loop preload="none" class="cell-live-video"></video></div><span class="frame-year">${y.year}</span></div>`;
             }
-            return \`<div class="cell\${extraClass}" style="\${style}" onclick="openLightbox(\${flatIndex}, false)"><div class="frame-inner"><img src="\${escAttr(thumbSrc)}" data-src="\${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.onerror=null;scheduleImageRetry(this,this.src,this.dataset.src)" /></div><span class="frame-year">\${y.year}</span></div>\`;
+            return `<div class="cell${extraClass}" style="${style}" onclick="openLightbox(${flatIndex}, false)"><div class="frame-inner"><img src="${escAttr(thumbSrc)}" data-src="${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.onerror=null;scheduleImageRetry(this,this.src,this.dataset.src)" /></div><span class="frame-year">${y.year}</span></div>`;
           }).join('');
           const showMoreBtn = extraCount > 0
-            ? \`<button class="show-more-btn" data-total="\${y.photos.length}" onclick="toggleShowMore(this)">展开查看全部 \${y.photos.length} 张 ›</button>\`
+            ? `<button class="show-more-btn" data-total="${y.photos.length}" onclick="toggleShowMore(this)">展开查看全部 ${y.photos.length} 张 ›</button>`
             : '';
-          return \`
-      <div class="year-block" id="year-\${y.year}">
-        <div class="year-title">\${y.year} 年 <span class="count">（\${y.photos.length} 份）</span></div>
-        <div class="grid">\${cells}</div>
-        \${showMoreBtn}
+          return `
+      <div class="year-block" id="year-${y.year}">
+        <div class="year-title">${y.year} 年 <span class="count">（${y.photos.length} 份）</span></div>
+        <div class="grid">${cells}</div>
+        ${showMoreBtn}
       </div>
-    \`;
+    `;
         }).join('');
         content.querySelectorAll('.cell').forEach((cell) => cellObserver.observe(cell));
         content.querySelectorAll('.cell video[data-src]').forEach((v) => videoLazyObserver.observe(v));
