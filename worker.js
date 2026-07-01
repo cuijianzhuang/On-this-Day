@@ -1977,8 +1977,9 @@ export class MemoryRoom {
     this.state.acceptWebSocket(server, [userId, gravatarHash]);
 
     const reactions_v2 = (await this.state.storage.get("reactions_v2")) || {};
+    const my_reactions = (await this.state.storage.get(`mr:${userId}`)) || {};
     const { count, list } = this._usersInfo();
-    server.send(JSON.stringify({ type: "init", count, reactions_v2, you: userId, list }));
+    server.send(JSON.stringify({ type: "init", count, reactions_v2, my_reactions, you: userId, list }));
     this._broadcast({ type: "users", count, list }, server);
 
     return new Response(null, { status: 101, webSocket: client });
@@ -1990,10 +1991,20 @@ export class MemoryRoom {
       if (msg.type === "react" && typeof msg.key === "string" && msg.key.length < 300) {
         const VALID_EMOJIS = new Set(['👍','❤️','😍','😂','😮','😢','🔥','✨']);
         const emoji = VALID_EMOJIS.has(msg.emoji) ? msg.emoji : '❤️';
+        const [userId] = this.state.getTags(ws);
+        const mrKey = `mr:${userId}`;
+        const myR = (await this.state.storage.get(mrKey)) || {};
+        const alreadyDone = (myR[msg.key] || []).includes(emoji);
+        if (alreadyDone) return;
+        if (!myR[msg.key]) myR[msg.key] = [];
+        myR[msg.key].push(emoji);
         const reactions_v2 = (await this.state.storage.get("reactions_v2")) || {};
         if (!reactions_v2[msg.key]) reactions_v2[msg.key] = {};
         reactions_v2[msg.key][emoji] = (reactions_v2[msg.key][emoji] || 0) + 1;
-        await this.state.storage.put("reactions_v2", reactions_v2);
+        await Promise.all([
+          this.state.storage.put(mrKey, myR),
+          this.state.storage.put("reactions_v2", reactions_v2),
+        ]);
         const count = reactions_v2[msg.key][emoji];
         this._broadcast({ type: "react", key: msg.key, emoji, count });
       }

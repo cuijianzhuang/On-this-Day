@@ -2,6 +2,7 @@
   let _room = null;           // 当前 WebSocket 连接
   let _roomKey = null;        // 当前连接的日期 key（"MM-DD"）
   let _roomReactions = {};    // {photoKey: {emoji: count}}
+  let _myReactions = {};      // {photoKey: Set<emoji>} 当前用户已点过的 emoji
   let _myIdentity = null;     // 当前用户的 userId（Access 邮箱或匿名 UUID）
   let _onlineList = [];       // 当前在线用户列表（唯一 userId 数组）
 
@@ -35,6 +36,10 @@
       for (const [k, v] of Object.entries(rv2)) _roomReactions[k] = v;
       for (const [k, v] of Object.entries(old)) {
         if (!_roomReactions[k]) _roomReactions[k] = { '❤️': v };
+      }
+      _myReactions = {};
+      for (const [k, arr] of Object.entries(msg.my_reactions || {})) {
+        _myReactions[k] = new Set(arr);
       }
       _myIdentity = msg.you || null;
       _onlineList = msg.list || [];
@@ -246,6 +251,9 @@
 
   window.doReactEmoji = function(key, emoji, btnEl) {
     if (!key || !emoji) return;
+    if (!_myReactions[key]) _myReactions[key] = new Set();
+    if (_myReactions[key].has(emoji)) return; // 同一人只能点一次
+    _myReactions[key].add(emoji);
     if (_room && _room.readyState === WebSocket.OPEN) {
       _room.send(JSON.stringify({ type: 'react', key, emoji }));
     }
@@ -666,10 +674,11 @@
 
   function _renderLightboxReactions(key) {
     const counts = _roomReactions[key] || {};
+    const mine = _myReactions[key] || new Set();
     // data-key / data-emoji 避免把 JSON.stringify 的双引号嵌进 HTML 属性里（会截断属性值导致 SyntaxError）
     const gridHtml = '<div class="lp-emoji-grid" data-rkey="' + escAttr(key) + '">' + EMOJI_LIST.map(e => {
       const n = counts[e] || 0;
-      const cls = n > 0 ? ' reacted' : '';
+      const cls = mine.has(e) ? ' reacted' : '';
       return `<button class="lp-emoji-btn${cls}" data-emoji="${escAttr(e)}">${e}<span class="lp-emoji-cnt">${n > 0 ? n : ''}</span></button>`;
     }).join('') + '</div>';
     const popup = document.getElementById('lbEmojiPopup');
