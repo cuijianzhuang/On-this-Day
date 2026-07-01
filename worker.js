@@ -110,6 +110,10 @@ export default {
       return handleBackfillPhotosIndex(request, env, url);
     }
 
+    if (url.pathname === "/admin/backfill-workflows") {
+      return handleBackfillWorkflows(request, env, url);
+    }
+
     if (url.pathname === "/api/map-photos") {
       return handleMapPhotos(request, env, url);
     }
@@ -1376,6 +1380,41 @@ async function handleScorePhotos(request, env, url) {
     }),
     { headers: { "content-type": "application/json; charset=utf-8" } }
   );
+}
+
+// 历史积压图片批量触发 Workflow，解决两个 backlog 场景：
+//   1. 普通 JPEG 未打分：直接触发，Workflow step 3 打分
+//   2. 历史 HEIC 无预览图（cron 只转今天的）：Workflow step 2 先转码，step 3 再打分
+// 每次调用触发 limit 张（默认 50，上限 200），多次调用直到 remaining=0
+async function handleBackfillWorkflows(request, env, url) {
+  const token = url.searchParams.get("token");
+  if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
+    return new Response("Forbidden", { status: 403 });
+  }
+
+  const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 200);
+
+  // 找出 photos_index 里有记录、但 photo_scores 里还没有打分结果的图片
+  const { results } = await env.DB.prepare(
+    "SELECT pi.key FROM photos_index pi " +
+    "LEFT JOIN photo_scores ps ON pi.key = ps.key " +
+    "WHERE pi.type = 'image' AND ps.key IS NULL " +
+    "LIMIT ?"
+  ).bind(limit).all();
+
+  for (const { key } of results) {
+    await env.PHOTO_WORKFLOW.create({ params: { key } });
+  }
+
+  // 计算剩余未处理数量（本批触发后还剩多少）
+  const { results: countRows } = await env.DB.prepare(
+    "SELECT COUNT(*) as cnt FROM photos_index pi " +
+    "LEFT JOIN photo_scores ps ON pi.key = ps.key " +
+    "WHERE pi.type = 'image' AND ps.key IS NULL"
+  ).all();
+  const remaining = Math.max(0, (countRows[0]?.cnt ?? 0) - results.length);
+
+  return Response.json({ triggered: results.length, remaining });
 }
 
 // 管理端点：跟 /admin/score-photos 同样的批处理思路，把存量照片库的拍摄地点一次性查完。
