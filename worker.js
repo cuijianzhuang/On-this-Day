@@ -860,6 +860,15 @@ function parseExifForDisplay(buf) {
     return d ? n / d : null;
   }
 
+  function readSRational(e) {
+    const off = tiffStart + u32(e + 8);
+    if (off + 7 >= buf.length) return null;
+    // signed 32-bit via two's complement
+    const toS = v => (v >= 0x80000000 ? v - 0x100000000 : v);
+    const n = toS(u32(off)), d = toS(u32(off + 4));
+    return d ? n / d : null;
+  }
+
   function readShort(e) {
     // SHORT (type=3): value fits in 4 bytes at offset+8
     return u16(e + 8);
@@ -874,6 +883,9 @@ function parseExifForDisplay(buf) {
 
     const modelE = ifdEntry(ifd0, 0x0110);
     if (modelE >= 0) result.model = readAscii(modelE);
+
+    const swE = ifdEntry(ifd0, 0x0131); // Software
+    if (swE >= 0) result.software = readAscii(swE);
 
     // 图像尺寸（IFD0 中）
     const wE = ifdEntry(ifd0, 0xA002);
@@ -933,6 +945,18 @@ function parseExifForDisplay(buf) {
 
       const sctE = ifdEntry(exifIfd, 0xA406); // SceneCaptureType
       if (sctE >= 0) result.sceneCaptureType = readShort(sctE);
+
+      const otE = ifdEntry(exifIfd, 0x9011); // OffsetTimeOriginal (timezone, e.g. "+08:00")
+      if (otE >= 0) result.offsetTime = readAscii(otE);
+
+      const emE = ifdEntry(exifIfd, 0xA402); // ExposureMode (0=auto, 1=manual, 2=auto-bracket)
+      if (emE >= 0) result.exposureMode = readShort(emE);
+
+      const bvE = ifdEntry(exifIfd, 0x9203); // BrightnessValue (SRATIONAL, EV)
+      if (bvE >= 0) result.brightnessValue = readSRational(bvE);
+
+      const smE = ifdEntry(exifIfd, 0xA217); // SensingMethod
+      if (smE >= 0) result.sensingMethod = readShort(smE);
     }
     // Fallback dims from IFD0
     if (!result.width && wE >= 0) result.width = u32(wE + 8);
