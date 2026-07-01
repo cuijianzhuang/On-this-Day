@@ -777,6 +777,8 @@
     if (_exifAbort) { _exifAbort.abort(); _exifAbort = null; }
     _loadLightboxExif(p);
 
+    lightboxBody.style.transition = '';
+    lightboxBody.style.transform = '';
     lightboxBody.innerHTML = '';
     // "show" 这个淡入 class 必须等图片/视频真的有数据了才加，不能用固定延时——
     // 不然图片还没下载完就先淡入，看到的就是浏览器原生的"裂图"占位图标，等真实画面到了才覆盖上去
@@ -793,24 +795,19 @@
       el.onloadeddata = () => showWhenReady(el);
       lightboxBody.appendChild(el);
     } else if (p.type === 'live') {
-      // Live Photo：默认是静态图，鼠标悬浮（桌面）/ 按住（移动端）才播放配对的短视频预览，松开恢复静态图
       const img = document.createElement('img');
       img.className = pickEffect();
       img.decoding = 'async';
-      img.onload = () => showWhenReady(img);
-      img.onerror = () => { img.onerror = null; heicFallback(img, p.url); };
-      img.src = p.url.replace('/img/', '/thumb/') + '?w=1600&q=85&fit=scale-down';
 
       const video = document.createElement('video');
       video.className = 'live-photo-video';
       video.src = p.videoUrl;
-      // 不静音——播放是悬浮/长按这个用户主动触发的手势带起来的，浏览器不会拦自动播放限制
       video.loop = true;
       video.preload = 'metadata';
 
       const badge = document.createElement('div');
       badge.className = 'live-photo-badge';
-      badge.innerHTML = 'Live Photo<span class="live-photo-icon"></span>';
+      badge.innerHTML = '<span class="lp-live-icon"></span>实况';
 
       const wrap = document.createElement('div');
       wrap.className = 'live-photo-wrap';
@@ -819,12 +816,53 @@
       wrap.appendChild(badge);
       lightboxBody.appendChild(wrap);
 
-      const playPreview = () => { video.currentTime = 0; video.play().catch(() => {}); wrap.classList.add('playing'); };
-      const stopPreview = () => { video.pause(); wrap.classList.remove('playing'); };
-      wrap.addEventListener('mouseenter', playPreview);
-      wrap.addEventListener('mouseleave', stopPreview);
-      wrap.addEventListener('touchstart', (e) => { e.preventDefault(); playPreview(); }, { passive: false });
-      wrap.addEventListener('touchend', stopPreview);
+      let stickyPlay = false;
+      const playLive = () => {
+        video.loop = true; video.currentTime = 0;
+        video.play().catch(() => {}); wrap.classList.add('playing');
+      };
+      const stopLive = () => {
+        stickyPlay = false; video.pause(); wrap.classList.remove('playing');
+      };
+
+      // 图片加载完成后自动播放一次，告知用户这是实况照片
+      img.onload = () => {
+        showWhenReady(img);
+        setTimeout(() => {
+          video.loop = false;
+          video.currentTime = 0;
+          video.play().catch(() => {});
+          wrap.classList.add('playing');
+          video.onended = () => {
+            video.loop = true;
+            if (!stickyPlay) wrap.classList.remove('playing');
+          };
+        }, 500);
+      };
+      img.onerror = () => { img.onerror = null; heicFallback(img, p.url); };
+      img.src = p.url.replace('/img/', '/thumb/') + '?w=1600&q=85&fit=scale-down';
+
+      // 悬浮预览（桌面）
+      wrap.addEventListener('mouseenter', () => { if (!stickyPlay) playLive(); });
+      wrap.addEventListener('mouseleave', () => { if (!stickyPlay) stopLive(); });
+      // 点击切换粘性循环播放
+      wrap.addEventListener('click', () => {
+        if (_lbSlideDragging) return;
+        stickyPlay = !stickyPlay;
+        if (stickyPlay) playLive(); else stopLive();
+      });
+      // 移动端：按住播放，松开停止
+      wrap.addEventListener('touchstart', (e) => { e.preventDefault(); playLive(); }, { passive: false });
+      wrap.addEventListener('touchend', () => { if (!stickyPlay) stopLive(); });
+
+      // 提示文字
+      const _hint = document.getElementById('lbZoomHint');
+      if (_hint) {
+        clearTimeout(_lbZoomHideTimer);
+        _hint.textContent = '悬浮播放实况 · 点击锁定 · 双击缩放';
+        _hint.style.opacity = '1';
+        _lbZoomHideTimer = setTimeout(() => { if (_hint) _hint.style.opacity = '0'; }, 3000);
+      }
     } else {
       // 全屏看大图也不用原图，按屏幕尺寸缩放一版；转换失败（额度超了/HEIC 解不出来）就在浏览器里现场解码兜底
       const el = document.createElement('img');
@@ -912,7 +950,7 @@
   // ── 灯箱图片缩放 + 平移 ─────────────────────────────────────────────────────
   let _lbScale = 1, _lbTx = 0, _lbTy = 0;
   let _lbPanning = false, _lbPanSX = 0, _lbPanSY = 0, _lbPanTx0 = 0, _lbPanTy0 = 0;
-  let _lbSlideDragX = 0, _lbSlideDragY = 0, _lbSlideDragging = false;
+  let _lbSlideDragX = 0, _lbSlideDragY = 0, _lbSlideDragging = false, _lbSlideActive = false;
   let _lbZoomHideTimer = null;
 
   function _lbTarget() { return lightboxBody.querySelector('img,video,.live-photo-wrap'); }
@@ -989,7 +1027,7 @@
     _lbApplyTransform();
   }, { passive: false });
 
-  // 放大时拖拽平移；未放大时水平拖动切换图片
+  // 放大时拖拽平移；未放大时水平拖动整体 lightboxBody 切换图片
   lightboxBody.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
     if (_lbScale > 1) {
@@ -1003,7 +1041,7 @@
       _lbSlideDragX = e.clientX;
       _lbSlideDragY = e.clientY;
       _lbSlideDragging = false;
-      lightboxBody.setPointerCapture(e.pointerId);
+      _lbSlideActive = true;
     }
   });
   lightboxBody.addEventListener('pointermove', (e) => {
@@ -1013,55 +1051,58 @@
       _lbClamp();
       const t = _lbTarget();
       if (t) t.style.transform = `translate(${_lbTx}px,${_lbTy}px) scale(${_lbScale})`;
-    } else if (_lbScale <= 1 && lightboxBody.hasPointerCapture(e.pointerId)) {
+    } else if (_lbSlideActive) {
       const dx = e.clientX - _lbSlideDragX;
       const dy = e.clientY - _lbSlideDragY;
-      if (!_lbSlideDragging && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
-        // lock to horizontal if angle is shallow enough
-        if (Math.abs(dx) < Math.abs(dy)) {
-          lightboxBody.releasePointerCapture(e.pointerId);
-          return;
-        }
+      if (!_lbSlideDragging) {
+        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+        if (Math.abs(dy) > Math.abs(dx)) { _lbSlideActive = false; return; }
         _lbSlideDragging = true;
+        lightboxBody.setPointerCapture(e.pointerId);
+        // 切图手势开始时停止实况播放，避免干扰
+        const lpWrap = lightboxBody.querySelector('.live-photo-wrap.playing');
+        if (lpWrap) { const v = lpWrap.querySelector('video'); if (v) v.pause(); lpWrap.classList.remove('playing'); }
       }
-      if (_lbSlideDragging) {
-        const t = _lbTarget();
-        if (t) {
-          t.style.transition = 'opacity 0.4s ease';
-          t.style.transform = `translateX(${dx}px) scale(1)`;
-        }
-      }
+      lightboxBody.style.transition = 'none';
+      lightboxBody.style.transform = `translateX(${dx}px)`;
     }
   });
   lightboxBody.addEventListener('pointerup', (e) => {
     if (_lbPanning) {
       _lbPanning = false;
       lightboxBody.classList.remove('panning');
-    } else if (_lbSlideDragging) {
-      _lbSlideDragging = false;
-      const dx = e.clientX - _lbSlideDragX;
-      const t = _lbTarget();
-      if (Math.abs(dx) > 80) {
-        autoPlaying = false;
-        if (dx < 0) nextSlide(); else prevSlide();
-      } else {
-        // snap back
-        if (t) {
-          t.style.transition = 'transform 0.25s ease';
-          t.style.transform = `translate(${_lbTx}px,${_lbTy}px) scale(${_lbScale})`;
-          setTimeout(() => { if (t) t.style.transition = ''; }, 260);
+    } else if (_lbSlideActive) {
+      _lbSlideActive = false;
+      if (_lbSlideDragging) {
+        _lbSlideDragging = false;
+        const dx = e.clientX - _lbSlideDragX;
+        if (Math.abs(dx) > 80) {
+          autoPlaying = false;
+          const dir = dx < 0 ? -1 : 1;
+          lightboxBody.style.transition = 'transform 0.28s cubic-bezier(0.4,0,0.2,1)';
+          lightboxBody.style.transform = `translateX(${dir * -window.innerWidth}px)`;
+          setTimeout(() => {
+            lightboxBody.style.transition = 'none';
+            lightboxBody.style.transform = '';
+            if (dx < 0) nextSlide(); else prevSlide();
+          }, 280);
+        } else {
+          lightboxBody.style.transition = 'transform 0.25s ease';
+          lightboxBody.style.transform = '';
+          setTimeout(() => { lightboxBody.style.transition = ''; }, 260);
         }
       }
     }
   });
-  lightboxBody.addEventListener('pointercancel', (e) => {
+  lightboxBody.addEventListener('pointercancel', () => {
     if (_lbPanning) {
       _lbPanning = false;
       lightboxBody.classList.remove('panning');
-    } else if (_lbSlideDragging) {
-      _lbSlideDragging = false;
-      const t = _lbTarget();
-      if (t) t.style.transform = `translate(${_lbTx}px,${_lbTy}px) scale(${_lbScale})`;
+    } else if (_lbSlideActive || _lbSlideDragging) {
+      _lbSlideActive = false; _lbSlideDragging = false;
+      lightboxBody.style.transition = 'transform 0.25s ease';
+      lightboxBody.style.transform = '';
+      setTimeout(() => { lightboxBody.style.transition = ''; }, 260);
     }
   });
 
