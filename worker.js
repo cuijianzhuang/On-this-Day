@@ -1297,8 +1297,6 @@ async function generateHeicPreview(env, key) {
 }
 
 
-const PREVIEWS_PUBLIC = "https://previews.cuijianzhuang.com";
-
 async function handleThumb(request, env, url) {
   const origKey = decodeURIComponent(url.pathname.replace(/^\/thumb\//, ""));
   if (!origKey) return new Response("Bad Request", { status: 400 });
@@ -1310,7 +1308,7 @@ async function handleThumb(request, env, url) {
   // 存进 PREVIEWS 的 WebP 缩略图路径：thumbs/{尺寸}/{原始路径去扩展名}.webp
   const dimStr   = height ? `${width}x${height}` : `${width}`;
   const thumbKey = `thumbs/${dimStr}/${origKey.replace(/\.[^.]+$/, "")}.webp`;
-  const publicUrl = `${PREVIEWS_PUBLIC}/${thumbKey}`;
+  const publicUrl = `${env.PREVIEWS_PUBLIC_URL}/${thumbKey}`;
 
   // 先查边缘缓存（302 本身也可以缓存，省掉每次的 PREVIEWS.head 调用）
   const cacheKey = new Request(`https://thumb-redirect/${thumbKey}`);
