@@ -2352,9 +2352,10 @@ const APP_CSS = `
     header { padding: 3.2rem 1rem 2.2rem; }
     .subtitle { font-size: 0.85rem; }
     .year-block { padding: 0 1rem; }
-    .grid { gap: 14px 10px; }
-    /* 高度不强制了——交给 frame-inner 的 aspect-ratio 撑出来，宽图/竖图比例不一样了 */
-    .cell { width: 40vw !important; height: auto !important; }
+    /* 移动端两列：50% 减掉一半列间距，两张卡片加一个 10px gap 正好撑满容器，
+       避免用 40vw 时因为父元素有 padding 导致右侧留白、缩放后看起来不居中 */
+    .grid { gap: 14px 10px; justify-content: center; }
+    .cell { width: calc(50% - 5px) !important; height: auto !important; }
     .lightbox { padding: 0.8rem; }
     .lightbox-stage img, .lightbox-stage video { max-width: 96vw; max-height: 78vh; }
     .lightbox-nav { font-size: 1.8rem; padding: 0.6rem; }
@@ -3078,11 +3079,12 @@ const APP_JS = `
           btn.textContent = expanded ? '收起' : '展开查看全部 ' + total + ' 张 ›';
         };
 
-        // 移动端 CSS 把 .cell 强制按 40vw 渲染（跟桌面端 pickSize 随机出来的尺寸完全无关），
+        // 移动端 CSS 把 .cell 强制按 calc(50% - 5px) 渲染（容器宽度的一半减半个列间距），
+        // 折算成 px 约等于 0.48 * innerWidth（年份块左右各 1rem + 网格各 0.5rem padding），
         // 缩略图分辨率要是还按桌面那个 size 算，手机上经常对不上：要小了模糊，要大了白白浪费流量
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
         const isMobileLayout = window.innerWidth <= 640;
-        const mobileRenderSize = window.innerWidth * 0.4;
+        const mobileRenderSize = window.innerWidth * 0.48;
 
         // 照片不是一次性全部弹出来，按页面上的出场顺序错开一点时间依次淡入；
         // 延迟封顶（0.9s），照片特别多的时候后面那些不用傻等，很快就一起跟上
