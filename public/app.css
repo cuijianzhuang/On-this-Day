@@ -485,6 +485,7 @@
     border-left: 1px solid rgba(255,255,255,0.07);
     overflow-y: auto; scrollbar-width: none;
     display: flex; flex-direction: column;
+    touch-action: auto; /* restore normal touch for buttons */
   }
   .lightbox-panel::-webkit-scrollbar { display: none; }
   .lp-filename {
@@ -493,17 +494,22 @@
     word-break: break-all; letter-spacing: 0.02em;
   }
   .lp-reactions { padding: 0.5rem 1.1rem 0.9rem; border-bottom: 1px solid rgba(255,255,255,0.07); }
-  .lp-emoji-grid { display: flex; flex-wrap: wrap; gap: 0.45rem; }
+  .lp-emoji-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.4rem; }
   .lp-emoji-btn {
-    display: flex; align-items: center; gap: 0.28rem;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 0.18rem;
     background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 980px; padding: 0.3rem 0.55rem 0.3rem 0.4rem;
-    font-size: 0.85rem; cursor: pointer; color: #d6d6da;
-    font-family: inherit; transition: background 0.15s ease, transform 0.12s ease, border-color 0.15s;
+    border-radius: 12px; padding: 0.55rem 0.3rem 0.45rem;
+    font-size: 1.35rem; cursor: pointer; color: #d6d6da;
+    font-family: inherit; transition: background 0.15s ease, transform 0.12s ease, border-color 0.15s ease;
+    -webkit-tap-highlight-color: transparent;
   }
-  .lp-emoji-btn:hover { background: rgba(255,255,255,0.14); transform: scale(1.08); border-color: rgba(255,255,255,0.16); }
-  .lp-emoji-btn.reacted { background: rgba(255,200,120,0.18); border-color: rgba(255,190,90,0.35); }
-  .lp-emoji-cnt { font-size: 0.65rem; font-family: 'Space Grotesk', sans-serif; color: #8a8a8f; min-width: 8px; }
+  .lp-emoji-btn:hover { background: rgba(255,255,255,0.13); transform: scale(1.06); border-color: rgba(255,255,255,0.16); }
+  .lp-emoji-btn:active { transform: scale(0.92); background: rgba(255,255,255,0.18); }
+  .lp-emoji-btn.reacted { background: rgba(255,200,100,0.16); border-color: rgba(255,190,80,0.4); }
+  .lp-emoji-btn.pop { animation: emojiPop 0.3s cubic-bezier(0.34,1.56,0.64,1); }
+  @keyframes emojiPop { 0%,100%{transform:scale(1)} 50%{transform:scale(1.35)} }
+  .lp-emoji-cnt { font-size: 0.6rem; font-family: 'Space Grotesk', sans-serif; color: #8a8a8f; line-height: 1; min-height: 0.7rem; }
   .lp-section {
     padding: 0.85rem 1.2rem;
     border-bottom: 1px solid rgba(255,255,255,0.07);
@@ -523,14 +529,24 @@
   }
   .lp-exif-loading { font-size: 0.72rem; color: #444448; padding: 0.5rem 0; }
   .lp-camera-name { font-size: 0.82rem; color: #d6d6da; font-weight: 500; margin-bottom: 0.3rem; }
-  body.sun-on .lightbox-panel { background: rgba(240,240,244,0.72); border-left-color: rgba(0,0,0,0.07); }
-  body.sun-on .lp-filename { color: #8a8a90; }
-  body.sun-on .lp-emoji-btn { background: rgba(0,0,0,0.06); border-color: rgba(0,0,0,0.1); color: #3a3a3c; }
+  body.sun-on .lightbox-panel { background: rgba(235,235,240,0.8); border-left-color: rgba(0,0,0,0.07); }
+  body.sun-on .lp-filename { color: #7a7a80; }
+  body.sun-on .lp-reactions { border-color: rgba(0,0,0,0.07); }
+  body.sun-on .lp-emoji-btn { background: rgba(0,0,0,0.05); border-color: rgba(0,0,0,0.08); color: #3a3a3c; }
+  body.sun-on .lp-emoji-btn:hover { background: rgba(0,0,0,0.1); }
   body.sun-on .lp-emoji-cnt { color: #6e6e73; }
+  body.sun-on .lp-section { border-color: rgba(0,0,0,0.07); }
   body.sun-on .lp-label { color: #8a8a90; }
   body.sun-on .lp-value { color: #3a3a3c; }
   body.sun-on .lp-ai-text { color: #5a5a5e; }
   body.sun-on .lp-camera-name { color: #1c1c1e; }
+
+  /* 缩放状态游标 */
+  #lightboxBody { display: flex; align-items: center; justify-content: center; }
+  #lightboxBody.zoomed { cursor: grab; }
+  #lightboxBody.zoomed.panning { cursor: grabbing; }
+  #lightboxBody img, #lightboxBody video { transition: opacity 0.4s ease, transform 0.4s ease; }
+  #lightboxBody.zoomed img, #lightboxBody.zoomed video { transition: opacity 0.4s ease; }
 
   /* 胶片条 */
   .lightbox-filmstrip {
@@ -577,8 +593,13 @@
   }
   .live-photo-wrap.playing .live-photo-icon { animation: spin 1.2s linear infinite; }
   .lightbox-actions {
-    position: absolute; top: 1rem; right: 1.2rem; z-index: 52;
+    position: absolute; top: 1rem; right: 1rem; z-index: 52;
     display: flex; gap: 0.5rem; align-items: center;
+  }
+  .lb-zoom-hint {
+    position: absolute; bottom: 0.8rem; left: 50%; transform: translateX(-50%);
+    font-size: 0.68rem; color: rgba(255,255,255,0.4); pointer-events: none;
+    white-space: nowrap; z-index: 2; transition: opacity 0.3s ease;
   }
   .lightbox-btn {
     width: 38px; height: 38px; border-radius: 50%; display: flex;

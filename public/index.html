@@ -85,21 +85,22 @@
   </div>
 
   <div class="lightbox" id="lightbox">
-    <div class="lightbox-actions">
-      <a class="lightbox-btn" id="lightboxShare" title="分享">
-        <svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/><line x1="15.4" y1="6.5" x2="8.6" y2="10.5"/></svg>
-      </a>
-      <a class="lightbox-btn" id="lightboxDownload" title="下载">
-        <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
-      </a>
-      <span class="lightbox-btn close" id="lightboxClose" title="关闭">
-        <svg viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
-      </span>
-    </div>
     <div class="lightbox-inner">
       <span class="lightbox-nav prev" id="navPrev">‹</span>
       <span class="lightbox-nav next" id="navNext">›</span>
       <div class="lightbox-stage">
+        <div class="lightbox-actions">
+          <a class="lightbox-btn" id="lightboxShare" title="分享">
+            <svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/><line x1="15.4" y1="6.5" x2="8.6" y2="10.5"/></svg>
+          </a>
+          <a class="lightbox-btn" id="lightboxDownload" title="下载">
+            <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+          </a>
+          <span class="lightbox-btn close" id="lightboxClose" title="关闭">
+            <svg viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+          </span>
+        </div>
+        <div class="lb-zoom-hint" id="lbZoomHint"></div>
         <div id="lightboxBody"></div>
       </div>
       <aside class="lightbox-panel" id="lightboxPanel">

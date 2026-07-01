@@ -244,16 +244,18 @@
     _floatHeart(btn);
   };
 
-  window.doReactEmoji = function(key, emoji) {
+  window.doReactEmoji = function(key, emoji, btnEl) {
     if (!key || !emoji) return;
     if (_room && _room.readyState === WebSocket.OPEN) {
       _room.send(JSON.stringify({ type: 'react', key, emoji }));
     }
-    // 乐观更新本地数据
     if (!_roomReactions[key]) _roomReactions[key] = {};
     _roomReactions[key][emoji] = (_roomReactions[key][emoji] || 0) + 1;
     _syncCount(key, _totalReactions(key), false);
     _renderLightboxReactions(key);
+    // 触发弹跳动画（传入 btn 的 data-emoji 匹配找到 DOM 元素重新触发）
+    const el = btnEl || document.querySelector(`#lpReactions .lp-emoji-btn[data-emoji="${CSS.escape(emoji)}"]`);
+    if (el) { el.classList.remove('pop'); requestAnimationFrame(() => el.classList.add('pop')); }
   };
   // ────────────────────────────────────────────────────────────────────────────────
 
@@ -567,7 +569,7 @@
     el.innerHTML = '<div class="lp-emoji-grid">' + EMOJI_LIST.map(e => {
       const n = counts[e] || 0;
       const cls = n > 0 ? ' reacted' : '';
-      return `<button class="lp-emoji-btn${cls}" onclick="doReactEmoji(${JSON.stringify(key)},${JSON.stringify(e)})">${e}<span class="lp-emoji-cnt">${n || ''}</span></button>`;
+      return `<button class="lp-emoji-btn${cls}" data-emoji="${escAttr(e)}" onclick="doReactEmoji(${JSON.stringify(key)},${JSON.stringify(e)},this)">${e}<span class="lp-emoji-cnt">${n > 0 ? n : ''}</span></button>`;
     }).join('') + '</div>';
   }
 
@@ -659,9 +661,8 @@
     lightboxDownload.download = p.key.split('/').pop();
     lightboxShare.dataset.url = location.origin + p.url;
     lightboxShare.dataset.year = p.year;
-    // 更新胶片条高亮
+    _lbResetZoom();
     _updateFilmstrip(index);
-    // 填充侧边面板
     _renderLightboxReactions(p.key);
     _renderLightboxInfo(p);
     if (_exifAbort) { _exifAbort.abort(); _exifAbort = null; }
@@ -754,7 +755,9 @@
   function closeLightbox() {
     lightbox.classList.remove('open');
     stopAutoPlay();
+    _lbScale = 1; _lbTx = 0; _lbTy = 0; _lbPanning = false;
     lightboxBody.innerHTML = '';
+    lightboxBody.classList.remove('zoomed', 'panning');
     document.body.style.overflow = '';
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     if (_exifAbort) { _exifAbort.abort(); _exifAbort = null; }
@@ -787,18 +790,100 @@
   lightbox.onclick = (e) => { if (e.target === lightbox) closeLightbox(); };
   document.addEventListener('keydown', (e) => {
     if (!lightbox.classList.contains('open')) return;
-    if (e.key === 'Escape') closeLightbox();
-    if (e.key === 'ArrowRight') { autoPlaying = false; nextSlide(); }
-    if (e.key === 'ArrowLeft') prevSlide();
+    if (e.key === 'Escape') { if (_lbScale > 1) { _lbResetZoom(); } else { closeLightbox(); } }
+    if (e.key === 'ArrowRight' && _lbScale === 1) { autoPlaying = false; nextSlide(); }
+    if (e.key === 'ArrowLeft' && _lbScale === 1) prevSlide();
+    if ((e.key === '=' || e.key === '+') && _lbScale < 10) { _lbScale = Math.min(10, _lbScale * 1.3); _lbApplyTransform(); }
+    if (e.key === '-' && _lbScale > 1) { _lbScale = Math.max(1, _lbScale / 1.3); if (_lbScale <= 1) { _lbScale=1; _lbTx=0; _lbTy=0; } _lbApplyTransform(); }
+    if (e.key === '0') _lbResetZoom();
   });
 
-  // 移动端左右滑动切换，不用非得点那两个小箭头
+  // ── 灯箱图片缩放 + 平移 ─────────────────────────────────────────────────────
+  let _lbScale = 1, _lbTx = 0, _lbTy = 0;
+  let _lbPanning = false, _lbPanSX = 0, _lbPanSY = 0, _lbPanTx0 = 0, _lbPanTy0 = 0;
+  let _lbZoomHideTimer = null;
+
+  function _lbTarget() { return lightboxBody.querySelector('img,video,.live-photo-wrap'); }
+
+  function _lbApplyTransform() {
+    const t = _lbTarget();
+    if (!t) return;
+    t.style.transform = _lbScale === 1 ? '' : `translate(${_lbTx}px,${_lbTy}px) scale(${_lbScale})`;
+    t.style.transformOrigin = 'center center';
+    lightboxBody.classList.toggle('zoomed', _lbScale > 1);
+    // 缩放提示
+    const hint = document.getElementById('lbZoomHint');
+    if (hint) {
+      hint.textContent = _lbScale > 1 ? `${(_lbScale * 100).toFixed(0)}%` : '';
+      hint.style.opacity = '1';
+      clearTimeout(_lbZoomHideTimer);
+      if (_lbScale > 1) _lbZoomHideTimer = setTimeout(() => { if (hint) hint.style.opacity = '0'; }, 1200);
+    }
+  }
+
+  function _lbResetZoom() {
+    _lbScale = 1; _lbTx = 0; _lbTy = 0;
+    _lbApplyTransform();
+    lightboxBody.classList.remove('zoomed', 'panning');
+  }
+
+  // 滚轮缩放：以鼠标所在点为缩放中心
+  lightboxBody.addEventListener('wheel', (e) => {
+    if (!lightbox.classList.contains('open')) return;
+    e.preventDefault();
+    const t = _lbTarget();
+    if (!t) return;
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    const oldScale = _lbScale;
+    const newScale = Math.max(1, Math.min(10, oldScale * factor));
+    if (newScale === oldScale) return;
+    // 以光标为不动点：dx/dy 是光标相对于元素视觉中心的偏移（在元素本地空间）
+    const rect = t.getBoundingClientRect();
+    const vcx = rect.left + rect.width / 2;
+    const vcy = rect.top + rect.height / 2;
+    const dx = (e.clientX - vcx) / oldScale;
+    const dy = (e.clientY - vcy) / oldScale;
+    _lbTx += dx * (oldScale - newScale);
+    _lbTy += dy * (oldScale - newScale);
+    _lbScale = newScale;
+    if (_lbScale === 1) { _lbTx = 0; _lbTy = 0; }
+    _lbApplyTransform();
+  }, { passive: false });
+
+  // 放大时拖拽平移
+  lightboxBody.addEventListener('pointerdown', (e) => {
+    if (_lbScale <= 1) return;
+    e.stopPropagation();
+    _lbPanning = true;
+    lightboxBody.setPointerCapture(e.pointerId);
+    lightboxBody.classList.add('panning');
+    _lbPanSX = e.clientX; _lbPanSY = e.clientY;
+    _lbPanTx0 = _lbTx; _lbPanTy0 = _lbTy;
+  });
+  lightboxBody.addEventListener('pointermove', (e) => {
+    if (!_lbPanning) return;
+    _lbTx = _lbPanTx0 + e.clientX - _lbPanSX;
+    _lbTy = _lbPanTy0 + e.clientY - _lbPanSY;
+    const t = _lbTarget();
+    if (t) t.style.transform = `translate(${_lbTx}px,${_lbTy}px) scale(${_lbScale})`;
+  });
+  lightboxBody.addEventListener('pointerup', () => {
+    _lbPanning = false;
+    lightboxBody.classList.remove('panning');
+  });
+  lightboxBody.addEventListener('pointercancel', () => {
+    _lbPanning = false;
+    lightboxBody.classList.remove('panning');
+  });
+
+  // ── 移动端左右滑动切换，不用非得点那两个小箭头 ─────────────────────────────
   let touchStartX = 0, touchStartY = 0;
   lightbox.addEventListener('touchstart', (e) => {
     touchStartX = e.touches[0].clientX;
     touchStartY = e.touches[0].clientY;
   }, { passive: true });
   lightbox.addEventListener('touchend', (e) => {
+    if (_lbScale > 1) return; // 放大时不触发切图
     const dx = e.changedTouches[0].clientX - touchStartX;
     const dy = e.changedTouches[0].clientY - touchStartY;
     if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy)) return;
