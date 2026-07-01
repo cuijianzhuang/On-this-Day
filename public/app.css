@@ -352,7 +352,7 @@
   }
   /* ── 在线徽章 ─────────────────────────────────────────────── */
   .online-badge {
-    position: fixed; top: 1rem; right: 1rem; z-index: 20;
+    position: fixed; top: 1rem; left: 1rem; z-index: 20;
     background: rgba(20,20,22,0.72); backdrop-filter: blur(14px) saturate(1.4);
     border: 1px solid rgba(255,255,255,0.10);
     border-radius: 999px;
