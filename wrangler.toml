@@ -1,8 +1,7 @@
 name = "memories-today"
 main = "worker.js"
 compatibility_date = "2026-06-27"
-# heic-decode 这个库的底层 WASM 胶水代码是按 Node.js 环境生成的（会引用 fs/path/crypto），
-# 开这个 flag 让 Wrangler 打包时能解析这些引用，需要 Workers Paid 套餐（CPU 时间限制更宽松）
+# node:crypto（createHash）需要此 flag
 compatibility_flags = ["nodejs_compat"]
 
 routes = [

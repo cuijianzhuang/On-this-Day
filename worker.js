@@ -8,46 +8,8 @@
  * HEIC 服务端转码需要 Workers Paid 套餐（CPU 时间限制更宽松，解码一张图动辄几百毫秒）
  */
 
-import "./node-shims.js"; // 必须排在 libheif 之前，垫上它会用到的 __dirname 等 Node 全局变量
 import { createHash } from "node:crypto";
 import { WorkflowEntrypoint } from "cloudflare:workers";
-
-// Workers 不允许运行时动态编译 WASM 字节码（new WebAssembly.Module(bytes) 这种用法），
-// 必须在部署时就编译好——所以不能用内嵌 base64、运行时自己 new Module 的 libheif-bundle.js，
-// 改用 Wrangler 原生支持的 .wasm 文件导入（部署时编译好），再用 instantiateWasm 回调接进去
-import libheifWasmModule from "libheif-js/libheif-wasm/libheif.wasm";
-import libheifFactory from "libheif-js/libheif-wasm/libheif.js";
-import heicDecodeLibFactory from "heic-decode/lib.js";
-import jpegJs from "jpeg-js";
-
-let cachedDecodeOne = null;
-function getHeicDecodeOne() {
-  if (!cachedDecodeOne) {
-    const libheif = libheifFactory({
-      instantiateWasm(imports, successCallback) {
-        // 用 WebAssembly.instantiate()（异步 API）会在 libheif 的 embind 类注册跑到一半时被打断，
-        // 报 "Cannot read properties of undefined (reading 'overloadTable')"——这是 libheif-js 这个
-        // wasm 构建本身的问题（在纯 Node 环境下用同样的异步 API 也能复现），跟 Workers 没关系。
-        // libheifWasmModule 已经是 Wrangler 部署时编译好的 Module，从已编译的 Module 同步 new
-        // Instance 不算"运行时动态编译"，Workers 允许，而且能避开上面那个异步初始化的 bug
-        const instance = new WebAssembly.Instance(libheifWasmModule, imports);
-        return successCallback(instance, libheifWasmModule);
-      },
-    });
-    cachedDecodeOne = heicDecodeLibFactory(libheif).one;
-  }
-  return cachedDecodeOne;
-}
-
-// 服务端把 HEIC 解码成原始像素，再用纯 JS 的 jpeg-js 编码成 JPEG——
-// 这条链路只用得到普通 JS + WASM，没有依赖 Node 的 fs、也没有依赖浏览器的 Canvas，Workers 环境下能跑
-async function decodeHeicToJpeg(buffer, quality = 85) {
-  const decodeOne = getHeicDecodeOne();
-  // heic-decode 内部会对 buffer 做迭代/展开，必须传 Uint8Array 而不是裸 ArrayBuffer
-  const uint8Buffer = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
-  const { width, height, data } = await decodeOne({ buffer: uint8Buffer });
-  return jpegJs.encode({ data, width, height }, quality).data;
-}
 
 
 const IMAGE_EXT = /\.(jpe?g|png|heic|gif|webp)$/i;
@@ -1278,9 +1240,11 @@ async function generateHeicPreview(env, key) {
   const object = await env.PHOTOS.get(key);
   if (!object) return false;
 
-  const buffer = await object.arrayBuffer();
   try {
-    const jpegBytes = await decodeHeicToJpeg(buffer);
+    const transformed = await env.IMAGES.input(object.body)
+      .transform({})
+      .output({ format: "image/jpeg", quality: 85 });
+    const jpegBytes = await transformed.response().arrayBuffer();
     await env.PREVIEWS.put(previewKey, jpegBytes, { httpMetadata: { contentType: "image/jpeg" } });
     return true;
   } catch (err) {
@@ -1442,7 +1406,10 @@ async function getJpegBytesForScoring(env, key) {
   }
   const obj = await env.PHOTOS.get(key);
   if (!obj) return null;
-  return await decodeHeicToJpeg(await obj.arrayBuffer());
+  const transformed = await env.IMAGES.input(obj.body)
+    .transform({ width: 1024 })
+    .output({ format: "image/jpeg", quality: 85 });
+  return new Uint8Array(await transformed.response().arrayBuffer());
 }
 
 async function scoreOnePhoto(env, key) {
