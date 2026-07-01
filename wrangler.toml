@@ -15,6 +15,15 @@ routes = [
 directory = "./public"
 binding = "ASSETS"
 
+# 实时共享房间：每个日期一个 DO 实例，处理 WebSocket 连接 + 持久化点赞数据
+[[durable_objects.bindings]]
+name = "MEMORY_ROOM"
+class_name = "MemoryRoom"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["MemoryRoom"]
+
 # wrangler versions upload / wrangler deploy 前先跑这个，确保 CI 环境里 npm 依赖都装好
 [build]
 command = "npm install"
