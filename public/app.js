@@ -50,10 +50,105 @@
     return `hsl(${h % 360},55%,52%)`;
   }
 
+  // ── 可拖动徽章：拖到边缘自动收起，点击弹出 ──────────────────────────────
+  let _badgeDragInited = false;
+
+  function _initBadgeDrag(badge) {
+    if (_badgeDragInited) return;
+    _badgeDragInited = true;
+
+    const SNAP_PX   = 72;    // 距边缘多少 px 内松手就吸附
+    const AUTO_HIDE = 3500;  // 展开后 ms 自动重新收起
+
+    let dragging = false, moved = false;
+    let startPX, startPY, startLeft, startTop;
+    let peekTimer = null;
+
+    // 恢复上次保存的位置
+    const saved = (() => { try { return JSON.parse(localStorage.getItem('_badge_pos')); } catch (_) { return null; } })();
+    if (saved && typeof saved.fx === 'number') {
+      badge.style.left = (saved.fx * window.innerWidth)  + 'px';
+      badge.style.top  = (saved.fy * window.innerHeight) + 'px';
+      if (saved.side) _dockBadge(badge, saved.side);
+    } else {
+      const btn = document.getElementById('playMemories');
+      if (btn) {
+        const r = btn.getBoundingClientRect();
+        badge.style.left = (r.right + 8) + 'px';
+        badge.style.top  = r.top + 'px';
+      } else {
+        badge.style.left = '6rem';
+        badge.style.top  = '1.3rem';
+      }
+    }
+
+    badge.addEventListener('pointerdown', e => {
+      if (badge.dataset.docked) {
+        e.preventDefault();
+        clearTimeout(peekTimer);
+        if (badge.classList.contains('peek')) {
+          badge.classList.remove('peek');
+        } else {
+          badge.classList.add('peek');
+          peekTimer = setTimeout(() => badge.classList.remove('peek'), AUTO_HIDE);
+        }
+        return;
+      }
+      dragging = true; moved = false;
+      badge.classList.add('dragging');
+      badge.setPointerCapture(e.pointerId);
+      startPX = e.clientX; startPY = e.clientY;
+      const r = badge.getBoundingClientRect();
+      startLeft = r.left; startTop = r.top;
+      e.preventDefault();
+    });
+
+    badge.addEventListener('pointermove', e => {
+      if (!dragging) return;
+      const dx = e.clientX - startPX, dy = e.clientY - startPY;
+      if (!moved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) moved = true;
+      badge.style.left = Math.max(0, Math.min(window.innerWidth  - badge.offsetWidth,  startLeft + dx)) + 'px';
+      badge.style.top  = Math.max(0, Math.min(window.innerHeight - badge.offsetHeight, startTop  + dy)) + 'px';
+      e.preventDefault();
+    });
+
+    badge.addEventListener('pointerup', e => {
+      if (!dragging) return;
+      dragging = false;
+      badge.classList.remove('dragging');
+      badge.releasePointerCapture(e.pointerId);
+      if (!moved) return;
+
+      const r = badge.getBoundingClientRect();
+      const W = window.innerWidth, H = window.innerHeight;
+      const dists = { left: r.left, right: W - r.right, top: r.top, bottom: H - r.bottom };
+      const minSide = Object.keys(dists).reduce((a, b) => dists[a] < dists[b] ? a : b);
+      const side = dists[minSide] < SNAP_PX ? minSide : null;
+      if (side) _dockBadge(badge, side);
+
+      try {
+        localStorage.setItem('_badge_pos', JSON.stringify({ fx: r.left / W, fy: r.top / H, side }));
+      } catch (_) {}
+    });
+  }
+
+  function _dockBadge(badge, side) {
+    if (side === 'left')   badge.style.left = '0px';
+    if (side === 'right')  badge.style.left = (window.innerWidth  - badge.offsetWidth)  + 'px';
+    if (side === 'top')    badge.style.top  = '0px';
+    if (side === 'bottom') badge.style.top  = (window.innerHeight - badge.offsetHeight) + 'px';
+    badge.dataset.docked = side;
+    badge.classList.add('docked', 'docked-' + side);
+    badge.classList.remove('peek', 'dragging');
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   function _updateBadge(count, list) {
     const badge = document.getElementById('onlineBadge');
     if (!badge) return;
-    badge.style.display = list && list.length > 0 ? '' : 'none';
+    const willShow = !!(list && list.length > 0);
+    badge.style.display = willShow ? '' : 'none';
+    if (willShow) _initBadgeDrag(badge);
 
     const avatarsEl = document.getElementById('onlineAvatars');
     if (avatarsEl && list) {
