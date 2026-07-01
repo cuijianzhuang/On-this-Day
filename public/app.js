@@ -1047,20 +1047,34 @@
     t.style.transform = _lbScale === 1 ? '' : `translate(${_lbTx}px,${_lbTy}px) scale(${_lbScale})`;
     t.style.transformOrigin = 'center center';
     lightboxBody.classList.toggle('zoomed', _lbScale > 1);
-    // 缩放提示
+    // 左下角缩放比例徽章
+    const badge = document.getElementById('lbScaleBadge');
+    if (badge) {
+      if (_lbScale > 1) {
+        badge.textContent = `${(_lbScale).toFixed(1)}×`;
+        badge.classList.add('visible');
+      } else {
+        badge.classList.remove('visible');
+      }
+    }
+    // 底部中央：未缩放时显示操作提示，缩放中隐藏
     const hint = document.getElementById('lbZoomHint');
     if (hint) {
-      hint.textContent = _lbScale > 1 ? `${(_lbScale * 100).toFixed(0)}%` : '';
-      hint.style.opacity = '1';
       clearTimeout(_lbZoomHideTimer);
-      if (_lbScale > 1) _lbZoomHideTimer = setTimeout(() => { if (hint) hint.style.opacity = '0'; }, 1200);
+      if (_lbScale > 1) {
+        hint.style.opacity = '0';
+      } else {
+        hint.textContent = '双击或用鼠标滚轮缩放';
+        hint.style.opacity = '1';
+        _lbZoomHideTimer = setTimeout(() => { if (hint) hint.style.opacity = '0'; }, 2500);
+      }
     }
   }
 
   function _lbResetZoom() {
     _lbScale = 1; _lbTx = 0; _lbTy = 0;
-    _lbApplyTransform();
     lightboxBody.classList.remove('zoomed', 'panning');
+    _lbApplyTransform();
   }
 
   // 滚轮缩放：以鼠标所在点为缩放中心

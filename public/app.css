@@ -701,10 +701,20 @@
     display: flex; gap: 0.5rem; align-items: center;
   }
   .lb-zoom-hint {
-    position: absolute; bottom: 0.8rem; left: 50%; transform: translateX(-50%);
-    font-size: 0.68rem; color: rgba(255,255,255,0.4); pointer-events: none;
-    white-space: nowrap; z-index: 2; transition: opacity 0.3s ease;
+    position: absolute; bottom: 0.9rem; left: 50%; transform: translateX(-50%);
+    font-size: 0.68rem; color: rgba(255,255,255,0.38); pointer-events: none;
+    white-space: nowrap; z-index: 2; transition: opacity 0.4s ease;
   }
+  .lb-scale-badge {
+    position: absolute; bottom: 0.75rem; left: 0.9rem;
+    font-size: 0.72rem; font-family: 'Space Grotesk', sans-serif; font-weight: 500;
+    color: rgba(255,255,255,0.75); letter-spacing: 0.02em;
+    background: rgba(0,0,0,0.42); backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.14); border-radius: 999px;
+    padding: 0.22rem 0.6rem; pointer-events: none; z-index: 2;
+    opacity: 0; transition: opacity 0.25s ease;
+  }
+  .lb-scale-badge.visible { opacity: 1; }
   .lightbox-btn {
     width: 38px; height: 38px; border-radius: 50%; display: flex;
     align-items: center; justify-content: center; cursor: pointer;
