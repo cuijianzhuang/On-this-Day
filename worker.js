@@ -1741,7 +1741,11 @@ export class MemoryRoom {
     this._broadcast({ type: "users", count }, ws);
   }
 
-  webSocketError() {}
+  webSocketError(ws) {
+    // 某些网络错误 webSocketClose 不会触发，在这里也同步一次人数
+    const count = Math.max(0, this.state.getWebSockets().length - 1);
+    this._broadcast({ type: "users", count }, ws);
+  }
 
   _broadcast(msg, excludeWs) {
     const txt = JSON.stringify(msg);
