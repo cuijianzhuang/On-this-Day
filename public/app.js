@@ -2,6 +2,7 @@
   let _room = null;           // 当前 WebSocket 连接
   let _roomKey = null;        // 当前连接的日期 key（"MM-DD"）
   let _roomReactions = {};    // {photoKey: {emoji: count}}
+  let _myReactions = {};      // {photoKey: Set<emoji>} 当前用户已点过的 emoji
   let _myIdentity = null;     // 当前用户的 userId（Access 邮箱或匿名 UUID）
   let _onlineList = [];       // 当前在线用户列表（唯一 userId 数组）
 
@@ -35,6 +36,10 @@
       for (const [k, v] of Object.entries(rv2)) _roomReactions[k] = v;
       for (const [k, v] of Object.entries(old)) {
         if (!_roomReactions[k]) _roomReactions[k] = { '❤️': v };
+      }
+      _myReactions = {};
+      for (const [k, arr] of Object.entries(msg.my_reactions || {})) {
+        _myReactions[k] = new Set(arr);
       }
       _myIdentity = msg.you || null;
       _onlineList = msg.list || [];
@@ -70,112 +75,6 @@
     return `hsl(${h % 360},55%,52%)`;
   }
 
-  // ── 可拖动徽章：拖到边缘自动收起，点击弹出 ──────────────────────────────
-  let _badgeDragInited = false;
-
-  function _initBadgeDrag(badge) {
-    if (_badgeDragInited) return;
-    _badgeDragInited = true;
-
-    const SNAP_PX   = 72;    // 距边缘多少 px 内松手就吸附
-    const DRAG_THRESH = 6;   // 超过这个像素才算拖动（否则视为点击）
-    const AUTO_HIDE = 3500;  // 展开后 ms 自动重新收起
-
-    let tracking = false, moved = false;
-    let startPX, startPY, startLeft, startTop;
-    let peekTimer = null;
-
-    // 恢复上次位置；首次默认吸附右边缘
-    const saved = (() => { try { return JSON.parse(localStorage.getItem('_badge_pos')); } catch (_) { return null; } })();
-    if (saved && typeof saved.fy === 'number') {
-      badge.style.top  = (saved.fy * window.innerHeight) + 'px';
-      badge.style.left = (saved.fx * window.innerWidth)  + 'px';
-      if (saved.side) _dockBadge(badge, saved.side);
-    } else {
-      badge.style.top = '4rem';
-      _dockBadge(badge, 'right');
-    }
-
-    badge.addEventListener('pointerdown', e => {
-      tracking = true; moved = false;
-      badge.setPointerCapture(e.pointerId);
-      startPX = e.clientX; startPY = e.clientY;
-      // 用视觉位置（含 CSS transform）作为拖动起点
-      const r = badge.getBoundingClientRect();
-      startLeft = r.left; startTop = r.top;
-      e.preventDefault();
-    });
-
-    badge.addEventListener('pointermove', e => {
-      if (!tracking) return;
-      const dx = e.clientX - startPX, dy = e.clientY - startPY;
-      if (!moved && (Math.abs(dx) > DRAG_THRESH || Math.abs(dy) > DRAG_THRESH)) {
-        moved = true;
-        badge.classList.add('dragging'); // 先关闭过渡，再移除吸附类
-        if (badge.dataset.docked) {
-          clearTimeout(peekTimer);
-          delete badge.dataset.docked;
-          badge.classList.remove('docked', 'docked-left', 'docked-right', 'docked-top', 'docked-bottom', 'peek');
-          // 将 style 定位对齐到视觉位置（去掉 transform 后不跳），并重置指针锚点
-          badge.style.left = startLeft + 'px';
-          badge.style.top  = startTop  + 'px';
-          startPX = e.clientX; startPY = e.clientY;
-        }
-      }
-      if (!moved) return;
-      // 拖动时不夹紧——松手时再校正，避免从边缘拖出时卡位
-      badge.style.left = (startLeft + (e.clientX - startPX)) + 'px';
-      badge.style.top  = (startTop  + (e.clientY - startPY)) + 'px';
-      e.preventDefault();
-    });
-
-    badge.addEventListener('pointerup', e => {
-      if (!tracking) return;
-      tracking = false;
-      badge.releasePointerCapture(e.pointerId);
-
-      if (!moved) {
-        // 点击：切换收起/展开
-        if (badge.dataset.docked) {
-          clearTimeout(peekTimer);
-          if (badge.classList.contains('peek')) {
-            badge.classList.remove('peek');
-          } else {
-            badge.classList.add('peek');
-            peekTimer = setTimeout(() => badge.classList.remove('peek'), AUTO_HIDE);
-          }
-        }
-        return;
-      }
-
-      badge.classList.remove('dragging');
-      const r = badge.getBoundingClientRect();
-      const W = window.innerWidth, H = window.innerHeight;
-      const dists = { left: r.left, right: W - r.right, top: r.top, bottom: H - r.bottom };
-      const minSide = Object.keys(dists).reduce((a, b) => dists[a] < dists[b] ? a : b);
-      const side = dists[minSide] < SNAP_PX ? minSide : null;
-      if (side) {
-        _dockBadge(badge, side);
-      } else {
-        // 未吸附：夹紧到可视区
-        badge.style.left = Math.max(0, Math.min(W - badge.offsetWidth,  parseFloat(badge.style.left))) + 'px';
-        badge.style.top  = Math.max(0, Math.min(H - badge.offsetHeight, parseFloat(badge.style.top)))  + 'px';
-      }
-      try {
-        localStorage.setItem('_badge_pos', JSON.stringify({ fx: parseFloat(badge.style.left) / W, fy: parseFloat(badge.style.top) / H, side }));
-      } catch (_) {}
-    });
-  }
-
-  function _dockBadge(badge, side) {
-    if (side === 'left')   badge.style.left = '0px';
-    if (side === 'right')  badge.style.left = (window.innerWidth  - badge.offsetWidth)  + 'px';
-    if (side === 'top')    badge.style.top  = '0px';
-    if (side === 'bottom') badge.style.top  = (window.innerHeight - badge.offsetHeight) + 'px';
-    badge.dataset.docked = side;
-    badge.classList.add('docked', 'docked-' + side);
-    badge.classList.remove('peek', 'dragging');
-  }
   // ─────────────────────────────────────────────────────────────────────────
 
   function _updateBadge(count, list) {
@@ -183,7 +82,6 @@
     if (!badge) return;
     const willShow = !!(list && list.length > 0);
     badge.style.display = willShow ? '' : 'none';
-    if (willShow) _initBadgeDrag(badge);
 
     const avatarsEl = document.getElementById('onlineAvatars');
     if (avatarsEl && list) {
@@ -246,6 +144,9 @@
 
   window.doReactEmoji = function(key, emoji, btnEl) {
     if (!key || !emoji) return;
+    if (!_myReactions[key]) _myReactions[key] = new Set();
+    if (_myReactions[key].has(emoji)) return; // 同一人只能点一次
+    _myReactions[key].add(emoji);
     if (_room && _room.readyState === WebSocket.OPEN) {
       _room.send(JSON.stringify({ type: 'react', key, emoji }));
     }
@@ -587,9 +488,6 @@
   const lightboxBody = document.getElementById('lightboxBody');
   const lightboxDownload = document.getElementById('lightboxDownload');
   const lightboxShare = document.getElementById('lightboxShare');
-  const playBtn = document.getElementById('playMemories');
-  const playIconPlay = document.getElementById('playIconPlay');
-  const playIconPause = document.getElementById('playIconPause');
   const toast = document.getElementById('toast');
 
   function showToast(msg) {
@@ -666,10 +564,11 @@
 
   function _renderLightboxReactions(key) {
     const counts = _roomReactions[key] || {};
+    const mine = _myReactions[key] || new Set();
     // data-key / data-emoji 避免把 JSON.stringify 的双引号嵌进 HTML 属性里（会截断属性值导致 SyntaxError）
     const gridHtml = '<div class="lp-emoji-grid" data-rkey="' + escAttr(key) + '">' + EMOJI_LIST.map(e => {
       const n = counts[e] || 0;
-      const cls = n > 0 ? ' reacted' : '';
+      const cls = mine.has(e) ? ' reacted' : '';
       return `<button class="lp-emoji-btn${cls}" data-emoji="${escAttr(e)}">${e}<span class="lp-emoji-cnt">${n > 0 ? n : ''}</span></button>`;
     }).join('') + '</div>';
     const popup = document.getElementById('lbEmojiPopup');
@@ -960,8 +859,6 @@
   function stopAutoPlay() {
     autoPlaying = false;
     clearTimeout(slideTimer);
-    playIconPlay.style.display = '';
-    playIconPause.style.display = 'none';
   }
   function closeLightbox() {
     lightbox.classList.remove('open');
@@ -1015,6 +912,7 @@
   // ── 灯箱图片缩放 + 平移 ─────────────────────────────────────────────────────
   let _lbScale = 1, _lbTx = 0, _lbTy = 0;
   let _lbPanning = false, _lbPanSX = 0, _lbPanSY = 0, _lbPanTx0 = 0, _lbPanTy0 = 0;
+  let _lbSlideDragX = 0, _lbSlideDragY = 0, _lbSlideDragging = false;
   let _lbZoomHideTimer = null;
 
   function _lbTarget() { return lightboxBody.querySelector('img,video,.live-photo-wrap'); }
@@ -1038,20 +936,34 @@
     t.style.transform = _lbScale === 1 ? '' : `translate(${_lbTx}px,${_lbTy}px) scale(${_lbScale})`;
     t.style.transformOrigin = 'center center';
     lightboxBody.classList.toggle('zoomed', _lbScale > 1);
-    // 缩放提示
+    // 左下角缩放比例徽章
+    const badge = document.getElementById('lbScaleBadge');
+    if (badge) {
+      if (_lbScale > 1) {
+        badge.textContent = `${(_lbScale).toFixed(1)}×`;
+        badge.classList.add('visible');
+      } else {
+        badge.classList.remove('visible');
+      }
+    }
+    // 底部中央：未缩放时显示操作提示，缩放中隐藏
     const hint = document.getElementById('lbZoomHint');
     if (hint) {
-      hint.textContent = _lbScale > 1 ? `${(_lbScale * 100).toFixed(0)}%` : '';
-      hint.style.opacity = '1';
       clearTimeout(_lbZoomHideTimer);
-      if (_lbScale > 1) _lbZoomHideTimer = setTimeout(() => { if (hint) hint.style.opacity = '0'; }, 1200);
+      if (_lbScale > 1) {
+        hint.style.opacity = '0';
+      } else {
+        hint.textContent = '双击或用鼠标滚轮缩放';
+        hint.style.opacity = '1';
+        _lbZoomHideTimer = setTimeout(() => { if (hint) hint.style.opacity = '0'; }, 2500);
+      }
     }
   }
 
   function _lbResetZoom() {
     _lbScale = 1; _lbTx = 0; _lbTy = 0;
-    _lbApplyTransform();
     lightboxBody.classList.remove('zoomed', 'panning');
+    _lbApplyTransform();
   }
 
   // 滚轮缩放：以鼠标所在点为缩放中心
@@ -1077,31 +989,103 @@
     _lbApplyTransform();
   }, { passive: false });
 
-  // 放大时拖拽平移
+  // 放大时拖拽平移；未放大时水平拖动切换图片
   lightboxBody.addEventListener('pointerdown', (e) => {
-    if (_lbScale <= 1) return;
-    e.stopPropagation();
-    _lbPanning = true;
-    lightboxBody.setPointerCapture(e.pointerId);
-    lightboxBody.classList.add('panning');
-    _lbPanSX = e.clientX; _lbPanSY = e.clientY;
-    _lbPanTx0 = _lbTx; _lbPanTy0 = _lbTy;
+    if (e.button !== 0) return;
+    if (_lbScale > 1) {
+      e.stopPropagation();
+      _lbPanning = true;
+      lightboxBody.setPointerCapture(e.pointerId);
+      lightboxBody.classList.add('panning');
+      _lbPanSX = e.clientX; _lbPanSY = e.clientY;
+      _lbPanTx0 = _lbTx; _lbPanTy0 = _lbTy;
+    } else if (allPhotos.length > 1) {
+      _lbSlideDragX = e.clientX;
+      _lbSlideDragY = e.clientY;
+      _lbSlideDragging = false;
+      lightboxBody.setPointerCapture(e.pointerId);
+    }
   });
   lightboxBody.addEventListener('pointermove', (e) => {
-    if (!_lbPanning) return;
-    _lbTx = _lbPanTx0 + e.clientX - _lbPanSX;
-    _lbTy = _lbPanTy0 + e.clientY - _lbPanSY;
-    _lbClamp();
+    if (_lbPanning) {
+      _lbTx = _lbPanTx0 + e.clientX - _lbPanSX;
+      _lbTy = _lbPanTy0 + e.clientY - _lbPanSY;
+      _lbClamp();
+      const t = _lbTarget();
+      if (t) t.style.transform = `translate(${_lbTx}px,${_lbTy}px) scale(${_lbScale})`;
+    } else if (_lbScale <= 1 && lightboxBody.hasPointerCapture(e.pointerId)) {
+      const dx = e.clientX - _lbSlideDragX;
+      const dy = e.clientY - _lbSlideDragY;
+      if (!_lbSlideDragging && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
+        // lock to horizontal if angle is shallow enough
+        if (Math.abs(dx) < Math.abs(dy)) {
+          lightboxBody.releasePointerCapture(e.pointerId);
+          return;
+        }
+        _lbSlideDragging = true;
+      }
+      if (_lbSlideDragging) {
+        const t = _lbTarget();
+        if (t) {
+          t.style.transition = 'opacity 0.4s ease';
+          t.style.transform = `translateX(${dx}px) scale(1)`;
+        }
+      }
+    }
+  });
+  lightboxBody.addEventListener('pointerup', (e) => {
+    if (_lbPanning) {
+      _lbPanning = false;
+      lightboxBody.classList.remove('panning');
+    } else if (_lbSlideDragging) {
+      _lbSlideDragging = false;
+      const dx = e.clientX - _lbSlideDragX;
+      const t = _lbTarget();
+      if (Math.abs(dx) > 80) {
+        autoPlaying = false;
+        if (dx < 0) nextSlide(); else prevSlide();
+      } else {
+        // snap back
+        if (t) {
+          t.style.transition = 'transform 0.25s ease';
+          t.style.transform = `translate(${_lbTx}px,${_lbTy}px) scale(${_lbScale})`;
+          setTimeout(() => { if (t) t.style.transition = ''; }, 260);
+        }
+      }
+    }
+  });
+  lightboxBody.addEventListener('pointercancel', (e) => {
+    if (_lbPanning) {
+      _lbPanning = false;
+      lightboxBody.classList.remove('panning');
+    } else if (_lbSlideDragging) {
+      _lbSlideDragging = false;
+      const t = _lbTarget();
+      if (t) t.style.transform = `translate(${_lbTx}px,${_lbTy}px) scale(${_lbScale})`;
+    }
+  });
+
+  // 双击缩放：在当前点放大到 2.5×，再次双击复原
+  lightboxBody.addEventListener('dblclick', (e) => {
+    e.preventDefault();
     const t = _lbTarget();
-    if (t) t.style.transform = `translate(${_lbTx}px,${_lbTy}px) scale(${_lbScale})`;
-  });
-  lightboxBody.addEventListener('pointerup', () => {
-    _lbPanning = false;
-    lightboxBody.classList.remove('panning');
-  });
-  lightboxBody.addEventListener('pointercancel', () => {
-    _lbPanning = false;
-    lightboxBody.classList.remove('panning');
+    if (!t) return;
+    if (_lbScale > 1) {
+      _lbResetZoom();
+    } else {
+      const stage = lightboxBody.parentElement;
+      const vcx = stage.offsetWidth / 2;
+      const vcy = stage.offsetHeight / 2;
+      const rect = stage.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      const newScale = 2.5;
+      _lbTx += (vcx - cx) * (newScale - 1);
+      _lbTy += (vcy - cy) * (newScale - 1);
+      _lbScale = newScale;
+      _lbClamp();
+      _lbApplyTransform();
+    }
   });
 
   // ── 移动端左右滑动切换，不用非得点那两个小箭头 ─────────────────────────────
@@ -1118,13 +1102,6 @@
     autoPlaying = false;
     if (dx < 0) nextSlide(); else prevSlide();
   }, { passive: true });
-  playBtn.onclick = () => {
-    if (allPhotos.length === 0) return;
-    autoPlaying = true;
-    playIconPlay.style.display = 'none';
-    playIconPause.style.display = '';
-    openLightbox(0, true);
-  };
 
   // "指尖滑过"照片墙：不只是单张图响应鼠标，而是按距离衰减让指尖经过的几张照片联动倾斜，
   // 像一只手指划过墙面逐张拂过去的感觉；同时一个发光的指尖光点跟随鼠标，带一点缓冲延迟。
@@ -1298,7 +1275,6 @@
     let skeletonReady = Promise.resolve();
     if (!isFirst) {
       subtitle.textContent = '正在唤醒回忆…';
-      playBtn.disabled = true;
       yearToggle.disabled = true;
       visibleCells.clear();
       cellCenters.clear();
@@ -1336,7 +1312,6 @@
 
         const totalPhotos = data.years.reduce((s, y) => s + y.photos.length, 0);
         subtitle.textContent = '横跨 ' + data.years.length + ' 个年头，' + totalPhotos + ' 个瞬间';
-        playBtn.disabled = false;
 
         // 切日期会把整面墙的照片换掉，旧的 cell 元素马上就从 DOM 里消失了——
         // 不清的话 visibleCells/cellCenters 里攒着的是已经被扔掉的旧元素引用，越点几次日期切换越积越多
