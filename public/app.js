@@ -566,12 +566,23 @@
     const el = document.getElementById('lpReactions');
     if (!el) return;
     const counts = _roomReactions[key] || {};
-    el.innerHTML = '<div class="lp-emoji-grid">' + EMOJI_LIST.map(e => {
+    // data-key / data-emoji 避免把 JSON.stringify 的双引号嵌进 HTML 属性里（会截断属性值导致 SyntaxError）
+    el.innerHTML = '<div class="lp-emoji-grid" data-rkey="' + escAttr(key) + '">' + EMOJI_LIST.map(e => {
       const n = counts[e] || 0;
       const cls = n > 0 ? ' reacted' : '';
-      return `<button class="lp-emoji-btn${cls}" data-emoji="${escAttr(e)}" onclick="doReactEmoji(${JSON.stringify(key)},${JSON.stringify(e)},this)">${e}<span class="lp-emoji-cnt">${n > 0 ? n : ''}</span></button>`;
+      return `<button class="lp-emoji-btn${cls}" data-emoji="${escAttr(e)}">${e}<span class="lp-emoji-cnt">${n > 0 ? n : ''}</span></button>`;
     }).join('') + '</div>';
   }
+
+  // 用事件委托代替每个按钮的 inline onclick——可以安全处理任意键值/emoji
+  lightbox.addEventListener('click', (e) => {
+    const btn = e.target.closest('.lp-emoji-btn');
+    if (!btn) return;
+    const grid = btn.closest('[data-rkey]');
+    const key  = grid ? grid.dataset.rkey : null;
+    const emoji = btn.dataset.emoji;
+    if (key && emoji) doReactEmoji(key, emoji, btn);
+  });
 
   function _renderLightboxInfo(p) {
     const filenameEl = document.getElementById('lpFilename');
