@@ -2396,14 +2396,37 @@ const APP_CSS = `
   }
 `;
 const APP_JS = `
-  // iOS Safari 忽略 viewport user-scalable=no，用 gesturestart 阻断捏合手势。
-  // gesturechange 不拦截——gesturestart 已足够取消整个手势，继续拦截 change 反而
-  // 会干扰滚动状态机，造成滚动中触碰第二根手指时意外触发缩放。
-  // touchend 双击拦截也去掉：用户滚动抬手后 300ms 内再次触屏继续滚是正常操作，
-  // 误判 preventDefault 会打断手势状态，让浏览器把下次触碰重新解读成缩放。
-  document.addEventListener('gesturestart', (e) => e.preventDefault(), { passive: false });
-  // touchmove 多指时阻断：覆盖 Chrome/Firefox 等不支持 gesture* 事件的浏览器
-  document.addEventListener('touchmove', (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
+  // ── 禁止页面缩放 ──────────────────────────────────────────────────────────────
+  // iOS Safari 10+ 忽略 viewport user-scalable=no，需要 JS 多层拦截。
+  // lightbox 内允许捏合查看图片细节，其余区域全部阻断。
+  function isInLightbox(el) { return el && el.closest && !!el.closest('.lightbox'); }
+
+  // 层 1：touchstart 多指——在手势识别之前最早拦截，避免 gesturestart 的微小延迟
+  document.addEventListener('touchstart', (e) => {
+    if (e.touches.length > 1 && !isInLightbox(e.target)) e.preventDefault();
+  }, { passive: false });
+
+  // 层 2：gesturestart——Safari 私有事件，双保险
+  document.addEventListener('gesturestart', (e) => {
+    if (!isInLightbox(e.target)) e.preventDefault();
+  }, { passive: false });
+
+  // 层 3：touchmove 多指——覆盖 Chrome/Firefox（不支持 gesture* 事件）
+  document.addEventListener('touchmove', (e) => {
+    if (e.touches.length > 1 && !isInLightbox(e.target)) e.preventDefault();
+  }, { passive: false });
+
+  // 层 4：visualViewport 自动恢复——万一以上三层都被绕过，检测到 scale>1 立即强制归零
+  // minimum-scale=1 + maximum-scale=1 会让 iOS Safari 立刻 snap 回 scale 1
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', () => {
+      if (window.visualViewport.scale > 1.05) {
+        const m = document.querySelector('meta[name="viewport"]');
+        if (m) m.content = 'width=device-width,initial-scale=1,minimum-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover';
+      }
+    });
+  }
+  // ─────────────────────────────────────────────────────────────────────────────
 
   // 拼 HTML 字符串时用来转义属性值，避免文件名/路径里万一带了引号之类的字符把属性或内嵌脚本弄断
   function escAttr(s) { return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;'); }
