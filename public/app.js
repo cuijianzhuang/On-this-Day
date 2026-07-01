@@ -75,112 +75,6 @@
     return `hsl(${h % 360},55%,52%)`;
   }
 
-  // ── 可拖动徽章：拖到边缘自动收起，点击弹出 ──────────────────────────────
-  let _badgeDragInited = false;
-
-  function _initBadgeDrag(badge) {
-    if (_badgeDragInited) return;
-    _badgeDragInited = true;
-
-    const SNAP_PX   = 72;    // 距边缘多少 px 内松手就吸附
-    const DRAG_THRESH = 6;   // 超过这个像素才算拖动（否则视为点击）
-    const AUTO_HIDE = 3500;  // 展开后 ms 自动重新收起
-
-    let tracking = false, moved = false;
-    let startPX, startPY, startLeft, startTop;
-    let peekTimer = null;
-
-    // 恢复上次位置；首次默认吸附右边缘
-    const saved = (() => { try { return JSON.parse(localStorage.getItem('_badge_pos')); } catch (_) { return null; } })();
-    if (saved && typeof saved.fy === 'number') {
-      badge.style.top  = (saved.fy * window.innerHeight) + 'px';
-      badge.style.left = (saved.fx * window.innerWidth)  + 'px';
-      if (saved.side) _dockBadge(badge, saved.side);
-    } else {
-      badge.style.top = '4rem';
-      _dockBadge(badge, 'right');
-    }
-
-    badge.addEventListener('pointerdown', e => {
-      tracking = true; moved = false;
-      badge.setPointerCapture(e.pointerId);
-      startPX = e.clientX; startPY = e.clientY;
-      // 用视觉位置（含 CSS transform）作为拖动起点
-      const r = badge.getBoundingClientRect();
-      startLeft = r.left; startTop = r.top;
-      e.preventDefault();
-    });
-
-    badge.addEventListener('pointermove', e => {
-      if (!tracking) return;
-      const dx = e.clientX - startPX, dy = e.clientY - startPY;
-      if (!moved && (Math.abs(dx) > DRAG_THRESH || Math.abs(dy) > DRAG_THRESH)) {
-        moved = true;
-        badge.classList.add('dragging'); // 先关闭过渡，再移除吸附类
-        if (badge.dataset.docked) {
-          clearTimeout(peekTimer);
-          delete badge.dataset.docked;
-          badge.classList.remove('docked', 'docked-left', 'docked-right', 'docked-top', 'docked-bottom', 'peek');
-          // 将 style 定位对齐到视觉位置（去掉 transform 后不跳），并重置指针锚点
-          badge.style.left = startLeft + 'px';
-          badge.style.top  = startTop  + 'px';
-          startPX = e.clientX; startPY = e.clientY;
-        }
-      }
-      if (!moved) return;
-      // 拖动时不夹紧——松手时再校正，避免从边缘拖出时卡位
-      badge.style.left = (startLeft + (e.clientX - startPX)) + 'px';
-      badge.style.top  = (startTop  + (e.clientY - startPY)) + 'px';
-      e.preventDefault();
-    });
-
-    badge.addEventListener('pointerup', e => {
-      if (!tracking) return;
-      tracking = false;
-      badge.releasePointerCapture(e.pointerId);
-
-      if (!moved) {
-        // 点击：切换收起/展开
-        if (badge.dataset.docked) {
-          clearTimeout(peekTimer);
-          if (badge.classList.contains('peek')) {
-            badge.classList.remove('peek');
-          } else {
-            badge.classList.add('peek');
-            peekTimer = setTimeout(() => badge.classList.remove('peek'), AUTO_HIDE);
-          }
-        }
-        return;
-      }
-
-      badge.classList.remove('dragging');
-      const r = badge.getBoundingClientRect();
-      const W = window.innerWidth, H = window.innerHeight;
-      const dists = { left: r.left, right: W - r.right, top: r.top, bottom: H - r.bottom };
-      const minSide = Object.keys(dists).reduce((a, b) => dists[a] < dists[b] ? a : b);
-      const side = dists[minSide] < SNAP_PX ? minSide : null;
-      if (side) {
-        _dockBadge(badge, side);
-      } else {
-        // 未吸附：夹紧到可视区
-        badge.style.left = Math.max(0, Math.min(W - badge.offsetWidth,  parseFloat(badge.style.left))) + 'px';
-        badge.style.top  = Math.max(0, Math.min(H - badge.offsetHeight, parseFloat(badge.style.top)))  + 'px';
-      }
-      try {
-        localStorage.setItem('_badge_pos', JSON.stringify({ fx: parseFloat(badge.style.left) / W, fy: parseFloat(badge.style.top) / H, side }));
-      } catch (_) {}
-    });
-  }
-
-  function _dockBadge(badge, side) {
-    if (side === 'left')   badge.style.left = '0px';
-    if (side === 'right')  badge.style.left = (window.innerWidth  - badge.offsetWidth)  + 'px';
-    if (side === 'top')    badge.style.top  = '0px';
-    if (side === 'bottom') badge.style.top  = (window.innerHeight - badge.offsetHeight) + 'px';
-    badge.dataset.docked = side;
-    badge.classList.add('docked', 'docked-' + side);
-    badge.classList.remove('peek', 'dragging');
-  }
   // ─────────────────────────────────────────────────────────────────────────
 
   function _updateBadge(count, list) {
@@ -188,7 +82,6 @@
     if (!badge) return;
     const willShow = !!(list && list.length > 0);
     badge.style.display = willShow ? '' : 'none';
-    if (willShow) _initBadgeDrag(badge);
 
     const avatarsEl = document.getElementById('onlineAvatars');
     if (avatarsEl && list) {
@@ -595,9 +488,6 @@
   const lightboxBody = document.getElementById('lightboxBody');
   const lightboxDownload = document.getElementById('lightboxDownload');
   const lightboxShare = document.getElementById('lightboxShare');
-  const playBtn = document.getElementById('playMemories');
-  const playIconPlay = document.getElementById('playIconPlay');
-  const playIconPause = document.getElementById('playIconPause');
   const toast = document.getElementById('toast');
 
   function showToast(msg) {
@@ -969,8 +859,6 @@
   function stopAutoPlay() {
     autoPlaying = false;
     clearTimeout(slideTimer);
-    playIconPlay.style.display = '';
-    playIconPause.style.display = 'none';
   }
   function closeLightbox() {
     lightbox.classList.remove('open');
@@ -1214,13 +1102,6 @@
     autoPlaying = false;
     if (dx < 0) nextSlide(); else prevSlide();
   }, { passive: true });
-  playBtn.onclick = () => {
-    if (allPhotos.length === 0) return;
-    autoPlaying = true;
-    playIconPlay.style.display = 'none';
-    playIconPause.style.display = '';
-    openLightbox(0, true);
-  };
 
   // "指尖滑过"照片墙：不只是单张图响应鼠标，而是按距离衰减让指尖经过的几张照片联动倾斜，
   // 像一只手指划过墙面逐张拂过去的感觉；同时一个发光的指尖光点跟随鼠标，带一点缓冲延迟。
@@ -1394,7 +1275,6 @@
     let skeletonReady = Promise.resolve();
     if (!isFirst) {
       subtitle.textContent = '正在唤醒回忆…';
-      playBtn.disabled = true;
       yearToggle.disabled = true;
       visibleCells.clear();
       cellCenters.clear();
@@ -1432,7 +1312,6 @@
 
         const totalPhotos = data.years.reduce((s, y) => s + y.photos.length, 0);
         subtitle.textContent = '横跨 ' + data.years.length + ' 个年头，' + totalPhotos + ' 个瞬间';
-        playBtn.disabled = false;
 
         // 切日期会把整面墙的照片换掉，旧的 cell 元素马上就从 DOM 里消失了——
         // 不清的话 visibleCells/cellCenters 里攒着的是已经被扔掉的旧元素引用，越点几次日期切换越积越多
