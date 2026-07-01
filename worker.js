@@ -8,46 +8,8 @@
  * HEIC 服务端转码需要 Workers Paid 套餐（CPU 时间限制更宽松，解码一张图动辄几百毫秒）
  */
 
-import "./node-shims.js"; // 必须排在 libheif 之前，垫上它会用到的 __dirname 等 Node 全局变量
 import { createHash } from "node:crypto";
 import { WorkflowEntrypoint } from "cloudflare:workers";
-
-// Workers 不允许运行时动态编译 WASM 字节码（new WebAssembly.Module(bytes) 这种用法），
-// 必须在部署时就编译好——所以不能用内嵌 base64、运行时自己 new Module 的 libheif-bundle.js，
-// 改用 Wrangler 原生支持的 .wasm 文件导入（部署时编译好），再用 instantiateWasm 回调接进去
-import libheifWasmModule from "libheif-js/libheif-wasm/libheif.wasm";
-import libheifFactory from "libheif-js/libheif-wasm/libheif.js";
-import heicDecodeLibFactory from "heic-decode/lib.js";
-import jpegJs from "jpeg-js";
-
-let cachedDecodeOne = null;
-function getHeicDecodeOne() {
-  if (!cachedDecodeOne) {
-    const libheif = libheifFactory({
-      instantiateWasm(imports, successCallback) {
-        // 用 WebAssembly.instantiate()（异步 API）会在 libheif 的 embind 类注册跑到一半时被打断，
-        // 报 "Cannot read properties of undefined (reading 'overloadTable')"——这是 libheif-js 这个
-        // wasm 构建本身的问题（在纯 Node 环境下用同样的异步 API 也能复现），跟 Workers 没关系。
-        // libheifWasmModule 已经是 Wrangler 部署时编译好的 Module，从已编译的 Module 同步 new
-        // Instance 不算"运行时动态编译"，Workers 允许，而且能避开上面那个异步初始化的 bug
-        const instance = new WebAssembly.Instance(libheifWasmModule, imports);
-        return successCallback(instance, libheifWasmModule);
-      },
-    });
-    cachedDecodeOne = heicDecodeLibFactory(libheif).one;
-  }
-  return cachedDecodeOne;
-}
-
-// 服务端把 HEIC 解码成原始像素，再用纯 JS 的 jpeg-js 编码成 JPEG——
-// 这条链路只用得到普通 JS + WASM，没有依赖 Node 的 fs、也没有依赖浏览器的 Canvas，Workers 环境下能跑
-async function decodeHeicToJpeg(buffer, quality = 85) {
-  const decodeOne = getHeicDecodeOne();
-  // heic-decode 内部会对 buffer 做迭代/展开，必须传 Uint8Array 而不是裸 ArrayBuffer
-  const uint8Buffer = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
-  const { width, height, data } = await decodeOne({ buffer: uint8Buffer });
-  return jpegJs.encode({ data, width, height }, quality).data;
-}
 
 
 const IMAGE_EXT = /\.(jpe?g|png|heic|gif|webp)$/i;
@@ -1278,9 +1240,11 @@ async function generateHeicPreview(env, key) {
   const object = await env.PHOTOS.get(key);
   if (!object) return false;
 
-  const buffer = await object.arrayBuffer();
   try {
-    const jpegBytes = await decodeHeicToJpeg(buffer);
+    const transformed = await env.IMAGES.input(object.body)
+      .transform({})
+      .output({ format: "image/jpeg", quality: 85 });
+    const jpegBytes = await transformed.response().arrayBuffer();
     await env.PREVIEWS.put(previewKey, jpegBytes, { httpMetadata: { contentType: "image/jpeg" } });
     return true;
   } catch (err) {
@@ -1298,72 +1262,62 @@ async function generateHeicPreview(env, key) {
 
 
 async function handleThumb(request, env, url) {
-  let key = decodeURIComponent(url.pathname.replace(/^\/thumb\//, ""));
-  if (!key) return new Response("Bad Request", { status: 400 });
+  const origKey = decodeURIComponent(url.pathname.replace(/^\/thumb\//, ""));
+  if (!origKey) return new Response("Bad Request", { status: 400 });
 
-  // Images binding 不支持 HEIC 输入，直接转码一次太慢、而且每个访问者都要在浏览器里重新解码一遍。
-  // 优先用本地脚本提前转好、存在 PREVIEWS 桶里的 JPEG 预览版；没有的话再退回去转发原图，让前端 heicFallback 兜底解码
-  let bucket = env.PHOTOS;
-  if (/\.heic$/i.test(key)) {
-    const previewKey = await findHeicPreviewKey(env, key);
-    if (previewKey) {
-      key = previewKey; // 命中预览版，走下面正常的 Images binding 缩放流程，但要从 PREVIEWS 桶读
-      bucket = env.PREVIEWS;
-    } else {
-      return handleImage(request, env, new URL(url.toString().replace("/thumb/", "/img/")));
-    }
+  const width  = Math.min(Math.max(Number(url.searchParams.get("w")) || 400, 1), 2000);
+  const height = url.searchParams.get("h") ? Math.min(Math.max(Number(url.searchParams.get("h")), 1), 2000) : undefined;
+  const fit    = url.searchParams.get("fit") || "scale-down";
+
+  // 存进 PREVIEWS 的 WebP 缩略图路径：thumbs/{尺寸}/{原始路径去扩展名}.webp
+  const dimStr   = height ? `${width}x${height}` : `${width}`;
+  const thumbKey = `thumbs/${dimStr}/${origKey.replace(/\.[^.]+$/, "")}.webp`;
+  const publicUrl = `${env.PREVIEWS_PUBLIC_URL}/${thumbKey}`;
+
+  // 先查边缘缓存（302 本身也可以缓存，省掉每次的 PREVIEWS.head 调用）
+  const cacheKey = new Request(`https://thumb-redirect/${thumbKey}`);
+  const cachedRedirect = await caches.default.match(cacheKey);
+  if (cachedRedirect) return cachedRedirect;
+
+  // 缩略图已存在 → 直接 302，Worker 不再传图片体
+  const existing = await env.PREVIEWS.head(thumbKey);
+  if (existing) {
+    const resp = thumbRedirect(publicUrl);
+    await caches.default.put(cacheKey, resp.clone());
+    return resp;
   }
 
-  const width = Math.min(Math.max(Number(url.searchParams.get("w")) || 400, 1), 2000);
-  const height = url.searchParams.get("h") ? Math.min(Math.max(Number(url.searchParams.get("h")), 1), 2000) : undefined;
-  const quality = Math.min(Math.max(Number(url.searchParams.get("q")) || 75, 1), 100);
-  const fit = url.searchParams.get("fit") || "scale-down";
-  // 按浏览器 Accept 头协商更小的格式：同质量下 AVIF/WebP 比 JPEG 能再小 30%-50%，
-  // 不支持的浏览器（Accept 里没带）照样拿 JPEG，不强求
-  const format = pickThumbFormat(request);
-
-  const cache = caches.default;
-  // 缓存键要把协商出来的格式带上——边缘缓存本身不认 Vary，同一个 URL 不分格式存只会有一份，
-  // 不加这个的话谁先访问谁的格式就会被缓存下来，错发给后来不支持那个格式的浏览器
-  const cacheUrl = new URL(url.toString());
-  cacheUrl.searchParams.set("_fmt", format);
-  const cacheKey = new Request(cacheUrl.toString());
-  const cachedResp = await cache.match(cacheKey);
-  if (cachedResp) return cachedResp;
-
-  const object = await bucket.get(key);
+  // IMAGES binding 原生支持 HEIC，直接从原图桶读，无需 JPEG 中间转换
+  const object = await env.PHOTOS.get(origKey);
   if (!object) return new Response("Not Found", { status: 404 });
 
   try {
-    // input() 要的是 ReadableStream，不是 ArrayBuffer；quality 要放在 output() 里，不是 transform()；
-    // format 必须写成 "image/jpeg" 这种完整 MIME，不能只写 "jpeg" —— 这几处之前全写错了，导致每张图都转换失败
     const transformed = await env.IMAGES.input(object.body)
-      .transform({ width, height, fit })
-      .output({ format, quality });
-    const tResp = transformed.response();
-    const headers = new Headers(tResp.headers);
-    headers.set("cache-control", "public, max-age=31536000, immutable");
-    const response = new Response(tResp.body, { status: tResp.status, headers });
-    // cache.put() 只认 Vary: Accept-Encoding，塞别的值（包括 Accept）会直接抛 TypeError——
-    // 之前在 clone 前就设了这个头，等于连缓存进去的那份也带着它，每次都在这步炸掉、
-    // 掉进 catch 退回原图，缩略图转换/缓存整个失效。改成只在真正回给浏览器的这份上设
-    const cachedResponse = response.clone();
-    response.headers.set("vary", "Accept");
-    await cache.put(cacheKey, cachedResponse);
-    return response;
+      .transform({ width, ...(height ? { height } : {}), fit })
+      .output({ format: "image/webp", quality: 75 });
+    const buf = await transformed.response().arrayBuffer();
+
+    // 存入 PREVIEWS，后续请求直接走 R2 公开 CDN，不再经过 Worker 的 IMAGES 变换
+    await env.PREVIEWS.put(thumbKey, buf, {
+      httpMetadata: { contentType: "image/webp", cacheControl: "public, max-age=31536000, immutable" },
+    });
+
+    const resp = thumbRedirect(publicUrl);
+    await caches.default.put(cacheKey, resp.clone());
+    return resp;
   } catch {
-    // 转换失败（比如某些边界格式，或者协商出来的格式这次解不了）就回退原图，别让照片整个挂掉
     return handleImage(request, env, new URL(url.toString().replace("/thumb/", "/img/")));
   }
 }
 
-// 按 Accept 头挑一个浏览器实际支持的格式里最小的那个，挑不出来（没带 Accept，或者是没有
-// image/avif、image/webp 的老浏览器/工具）就老实退回 JPEG
-function pickThumbFormat(request) {
-  const accept = request.headers.get("accept") || "";
-  if (accept.includes("image/avif")) return "image/avif";
-  if (accept.includes("image/webp")) return "image/webp";
-  return "image/jpeg";
+function thumbRedirect(publicUrl) {
+  return new Response(null, {
+    status: 302,
+    headers: {
+      "location": publicUrl,
+      "cache-control": "public, max-age=86400",
+    },
+  });
 }
 
 // ---------- AI 选片：用 Workers AI 给照片打"值不值得展示"的分，离线批处理，结果存进 D1 ----------
@@ -1452,7 +1406,10 @@ async function getJpegBytesForScoring(env, key) {
   }
   const obj = await env.PHOTOS.get(key);
   if (!obj) return null;
-  return await decodeHeicToJpeg(await obj.arrayBuffer());
+  const transformed = await env.IMAGES.input(obj.body)
+    .transform({ width: 1024 })
+    .output({ format: "image/jpeg", quality: 85 });
+  return new Uint8Array(await transformed.response().arrayBuffer());
 }
 
 async function scoreOnePhoto(env, key) {
