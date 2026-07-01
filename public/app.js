@@ -1080,7 +1080,7 @@
           autoPlaying = false;
           const dir = dx < 0 ? -1 : 1;
           lightboxBody.style.transition = 'transform 0.28s cubic-bezier(0.4,0,0.2,1)';
-          lightboxBody.style.transform = `translateX(${dir * -window.innerWidth}px)`;
+          lightboxBody.style.transform = `translateX(${dir * window.innerWidth}px)`;
           setTimeout(() => {
             lightboxBody.style.transition = 'none';
             lightboxBody.style.transform = '';
