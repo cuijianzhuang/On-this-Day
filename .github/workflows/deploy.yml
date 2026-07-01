@@ -19,12 +19,14 @@ jobs:
       - run: npm ci
 
       # wrangler-action v3 支持通过 secrets 列表把 GitHub Secret 注入为 Cloudflare Worker Secret，
-      # 每次部署自动同步，不再需要手动 wrangler secret put
+      # 每次部署自动同步，不再需要手动 wrangler secret put。
+      # command: deploy 强制用 wrangler deploy（非 versions upload），DO migrations 必须走这条路（error 10211）
       - name: Deploy Worker + Static Assets
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
           secrets: |
             ADMIN_TOKEN
         env:
