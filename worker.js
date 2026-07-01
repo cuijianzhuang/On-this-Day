@@ -1697,10 +1697,11 @@ const MAP_HTML = (mapboxPublicToken) => `<!doctype html>
 
 // ── Durable Object：实时共享房间 ─────────────────────────────────────────────────
 // 每个日期（"MM-DD"）对应一个 DO 实例。家人同时打开同一天的回忆时：
-//   · 页面顶部显示"👥 N 人在看"
+//   · 页面顶部显示"👥 N 人在看"（按唯一用户去重，同一人多个 Tab 只算 1 人）
 //   · 每张照片右下角有 ❤️ 按钮，点击全员实时看到计数增长
 // 反应数持久化存在 DO Storage，换一天再回来还能看到。
-// 不需要登录：匿名访问，只统计人数，不存用户信息。
+// 用户身份：优先读 Cloudflare Access 注入的 Cf-Access-Authenticated-User-Email；
+// 未启用 Access 时回退到随机 UUID，行为与之前一致（每条连接独立计数）。
 export class MemoryRoom {
   constructor(state, env) {
     this.state = state;
@@ -1710,13 +1711,18 @@ export class MemoryRoom {
     if (request.headers.get("Upgrade") !== "websocket") {
       return new Response("WebSocket required", { status: 426 });
     }
+    // Cloudflare Access 验证通过后会注入此 header；未启用时用随机 UUID 保持每连接独立
+    const userId = request.headers.get("Cf-Access-Authenticated-User-Email")
+      || crypto.randomUUID();
+
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    this.state.acceptWebSocket(server);
+    // 把 userId 作为 tag 绑在这个 WebSocket 上，用于去重计数
+    this.state.acceptWebSocket(server, [userId]);
 
     const reactions = (await this.state.storage.get("reactions")) || {};
-    // getWebSockets() 此时已包含刚 accept 的这个，所以 length 就是含自己的在线人数
-    const count = this.state.getWebSockets().length;
+    // acceptWebSocket 之后 getWebSockets() 已含刚加入的这个，直接计算唯一用户数
+    const count = this._countUnique();
     server.send(JSON.stringify({ type: "init", count, reactions }));
     this._broadcast({ type: "users", count }, server);
 
@@ -1736,15 +1742,36 @@ export class MemoryRoom {
   }
 
   webSocketClose(ws) {
-    // 断开时广播最新人数（减去正在关闭的这个）
-    const count = Math.max(0, this.state.getWebSockets().length - 1);
+    // 关闭时 ws 还在 getWebSockets() 里；排除它后重算唯一用户数
+    const count = this._countUniqueExcluding(ws);
     this._broadcast({ type: "users", count }, ws);
   }
 
   webSocketError(ws) {
-    // 某些网络错误 webSocketClose 不会触发，在这里也同步一次人数
-    const count = Math.max(0, this.state.getWebSockets().length - 1);
+    // 某些网络错误 webSocketClose 不会触发，在这里兜底同步一次人数
+    const count = this._countUniqueExcluding(ws);
     this._broadcast({ type: "users", count }, ws);
+  }
+
+  // 统计当前所有连接的唯一 userId 数（同一人多 Tab 只算 1 个）
+  _countUnique() {
+    const ids = new Set();
+    for (const ws of this.state.getWebSockets()) {
+      const tags = this.state.getTags(ws);
+      if (tags?.[0]) ids.add(tags[0]);
+    }
+    return ids.size;
+  }
+
+  // 排除某个连接后，重算唯一用户数（用于该连接即将离开的场景）
+  _countUniqueExcluding(excludeWs) {
+    const ids = new Set();
+    for (const ws of this.state.getWebSockets()) {
+      if (ws === excludeWs) continue;
+      const tags = this.state.getTags(ws);
+      if (tags?.[0]) ids.add(tags[0]);
+    }
+    return ids.size;
   }
 
   _broadcast(msg, excludeWs) {
