@@ -2396,6 +2396,20 @@ const APP_CSS = `
   }
 `;
 const APP_JS = `
+  // iOS Safari 忽略 viewport user-scalable=no，需要 JS 拦截：
+  // gesturestart/gesturechange 是 Safari 私有事件，直接阻断捏合手势；
+  // touchmove 多指时阻断可覆盖 Chrome/Firefox；
+  // dblclick preventDefault 阻断双击放大（部分安卓浏览器）
+  document.addEventListener('gesturestart', (e) => e.preventDefault(), { passive: false });
+  document.addEventListener('gesturechange', (e) => e.preventDefault(), { passive: false });
+  document.addEventListener('touchmove', (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
+  let lastTap = 0;
+  document.addEventListener('touchend', (e) => {
+    const now = Date.now();
+    if (now - lastTap < 300) e.preventDefault();
+    lastTap = now;
+  }, { passive: false });
+
   // 拼 HTML 字符串时用来转义属性值，避免文件名/路径里万一带了引号之类的字符把属性或内嵌脚本弄断
   function escAttr(s) { return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;'); }
 
