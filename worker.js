@@ -9,6 +9,7 @@
  */
 
 import "./node-shims.js"; // 必须排在 libheif 之前，垫上它会用到的 __dirname 等 Node 全局变量
+import { createHash } from "node:crypto";
 
 // Workers 不允许运行时动态编译 WASM 字节码（new WebAssembly.Module(bytes) 这种用法），
 // 必须在部署时就编译好——所以不能用内嵌 base64、运行时自己 new Module 的 libheif-bundle.js，
@@ -1714,11 +1715,15 @@ export class MemoryRoom {
     // Cloudflare Access 验证通过后会注入此 header；未启用时用随机 UUID 保持每连接独立
     const userId = request.headers.get("Cf-Access-Authenticated-User-Email")
       || crypto.randomUUID();
+    // 邮箱用 MD5 生成 Gravatar hash；匿名 UUID 不走 Gravatar，hash 为空串
+    const gravatarHash = userId.includes("@")
+      ? createHash("md5").update(userId.toLowerCase().trim()).digest("hex")
+      : "";
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    // 把 userId 作为 tag 绑在这个 WebSocket 上，用于去重计数
-    this.state.acceptWebSocket(server, [userId]);
+    // tag[0]=userId 用于去重；tag[1]=gravatarHash 发给客户端拼 Gravatar URL
+    this.state.acceptWebSocket(server, [userId, gravatarHash]);
 
     const reactions = (await this.state.storage.get("reactions")) || {};
     // acceptWebSocket 之后 getWebSockets() 已含刚加入的这个，直接计算唯一用户数
@@ -1752,25 +1757,25 @@ export class MemoryRoom {
     this._broadcast({ type: "users", count, list }, ws);
   }
 
-  // 返回当前所有连接的 { count, list }，按唯一 userId 去重
+  // 返回 { count, list }，list 是 {id, hash} 对象数组，按唯一 userId 去重
   _usersInfo() {
-    const ids = new Set();
+    const seen = new Map(); // id -> hash
     for (const ws of this.state.getWebSockets()) {
-      const tags = this.state.getTags(ws);
-      if (tags?.[0]) ids.add(tags[0]);
+      const [id, hash] = this.state.getTags(ws) || [];
+      if (id && !seen.has(id)) seen.set(id, hash || "");
     }
-    return { count: ids.size, list: [...ids] };
+    return { count: seen.size, list: [...seen].map(([id, hash]) => ({ id, hash })) };
   }
 
   // 排除某个连接后重算（该连接即将离开的场景）
   _usersInfoExcluding(excludeWs) {
-    const ids = new Set();
+    const seen = new Map();
     for (const ws of this.state.getWebSockets()) {
       if (ws === excludeWs) continue;
-      const tags = this.state.getTags(ws);
-      if (tags?.[0]) ids.add(tags[0]);
+      const [id, hash] = this.state.getTags(ws) || [];
+      if (id && !seen.has(id)) seen.set(id, hash || "");
     }
-    return { count: ids.size, list: [...ids] };
+    return { count: seen.size, list: [...seen].map(([id, hash]) => ({ id, hash })) };
   }
 
   _broadcast(msg, excludeWs) {

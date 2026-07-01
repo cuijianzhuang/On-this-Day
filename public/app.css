@@ -350,28 +350,53 @@
     font-size: 1.1rem; pointer-events: none;
     animation: floatUp 0.75s ease-out forwards;
   }
-  /* 在线徽章：固定在右上角，WebSocket 连接后显示当前用户及在线人数 */
+  /* ── 在线徽章 ─────────────────────────────────────────────── */
   .online-badge {
-    position: fixed; top: 1.1rem; right: 1.1rem; z-index: 20;
-    background: rgba(30,30,32,0.75); backdrop-filter: blur(10px);
-    border: 1px solid rgba(255,255,255,0.12); border-radius: 20px;
-    padding: 5px 10px 5px 7px;
-    display: flex; align-items: center; gap: 6px;
-    transition: opacity 0.3s ease;
+    position: fixed; top: 1rem; right: 1rem; z-index: 20;
+    background: rgba(20,20,22,0.72); backdrop-filter: blur(14px) saturate(1.4);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 999px;
+    padding: 4px 10px 4px 5px;
+    display: flex; align-items: center; gap: 7px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.35);
+    animation: badgeFadeIn 0.4s ease;
   }
-  .online-avatars { display: flex; gap: -4px; }
+  @keyframes badgeFadeIn { from { opacity:0; transform:translateY(-4px) scale(0.95); } to { opacity:1; transform:none; } }
+  .online-avatars { display: flex; align-items: center; }
   .online-avatar {
-    width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 0.65rem; font-weight: 700; color: #fff; letter-spacing: 0;
-    border: 2px solid rgba(30,30,32,0.8);
-    margin-left: -4px; cursor: default; user-select: none;
-    transition: transform 0.18s ease, z-index 0s;
+    width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0; overflow: visible;
+    border: 2px solid rgba(20,20,22,0.85);
+    margin-left: -6px; cursor: default; user-select: none;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    position: relative;
   }
   .online-avatars .online-avatar:first-child { margin-left: 0; }
-  .online-avatar:hover { transform: scale(1.15) translateY(-1px); z-index: 1; }
-  .online-avatar.me { border-color: rgba(255,255,255,0.55); }
-  .online-label { font-size: 0.7rem; color: rgba(255,255,255,0.6); white-space: nowrap; }
+  .online-avatar:hover { transform: scale(1.18) translateY(-2px); z-index: 2; }
+  /* 自己的头像：亮白描边 + 淡发光 */
+  .online-avatar.me {
+    border-color: rgba(255,255,255,0.75);
+    box-shadow: 0 0 0 3px rgba(255,255,255,0.12);
+  }
+  /* 字母圆圈：绝对定位填满容器 */
+  .av-letter {
+    position: absolute; inset: 0; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.6rem; font-weight: 700; color: #fff;
+    font-family: 'Space Grotesk', sans-serif; letter-spacing: 0;
+  }
+  /* Gravatar 图片：绝对定位叠在字母上，加载完成后淡入 */
+  .online-avatar img {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    border-radius: 50%; object-fit: cover;
+    opacity: 0; transition: opacity 0.3s ease;
+  }
+  .online-avatar img.loaded { opacity: 1; }
+  .online-label { font-size: 0.68rem; color: rgba(255,255,255,0.55); white-space: nowrap; }
+  body.sun-on .online-badge {
+    background: rgba(255,255,255,0.75); border-color: rgba(0,0,0,0.08);
+    box-shadow: 0 2px 12px rgba(0,0,0,0.12);
+  }
+  body.sun-on .online-label { color: rgba(0,0,0,0.45); }
   .grid.expanded .cell.extra { display: block; }
   .show-more-btn {
     display: block; margin: -0.6rem auto 0; background: rgba(255,255,255,0.07);

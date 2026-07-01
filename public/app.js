@@ -23,8 +23,8 @@
   function _handleRoomMsg(msg) {
     if (msg.type === 'init') {
       _roomReactions = msg.reactions || {};
-      _myIdentity = msg.you || null;
-      _onlineList = msg.list || [];
+      _myIdentity = msg.you || null;       // userId 字符串（邮箱或 UUID）
+      _onlineList = msg.list || [];        // [{id, hash}, ...]
       _updateBadge(msg.count, _onlineList);
       _syncAllCounts();
     } else if (msg.type === 'users') {
@@ -53,26 +53,32 @@
   function _updateBadge(count, list) {
     const badge = document.getElementById('onlineBadge');
     if (!badge) return;
-    // 只要知道自己是谁就显示徽章（哪怕只有 1 人）
     badge.style.display = list && list.length > 0 ? '' : 'none';
 
     const avatarsEl = document.getElementById('onlineAvatars');
     if (avatarsEl && list) {
-      avatarsEl.innerHTML = list.map(uid => {
-        const name = _displayName(uid);
-        const isMe = uid === _myIdentity;
-        const title = isMe
-          ? `你 · ${uid.includes('@') ? uid : '访客'}`
-          : uid.includes('@') ? uid : '访客';
-        return `<span class="online-avatar${isMe ? ' me' : ''}" style="background:${_avatarColor(uid)}" title="${title}">${(name[0] || '?').toUpperCase()}</span>`;
+      avatarsEl.innerHTML = list.map(({ id, hash }) => {
+        const name = _displayName(id);
+        const isMe = id === _myIdentity;
+        const tipLabel = id.includes('@') ? id : '访客';
+        const title = isMe ? `你 · ${tipLabel}` : tipLabel;
+        const initial = (name[0] || '?').toUpperCase();
+        const color = _avatarColor(id);
+        const cls = `online-avatar${isMe ? ' me' : ''}`;
+        if (hash) {
+          // 字母圆圈兜底先渲染，Gravatar 图片加载完成后淡入叠在上面（无闪烁）
+          const url = `https://www.gravatar.com/avatar/${hash}?s=52&d=404&r=g`;
+          return `<span class="${cls}" title="${title}">` +
+            `<span class="av-letter" style="background:${color}">${initial}</span>` +
+            `<img src="${url}" onload="this.classList.add('loaded')">` +
+            `</span>`;
+        }
+        return `<span class="${cls}" title="${title}"><span class="av-letter" style="background:${color}">${initial}</span></span>`;
       }).join('');
     }
 
     const labelEl = document.getElementById('onlineLabel');
-    if (labelEl) {
-      // 多于 1 人才显示"N 人在看"文字
-      labelEl.textContent = count > 1 ? `${count} 人在看` : '';
-    }
+    if (labelEl) labelEl.textContent = count > 1 ? `${count} 人在看` : '';
   }
 
   function _syncAllCounts() {
