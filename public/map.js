@@ -66,8 +66,8 @@
       // 之前用单引号拼字符串再写 \\'loaded\\' 转义，外层模板字符串会先把这个转义吃掉变成裸的单引号，
       // 提前把发到客户端的字符串截断，导致一上线点开地图就直接报 SyntaxError
       const popupMedia = p.type === 'video'
-        ? \`<video class="popup-photo loaded" src="\${escAttr(p.url)}#t=0.5" muted preload="metadata"></video>\`
-        : \`<img class="popup-photo" src="\${escAttr(popupThumbSrc)}" data-src="\${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.onerror=null;heicFallback(this,this.dataset.src)" />\`;
+        ? `<video class="popup-photo loaded" src="${escAttr(p.url)}#t=0.5" muted preload="metadata"></video>`
+        : `<img class="popup-photo" src="${escAttr(popupThumbSrc)}" data-src="${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.onerror=null;heicFallback(this,this.dataset.src)" />`;
       const popup = new mapboxgl.Popup({ offset: 14, maxWidth: '200px', closeButton: false, closeOnClick: false }).setHTML(
         popupMedia +
         '<div class="popup-caption">' + (p.year || '') + (p.name ? ' · ' + p.name : '') + '</div>'
