@@ -1722,9 +1722,10 @@ export class MemoryRoom {
 
     const reactions = (await this.state.storage.get("reactions")) || {};
     // acceptWebSocket 之后 getWebSockets() 已含刚加入的这个，直接计算唯一用户数
-    const count = this._countUnique();
-    server.send(JSON.stringify({ type: "init", count, reactions }));
-    this._broadcast({ type: "users", count }, server);
+    const { count, list } = this._usersInfo();
+    // you: 告知客户端自己的 userId，用于在头像列表里标"你"
+    server.send(JSON.stringify({ type: "init", count, reactions, you: userId, list }));
+    this._broadcast({ type: "users", count, list }, server);
 
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -1742,36 +1743,34 @@ export class MemoryRoom {
   }
 
   webSocketClose(ws) {
-    // 关闭时 ws 还在 getWebSockets() 里；排除它后重算唯一用户数
-    const count = this._countUniqueExcluding(ws);
-    this._broadcast({ type: "users", count }, ws);
+    const { count, list } = this._usersInfoExcluding(ws);
+    this._broadcast({ type: "users", count, list }, ws);
   }
 
   webSocketError(ws) {
-    // 某些网络错误 webSocketClose 不会触发，在这里兜底同步一次人数
-    const count = this._countUniqueExcluding(ws);
-    this._broadcast({ type: "users", count }, ws);
+    const { count, list } = this._usersInfoExcluding(ws);
+    this._broadcast({ type: "users", count, list }, ws);
   }
 
-  // 统计当前所有连接的唯一 userId 数（同一人多 Tab 只算 1 个）
-  _countUnique() {
+  // 返回当前所有连接的 { count, list }，按唯一 userId 去重
+  _usersInfo() {
     const ids = new Set();
     for (const ws of this.state.getWebSockets()) {
       const tags = this.state.getTags(ws);
       if (tags?.[0]) ids.add(tags[0]);
     }
-    return ids.size;
+    return { count: ids.size, list: [...ids] };
   }
 
-  // 排除某个连接后，重算唯一用户数（用于该连接即将离开的场景）
-  _countUniqueExcluding(excludeWs) {
+  // 排除某个连接后重算（该连接即将离开的场景）
+  _usersInfoExcluding(excludeWs) {
     const ids = new Set();
     for (const ws of this.state.getWebSockets()) {
       if (ws === excludeWs) continue;
       const tags = this.state.getTags(ws);
       if (tags?.[0]) ids.add(tags[0]);
     }
-    return ids.size;
+    return { count: ids.size, list: [...ids] };
   }
 
   _broadcast(msg, excludeWs) {
