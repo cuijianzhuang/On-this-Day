@@ -9,6 +9,12 @@ routes = [
   { pattern = "memories.cuijianzhuang.com/*", zone_name = "cuijianzhuang.com" }
 ]
 
+# CSS / JS / HTML / favicon 等静态文件交给 Cloudflare Static Assets CDN 托管，
+# Worker 只处理 /api/* /thumb/* /map 等动态路由，其余 fallback 到 env.ASSETS.fetch()
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
 # wrangler versions upload / wrangler deploy 前先跑这个，确保 CI 环境里 npm 依赖都装好
 [build]
 command = "npm install"
@@ -66,6 +72,7 @@ head_sampling_rate = 1
 
 
 [vars]
-ADMIN_TOKEN = "14958fadd86643053156dff51a7dce372f921d8b99a4d5bd"
-# 这个必须是 public token（pk. 开头），会原样发给浏览器跑地图，跟反向地理编码用的 secret token（MAPBOX_TOKEN，已用 wrangler secret put 单独存）是两个完全不同的 token
+# ADMIN_TOKEN 是敏感密钥，不提交到 git——部署时由 GitHub Actions 通过 wrangler secret 注入，
+# 本地开发用 `wrangler secret put ADMIN_TOKEN` 手动设置一次即可
+# MAPBOX_PUBLIC_TOKEN 是公开的 pk. token，会发到浏览器，可以安全提交
 MAPBOX_PUBLIC_TOKEN = "pk.eyJ1IjoiY3VpcGx1cyIsImEiOiJjbHYxMnA0ZTAwMm5lMm5wYzJjeXJwOGQyIn0.tdHoQD-xn2jC_pY1R_1Sag"
