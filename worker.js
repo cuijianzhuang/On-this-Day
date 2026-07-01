@@ -1323,21 +1323,8 @@ async function handleThumb(request, env, url) {
     return resp;
   }
 
-  // 找原始素材：HEIC 用已转好的 JPEG 预览，其他直接走原图桶
-  let sourceBucket = env.PHOTOS;
-  let sourceKey    = origKey;
-  if (/\.heic$/i.test(origKey)) {
-    const found = await findHeicPreviewHead(env, origKey);
-    if (found && !isHeicPlaceholder(found.head)) {
-      sourceBucket = env.PREVIEWS;
-      sourceKey    = found.key;
-    } else {
-      // HEIC 还没转好，退回原图让前端 heicFallback 兜底
-      return handleImage(request, env, new URL(url.toString().replace("/thumb/", "/img/")));
-    }
-  }
-
-  const object = await sourceBucket.get(sourceKey);
+  // IMAGES binding 原生支持 HEIC，直接从原图桶读，无需 JPEG 中间转换
+  const object = await env.PHOTOS.get(origKey);
   if (!object) return new Response("Not Found", { status: 404 });
 
   try {
