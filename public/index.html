@@ -96,13 +96,20 @@
         <svg viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
       </span>
     </div>
-    <span class="lightbox-nav prev" id="navPrev">‹</span>
-    <span class="lightbox-nav next" id="navNext">›</span>
-    <div class="lightbox-stage">
-      <div id="lightboxBody"></div>
-      <div class="lightbox-caption" id="lightboxCaption"></div>
-      <div class="lightbox-ai-caption" id="lightboxAiCaption"></div>
+    <div class="lightbox-inner">
+      <span class="lightbox-nav prev" id="navPrev">‹</span>
+      <span class="lightbox-nav next" id="navNext">›</span>
+      <div class="lightbox-stage">
+        <div id="lightboxBody"></div>
+      </div>
+      <aside class="lightbox-panel" id="lightboxPanel">
+        <div class="lp-filename" id="lpFilename"></div>
+        <div class="lp-reactions" id="lpReactions"></div>
+        <div class="lp-section" id="lpInfo"></div>
+        <div class="lp-section lp-exif-wrap" id="lpExif"></div>
+      </aside>
     </div>
+    <div class="lightbox-filmstrip" id="lightboxFilmstrip"></div>
   </div>
   <div class="toast" id="toast"></div>
   <button class="back-to-top" id="backToTop" title="回到顶部">

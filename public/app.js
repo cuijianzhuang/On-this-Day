@@ -1,7 +1,7 @@
   // ── 实时共享房间（Durable Objects WebSocket）────────────────────────────────────
   let _room = null;           // 当前 WebSocket 连接
   let _roomKey = null;        // 当前连接的日期 key（"MM-DD"）
-  let _roomReactions = {};    // 从服务端同步来的点赞数 {photoKey: count}
+  let _roomReactions = {};    // {photoKey: {emoji: count}}
   let _myIdentity = null;     // 当前用户的 userId（Access 邮箱或匿名 UUID）
   let _onlineList = [];       // 当前在线用户列表（唯一 userId 数组）
 
@@ -20,19 +20,39 @@
     ws.onerror = () => {};
   }
 
+  function _totalReactions(key) {
+    const m = _roomReactions[key];
+    if (!m) return 0;
+    return Object.values(m).reduce((a, b) => a + b, 0);
+  }
+
   function _handleRoomMsg(msg) {
     if (msg.type === 'init') {
-      _roomReactions = msg.reactions || {};
-      _myIdentity = msg.you || null;       // userId 字符串（邮箱或 UUID）
-      _onlineList = msg.list || [];        // [{id, hash}, ...]
+      const rv2 = msg.reactions_v2 || {};
+      // 兼容旧 reactions 格式 {key: count}
+      const old = msg.reactions || {};
+      _roomReactions = {};
+      for (const [k, v] of Object.entries(rv2)) _roomReactions[k] = v;
+      for (const [k, v] of Object.entries(old)) {
+        if (!_roomReactions[k]) _roomReactions[k] = { '❤️': v };
+      }
+      _myIdentity = msg.you || null;
+      _onlineList = msg.list || [];
       _updateBadge(msg.count, _onlineList);
       _syncAllCounts();
     } else if (msg.type === 'users') {
       _onlineList = msg.list || [];
       _updateBadge(msg.count, _onlineList);
     } else if (msg.type === 'react') {
-      _roomReactions[msg.key] = msg.count;
-      _syncCount(msg.key, msg.count, true);
+      if (!_roomReactions[msg.key]) _roomReactions[msg.key] = {};
+      _roomReactions[msg.key][msg.emoji || '❤️'] = msg.count;
+      _syncCount(msg.key, _totalReactions(msg.key), true);
+      // 如果灯箱当前开着且显示的就是这张照片，刷新 emoji 面板
+      const lb = document.getElementById('lightbox');
+      if (lb && lb.classList.contains('open')) {
+        const p = allPhotos[currentIndex];
+        if (p && p.key === msg.key) _renderLightboxReactions(p.key);
+      }
     }
   }
 
@@ -58,76 +78,91 @@
     _badgeDragInited = true;
 
     const SNAP_PX   = 72;    // 距边缘多少 px 内松手就吸附
+    const DRAG_THRESH = 6;   // 超过这个像素才算拖动（否则视为点击）
     const AUTO_HIDE = 3500;  // 展开后 ms 自动重新收起
 
-    let dragging = false, moved = false;
+    let tracking = false, moved = false;
     let startPX, startPY, startLeft, startTop;
     let peekTimer = null;
 
-    // 恢复上次保存的位置
+    // 恢复上次位置；首次默认吸附右边缘
     const saved = (() => { try { return JSON.parse(localStorage.getItem('_badge_pos')); } catch (_) { return null; } })();
-    if (saved && typeof saved.fx === 'number') {
-      badge.style.left = (saved.fx * window.innerWidth)  + 'px';
+    if (saved && typeof saved.fy === 'number') {
       badge.style.top  = (saved.fy * window.innerHeight) + 'px';
+      badge.style.left = (saved.fx * window.innerWidth)  + 'px';
       if (saved.side) _dockBadge(badge, saved.side);
     } else {
-      const btn = document.getElementById('playMemories');
-      if (btn) {
-        const r = btn.getBoundingClientRect();
-        badge.style.left = (r.right + 8) + 'px';
-        badge.style.top  = r.top + 'px';
-      } else {
-        badge.style.left = '6rem';
-        badge.style.top  = '1.3rem';
-      }
+      badge.style.top = '4rem';
+      _dockBadge(badge, 'right');
     }
 
     badge.addEventListener('pointerdown', e => {
-      if (badge.dataset.docked) {
-        e.preventDefault();
-        clearTimeout(peekTimer);
-        if (badge.classList.contains('peek')) {
-          badge.classList.remove('peek');
-        } else {
-          badge.classList.add('peek');
-          peekTimer = setTimeout(() => badge.classList.remove('peek'), AUTO_HIDE);
-        }
-        return;
-      }
-      dragging = true; moved = false;
-      badge.classList.add('dragging');
+      tracking = true; moved = false;
       badge.setPointerCapture(e.pointerId);
       startPX = e.clientX; startPY = e.clientY;
+      // 用视觉位置（含 CSS transform）作为拖动起点
       const r = badge.getBoundingClientRect();
       startLeft = r.left; startTop = r.top;
       e.preventDefault();
     });
 
     badge.addEventListener('pointermove', e => {
-      if (!dragging) return;
+      if (!tracking) return;
       const dx = e.clientX - startPX, dy = e.clientY - startPY;
-      if (!moved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) moved = true;
-      badge.style.left = Math.max(0, Math.min(window.innerWidth  - badge.offsetWidth,  startLeft + dx)) + 'px';
-      badge.style.top  = Math.max(0, Math.min(window.innerHeight - badge.offsetHeight, startTop  + dy)) + 'px';
+      if (!moved && (Math.abs(dx) > DRAG_THRESH || Math.abs(dy) > DRAG_THRESH)) {
+        moved = true;
+        badge.classList.add('dragging'); // 先关闭过渡，再移除吸附类
+        if (badge.dataset.docked) {
+          clearTimeout(peekTimer);
+          delete badge.dataset.docked;
+          badge.classList.remove('docked', 'docked-left', 'docked-right', 'docked-top', 'docked-bottom', 'peek');
+          // 将 style 定位对齐到视觉位置（去掉 transform 后不跳），并重置指针锚点
+          badge.style.left = startLeft + 'px';
+          badge.style.top  = startTop  + 'px';
+          startPX = e.clientX; startPY = e.clientY;
+        }
+      }
+      if (!moved) return;
+      // 拖动时不夹紧——松手时再校正，避免从边缘拖出时卡位
+      badge.style.left = (startLeft + (e.clientX - startPX)) + 'px';
+      badge.style.top  = (startTop  + (e.clientY - startPY)) + 'px';
       e.preventDefault();
     });
 
     badge.addEventListener('pointerup', e => {
-      if (!dragging) return;
-      dragging = false;
-      badge.classList.remove('dragging');
+      if (!tracking) return;
+      tracking = false;
       badge.releasePointerCapture(e.pointerId);
-      if (!moved) return;
 
+      if (!moved) {
+        // 点击：切换收起/展开
+        if (badge.dataset.docked) {
+          clearTimeout(peekTimer);
+          if (badge.classList.contains('peek')) {
+            badge.classList.remove('peek');
+          } else {
+            badge.classList.add('peek');
+            peekTimer = setTimeout(() => badge.classList.remove('peek'), AUTO_HIDE);
+          }
+        }
+        return;
+      }
+
+      badge.classList.remove('dragging');
       const r = badge.getBoundingClientRect();
       const W = window.innerWidth, H = window.innerHeight;
       const dists = { left: r.left, right: W - r.right, top: r.top, bottom: H - r.bottom };
       const minSide = Object.keys(dists).reduce((a, b) => dists[a] < dists[b] ? a : b);
       const side = dists[minSide] < SNAP_PX ? minSide : null;
-      if (side) _dockBadge(badge, side);
-
+      if (side) {
+        _dockBadge(badge, side);
+      } else {
+        // 未吸附：夹紧到可视区
+        badge.style.left = Math.max(0, Math.min(W - badge.offsetWidth,  parseFloat(badge.style.left))) + 'px';
+        badge.style.top  = Math.max(0, Math.min(H - badge.offsetHeight, parseFloat(badge.style.top)))  + 'px';
+      }
       try {
-        localStorage.setItem('_badge_pos', JSON.stringify({ fx: r.left / W, fy: r.top / H, side }));
+        localStorage.setItem('_badge_pos', JSON.stringify({ fx: parseFloat(badge.style.left) / W, fy: parseFloat(badge.style.top) / H, side }));
       } catch (_) {}
     });
   }
@@ -178,7 +213,7 @@
 
   function _syncAllCounts() {
     document.querySelectorAll('.react-btn[data-key]').forEach(btn => {
-      const n = _roomReactions[btn.dataset.key] || 0;
+      const n = _totalReactions(btn.dataset.key);
       const span = btn.querySelector('.react-cnt');
       if (span) span.textContent = n > 0 ? n : '';
     });
@@ -204,10 +239,21 @@
     const key = btn.dataset.key;
     if (!key) return;
     if (_room && _room.readyState === WebSocket.OPEN) {
-      _room.send(JSON.stringify({ type: 'react', key }));
+      _room.send(JSON.stringify({ type: 'react', key, emoji: '❤️' }));
     }
-    // 乐观本地动画，服务端广播回来后再更新计数
     _floatHeart(btn);
+  };
+
+  window.doReactEmoji = function(key, emoji) {
+    if (!key || !emoji) return;
+    if (_room && _room.readyState === WebSocket.OPEN) {
+      _room.send(JSON.stringify({ type: 'react', key, emoji }));
+    }
+    // 乐观更新本地数据
+    if (!_roomReactions[key]) _roomReactions[key] = {};
+    _roomReactions[key][emoji] = (_roomReactions[key][emoji] || 0) + 1;
+    _syncCount(key, _totalReactions(key), false);
+    _renderLightboxReactions(key);
   };
   // ────────────────────────────────────────────────────────────────────────────────
 
@@ -477,8 +523,6 @@
 
   const lightbox = document.getElementById('lightbox');
   const lightboxBody = document.getElementById('lightboxBody');
-  const lightboxCaption = document.getElementById('lightboxCaption');
-  const lightboxAiCaption = document.getElementById('lightboxAiCaption');
   const lightboxDownload = document.getElementById('lightboxDownload');
   const lightboxShare = document.getElementById('lightboxShare');
   const playBtn = document.getElementById('playMemories');
@@ -514,17 +558,114 @@
     return EFFECTS[i];
   }
 
+  const EMOJI_LIST = ['👍','❤️','😍','😂','😮','😢','🔥','✨'];
+
+  function _renderLightboxReactions(key) {
+    const el = document.getElementById('lpReactions');
+    if (!el) return;
+    const counts = _roomReactions[key] || {};
+    el.innerHTML = '<div class="lp-emoji-grid">' + EMOJI_LIST.map(e => {
+      const n = counts[e] || 0;
+      const cls = n > 0 ? ' reacted' : '';
+      return `<button class="lp-emoji-btn${cls}" onclick="doReactEmoji(${JSON.stringify(key)},${JSON.stringify(e)})">${e}<span class="lp-emoji-cnt">${n || ''}</span></button>`;
+    }).join('') + '</div>';
+  }
+
+  function _renderLightboxInfo(p) {
+    const filenameEl = document.getElementById('lpFilename');
+    if (filenameEl) filenameEl.textContent = p.key.split('/').pop();
+
+    const infoEl = document.getElementById('lpInfo');
+    if (!infoEl) return;
+    const rows = [];
+    rows.push(`<div class="lp-row"><span class="lp-label">年份</span><span class="lp-value">${p.year} 年</span></div>`);
+    if (p.place) rows.push(`<div class="lp-row"><span class="lp-label">地点</span><span class="lp-value">${p.place}</span></div>`);
+    if (p.caption) rows.push(`<div class="lp-ai-text">${p.caption}</div>`);
+    infoEl.innerHTML = rows.join('');
+  }
+
+  function _renderLightboxExif(exif) {
+    const el = document.getElementById('lpExif');
+    if (!el) return;
+    if (!exif || Object.keys(exif).length === 0) { el.innerHTML = ''; return; }
+    const rows = [];
+    if (exif.make || exif.model) {
+      const cam = [exif.make, exif.model].filter(Boolean).join(' ');
+      rows.push(`<div class="lp-camera-name">${cam}</div>`);
+    }
+    if (exif.lens) rows.push(`<div class="lp-row"><span class="lp-label">镜头</span><span class="lp-value">${exif.lens}</span></div>`);
+    const params = [];
+    if (exif.focalLength35) params.push(exif.focalLength35 + 'mm');
+    else if (exif.focalLength) params.push(exif.focalLength.toFixed(1) + 'mm');
+    if (exif.aperture) params.push('f/' + exif.aperture.toFixed(1));
+    if (exif.shutterSpeed) params.push(_formatShutter(exif.shutterSpeed));
+    if (exif.iso) params.push('ISO ' + exif.iso);
+    if (params.length) rows.push(`<div class="lp-row"><span class="lp-label">参数</span><span class="lp-value">${params.join('  ')}</span></div>`);
+    if (exif.width && exif.height) rows.push(`<div class="lp-row"><span class="lp-label">分辨率</span><span class="lp-value">${exif.width} × ${exif.height}</span></div>`);
+    el.innerHTML = rows.join('');
+  }
+
+  function _formatShutter(seconds) {
+    if (seconds >= 1) return seconds.toFixed(1) + 's';
+    const denom = Math.round(1 / seconds);
+    return '1/' + denom + 's';
+  }
+
+  let _exifAbort = null;
+  function _loadLightboxExif(p) {
+    const el = document.getElementById('lpExif');
+    if (!el) return;
+    if (!/\.(jpe?g|heic)$/i.test(p.key)) { el.innerHTML = ''; return; }
+    el.innerHTML = '<div class="lp-exif-loading">加载相机信息…</div>';
+    const ctrl = new AbortController();
+    _exifAbort = ctrl;
+    fetch('/api/exif?key=' + encodeURIComponent(p.key), { signal: ctrl.signal })
+      .then(r => r.ok ? r.json() : null)
+      .then(exif => { if (!ctrl.signal.aborted) _renderLightboxExif(exif); })
+      .catch(() => { if (el) el.innerHTML = ''; });
+  }
+
+  function _renderFilmstrip(activeIndex) {
+    const strip = document.getElementById('lightboxFilmstrip');
+    if (!strip || !allPhotos.length) return;
+    strip.innerHTML = allPhotos.map((p, i) => {
+      const active = i === activeIndex ? ' active' : '';
+      if (p.type === 'video') {
+        return `<div class="lfs-item${active}" onclick="renderSlide(${i})"><video src="${escAttr(p.url)}#t=0.5" muted preload="metadata" style="width:100%;height:100%;object-fit:cover"></video><span class="lfs-video-badge">▶</span></div>`;
+      }
+      const thumb = p.url.replace('/img/', '/thumb/') + '?w=100&q=65&fit=cover';
+      return `<div class="lfs-item${active}" onclick="renderSlide(${i})"><img src="${escAttr(thumb)}" loading="lazy" decoding="async" /></div>`;
+    }).join('');
+    // 滚动到当前项
+    const activeEl = strip.children[activeIndex];
+    if (activeEl) activeEl.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+  }
+
+  function _updateFilmstrip(index) {
+    const strip = document.getElementById('lightboxFilmstrip');
+    if (!strip) return;
+    strip.querySelectorAll('.lfs-item').forEach((el, i) => {
+      el.classList.toggle('active', i === index);
+    });
+    const activeEl = strip.children[index];
+    if (activeEl) activeEl.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+  }
+
   function renderSlide(index) {
     const p = allPhotos[index];
     if (!p) return;
     currentIndex = index;
-    lightboxCaption.textContent = p.year + ' 年' + (p.place ? ' · ' + p.place : '');
-    lightboxAiCaption.textContent = p.caption || '';
-    lightboxAiCaption.style.display = p.caption ? '' : 'none';
     lightboxDownload.href = p.url + '?dl=1';
     lightboxDownload.download = p.key.split('/').pop();
     lightboxShare.dataset.url = location.origin + p.url;
     lightboxShare.dataset.year = p.year;
+    // 更新胶片条高亮
+    _updateFilmstrip(index);
+    // 填充侧边面板
+    _renderLightboxReactions(p.key);
+    _renderLightboxInfo(p);
+    if (_exifAbort) { _exifAbort.abort(); _exifAbort = null; }
+    _loadLightboxExif(p);
 
     lightboxBody.innerHTML = '';
     // "show" 这个淡入 class 必须等图片/视频真的有数据了才加，不能用固定延时——
@@ -597,12 +738,11 @@
   function openLightbox(index, asSlideshow) {
     autoPlaying = !!asSlideshow;
     lightbox.classList.add('open');
-    // 灯箱内左右滑动切图时，背后的整页也会被浏览器当成"想滚动页面"一起带着动——
-    // 锁住 body 滚动，关闭时再还原
     document.body.style.overflow = 'hidden';
     if (asSlideshow && lightbox.requestFullscreen) {
       lightbox.requestFullscreen().catch(() => {});
     }
+    _renderFilmstrip(index);
     renderSlide(index);
   }
   function stopAutoPlay() {
@@ -617,6 +757,9 @@
     lightboxBody.innerHTML = '';
     document.body.style.overflow = '';
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    if (_exifAbort) { _exifAbort.abort(); _exifAbort = null; }
+    const strip = document.getElementById('lightboxFilmstrip');
+    if (strip) strip.innerHTML = '';
   }
   document.addEventListener('fullscreenchange', () => {
     if (!document.fullscreenElement && lightbox.classList.contains('open') && autoPlaying) closeLightbox();

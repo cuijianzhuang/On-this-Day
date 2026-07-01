@@ -439,18 +439,29 @@
   .play-memories:disabled { opacity: 0.35; cursor: default; transform: none; }
 
   .lightbox {
-    position: fixed; inset: 0; background: rgba(0,0,0,0.9);
-    display: flex; align-items: center; justify-content: center; z-index: 50;
-    padding: 2rem; opacity: 0; visibility: hidden; pointer-events: none;
+    position: fixed; inset: 0; background: rgba(0,0,0,0.92);
+    display: flex; flex-direction: column; z-index: 50;
+    opacity: 0; visibility: hidden; pointer-events: none;
     transition: opacity 0.25s ease;
-    /* pinch-zoom：挡住单指拖动（不让背后整页跟着滑切手势一起动），但留着双指缩放——
-       移动端看照片细节很常用得上，用 touch-action: none 会连这个一起挡掉 */
     touch-action: pinch-zoom;
   }
   .lightbox.open { opacity: 1; visibility: visible; pointer-events: auto; }
-  .lightbox-stage { position: relative; max-width: 92vw; max-height: 88vh; }
+
+  /* 内容区：图片 + 侧边信息面板 */
+  .lightbox-inner {
+    flex: 1; display: flex; align-items: stretch; min-height: 0;
+    position: relative;
+  }
+  .lightbox-stage {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    min-height: 0; padding: 2.5rem 3.5rem;
+    position: relative;
+  }
   .lightbox-stage img, .lightbox-stage video {
-    max-width: 92vw; max-height: 88vh; border-radius: 10px; display: block;
+    max-width: calc(100vw - 280px - 7rem);
+    max-height: calc(100dvh - 68px - 5rem);
+    border-radius: 10px; display: block;
+    object-fit: contain;
     opacity: 0; transition: opacity 0.4s ease, transform 0.4s ease;
   }
   .lightbox-stage img.fx-fade, .lightbox-stage video.fx-fade { transform: scale(0.96); }
@@ -463,9 +474,89 @@
     margin: -16px 0 0 -16px; border-radius: 50%;
     border: 3px solid rgba(255,255,255,0.18); border-top-color: rgba(255,255,255,0.7);
     animation: spin 0.8s linear infinite;
-    opacity: 1; transition: opacity 0.25s ease;
+    opacity: 1; transition: opacity 0.25s ease; pointer-events: none;
   }
   .lightbox-stage:has(.show)::after { opacity: 0; }
+
+  /* 侧边信息面板 */
+  .lightbox-panel {
+    width: 280px; flex-shrink: 0;
+    background: rgba(12,12,14,0.65); backdrop-filter: blur(22px) saturate(1.3);
+    border-left: 1px solid rgba(255,255,255,0.07);
+    overflow-y: auto; scrollbar-width: none;
+    display: flex; flex-direction: column;
+  }
+  .lightbox-panel::-webkit-scrollbar { display: none; }
+  .lp-filename {
+    padding: 1.1rem 1.2rem 0.5rem; font-size: 0.7rem;
+    color: #5a5a5e; font-family: 'Space Grotesk', monospace;
+    word-break: break-all; letter-spacing: 0.02em;
+  }
+  .lp-reactions { padding: 0.5rem 1.1rem 0.9rem; border-bottom: 1px solid rgba(255,255,255,0.07); }
+  .lp-emoji-grid { display: flex; flex-wrap: wrap; gap: 0.45rem; }
+  .lp-emoji-btn {
+    display: flex; align-items: center; gap: 0.28rem;
+    background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 980px; padding: 0.3rem 0.55rem 0.3rem 0.4rem;
+    font-size: 0.85rem; cursor: pointer; color: #d6d6da;
+    font-family: inherit; transition: background 0.15s ease, transform 0.12s ease, border-color 0.15s;
+  }
+  .lp-emoji-btn:hover { background: rgba(255,255,255,0.14); transform: scale(1.08); border-color: rgba(255,255,255,0.16); }
+  .lp-emoji-btn.reacted { background: rgba(255,200,120,0.18); border-color: rgba(255,190,90,0.35); }
+  .lp-emoji-cnt { font-size: 0.65rem; font-family: 'Space Grotesk', sans-serif; color: #8a8a8f; min-width: 8px; }
+  .lp-section {
+    padding: 0.85rem 1.2rem;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    display: flex; flex-direction: column; gap: 0.45rem;
+  }
+  .lp-section:last-child { border-bottom: none; flex: 1; }
+  .lp-row { display: flex; align-items: baseline; gap: 0.5rem; }
+  .lp-label {
+    font-size: 0.62rem; color: #5a5a5e; text-transform: uppercase;
+    letter-spacing: 0.1em; font-family: 'Space Grotesk', sans-serif;
+    flex-shrink: 0; min-width: 52px;
+  }
+  .lp-value { font-size: 0.78rem; color: #c7c7cc; line-height: 1.4; }
+  .lp-ai-text {
+    font-size: 0.78rem; color: #9a9a9f; font-style: italic; line-height: 1.55;
+    margin-top: 0.3rem;
+  }
+  .lp-exif-loading { font-size: 0.72rem; color: #444448; padding: 0.5rem 0; }
+  .lp-camera-name { font-size: 0.82rem; color: #d6d6da; font-weight: 500; margin-bottom: 0.3rem; }
+  body.sun-on .lightbox-panel { background: rgba(240,240,244,0.72); border-left-color: rgba(0,0,0,0.07); }
+  body.sun-on .lp-filename { color: #8a8a90; }
+  body.sun-on .lp-emoji-btn { background: rgba(0,0,0,0.06); border-color: rgba(0,0,0,0.1); color: #3a3a3c; }
+  body.sun-on .lp-emoji-cnt { color: #6e6e73; }
+  body.sun-on .lp-label { color: #8a8a90; }
+  body.sun-on .lp-value { color: #3a3a3c; }
+  body.sun-on .lp-ai-text { color: #5a5a5e; }
+  body.sun-on .lp-camera-name { color: #1c1c1e; }
+
+  /* 胶片条 */
+  .lightbox-filmstrip {
+    height: 68px; flex-shrink: 0;
+    background: rgba(0,0,0,0.5); border-top: 1px solid rgba(255,255,255,0.06);
+    display: flex; align-items: center; gap: 4px;
+    padding: 0 1rem; overflow-x: auto; scrollbar-width: none;
+  }
+  .lightbox-filmstrip::-webkit-scrollbar { display: none; }
+  .lfs-item {
+    height: 50px; width: 50px; flex-shrink: 0; border-radius: 4px; overflow: hidden;
+    cursor: pointer; position: relative;
+    outline: 2px solid transparent; outline-offset: 1px;
+    transition: outline-color 0.18s ease, opacity 0.18s ease;
+    opacity: 0.45;
+  }
+  .lfs-item.active { opacity: 1; outline-color: rgba(255,255,255,0.75); }
+  .lfs-item:hover:not(.active) { opacity: 0.75; }
+  .lfs-item img, .lfs-item video {
+    width: 100%; height: 100%; object-fit: cover; display: block;
+  }
+  .lfs-video-badge {
+    position: absolute; bottom: 2px; right: 3px;
+    font-size: 0.5rem; color: rgba(255,255,255,0.8);
+    text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+  }
   .live-photo-wrap { position: relative; display: inline-block; cursor: pointer; }
   .live-photo-video {
     position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
@@ -486,7 +577,7 @@
   }
   .live-photo-wrap.playing .live-photo-icon { animation: spin 1.2s linear infinite; }
   .lightbox-actions {
-    position: absolute; top: 1rem; right: 1.2rem; z-index: 2;
+    position: absolute; top: 1rem; right: 1.2rem; z-index: 52;
     display: flex; gap: 0.5rem; align-items: center;
   }
   .lightbox-btn {
@@ -523,24 +614,14 @@
     .back-to-top { bottom: 1.2rem; right: 1rem; width: 38px; height: 38px; }
   }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-  .lightbox-caption {
-    position: absolute; left: 50%; bottom: -2.2rem; transform: translateX(-50%);
-    color: #8fa1b8; font-size: 0.8rem; white-space: nowrap;
-  }
-  .lightbox-ai-caption {
-    position: absolute; left: 50%; bottom: -3.6rem; transform: translateX(-50%);
-    color: #c9d4e0; font-size: 0.82rem; font-style: italic; text-align: center;
-    max-width: 80vw; line-height: 1.4;
-  }
-  body.sun-on .lightbox-ai-caption { color: #3a3a3c; text-shadow: 0 1px 8px rgba(255,255,255,0.5); }
   .lightbox-nav {
-    position: absolute; top: 50%; transform: translateY(-50%); color: #fff;
+    position: absolute; top: 50%; transform: translateY(-50%); color: #fff; z-index: 2;
     font-size: 2rem; cursor: pointer; opacity: 0.55; padding: 0.5rem; user-select: none;
     transition: opacity 0.15s ease;
   }
   .lightbox-nav:hover { opacity: 1; }
-  .lightbox-nav.prev { left: -3rem; }
-  .lightbox-nav.next { right: -3rem; }
+  .lightbox-nav.prev { left: 0.5rem; }
+  .lightbox-nav.next { right: 0.5rem; }
 
   #fingertip {
     position: fixed; top: 0; left: 0; width: 70px; height: 70px;
@@ -611,17 +692,16 @@
     }
     /* 卡片宽度交给 grid track，去掉行内 width；倾斜在窄屏会让视觉宽度失衡，一并去掉 */
     .cell { width: 100% !important; height: auto !important; transform: none !important; }
-    .lightbox { padding: 0.8rem; }
-    .lightbox-stage img, .lightbox-stage video { max-width: 96vw; max-height: 78vh; }
-    .lightbox-nav { font-size: 1.8rem; padding: 0.6rem; }
-    .lightbox-nav.prev { left: 0.2rem; }
-    .lightbox-nav.next { right: 0.2rem; }
-    /* 顶部这几个悬浮控件之前固定用 rem 定位，刘海屏/灵动岛挡一截或者贴边太近，
-       用 max() 跟安全区比大小，没有安全区的设备上跟原来的 rem 值一样，不受影响 */
+    .lightbox-panel { display: none; }
+    .lightbox-stage { padding: 1rem 2.8rem; }
+    .lightbox-stage img, .lightbox-stage video { max-width: calc(100vw - 5.6rem); max-height: calc(100dvh - 58px - 2.5rem); }
+    .lightbox-filmstrip { height: 58px; }
+    .lfs-item { height: 42px; width: 42px; }
+    .lightbox-nav { font-size: 1.8rem; padding: 0.5rem; }
+    .lightbox-nav.prev { left: 0.1rem; }
+    .lightbox-nav.next { right: 0.1rem; }
     .lightbox-actions { top: max(0.6rem, env(safe-area-inset-top)); right: max(0.8rem, env(safe-area-inset-right)); }
     .lightbox-btn { width: 36px; height: 36px; }
-    .lightbox-caption { bottom: -1.8rem; font-size: 0.72rem; }
-    .lightbox-ai-caption { bottom: -3rem; font-size: 0.72rem; max-width: 90vw; }
     .header-controls { top: max(0.9rem, env(safe-area-inset-top)); right: max(0.8rem, env(safe-area-inset-right)); gap: 0.6rem; }
     .date-toggle, .sunlight-switch .switch { transform: scale(1.05); }
     .sunlight-switch span { display: none; }
