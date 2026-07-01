@@ -1,12 +1,6 @@
 name = "memories-today"
 main = "worker.js"
 compatibility_date = "2026-06-27"
-
-# CSS / JS / HTML / favicon 等静态文件交给 Cloudflare Static Assets CDN 托管，
-# Worker 只处理 /api/* /thumb/* /map 等动态路由，其余 fallback 到 env.ASSETS.fetch()
-[assets]
-directory = "./public"
-binding = "ASSETS"
 # heic-decode 这个库的底层 WASM 胶水代码是按 Node.js 环境生成的（会引用 fs/path/crypto），
 # 开这个 flag 让 Wrangler 打包时能解析这些引用，需要 Workers Paid 套餐（CPU 时间限制更宽松）
 compatibility_flags = ["nodejs_compat"]
@@ -14,6 +8,12 @@ compatibility_flags = ["nodejs_compat"]
 routes = [
   { pattern = "memories.cuijianzhuang.com/*", zone_name = "cuijianzhuang.com" }
 ]
+
+# CSS / JS / HTML / favicon 等静态文件交给 Cloudflare Static Assets CDN 托管，
+# Worker 只处理 /api/* /thumb/* /map 等动态路由，其余 fallback 到 env.ASSETS.fetch()
+[assets]
+directory = "./public"
+binding = "ASSETS"
 
 # wrangler versions upload / wrangler deploy 前先跑这个，确保 CI 环境里 npm 依赖都装好
 [build]

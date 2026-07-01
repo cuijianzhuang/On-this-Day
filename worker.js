@@ -1659,12 +1659,6 @@ async function handleMapPhotos(request, env, url) {
   return response;
 }
 
-// ---------- 网站图标：倾斜的宝丽来相框 + 暖色光斑，呼应照片墙 + 林间阳光主题 ----------
-  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
-}
-
 // ---------- 地图页：把所有带 GPS 的照片打点在地图上 ----------
 // 这里用的 token 必须是 public token（pk. 开头），跟服务端反向地理编码用的 secret token 是两个东西，
 // 因为这段代码会原样发到浏览器执行，secret token 绝对不能出现在这里
