@@ -53,13 +53,21 @@ database_id = "dac6d064-83bc-4cb9-b742-0938e0f58101"
 # photos_index 表（见 schema.sql），免得 matchPhotosForDay 每次都要 list() 扫一遍 R2。
 # 通知规则本身是绑在 R2 桶上的，跟 wrangler.toml 无关，用
 # `wrangler r2 bucket notification create image --event-type object-create --queue photo-index-queue` 配置
-# max_batch_size 调成 1：一批塞好几条消息时，每条都要打分（喂图片给 AI 模型）/ 查地点，
-# 内存压力会在同一次调用里叠加，之前撞过好几次 exceededMemory。一条一条处理，内存预算每次都是新的
+# 队列现在只负责触发 Workflow，内存压力移到 Workflow 的独立步骤里，max_batch_size 可以放宽
+# 但保留 1 以防 R2 通知瞬间大量到来
 [[queues.consumers]]
 queue = "photo-index-queue"
 max_batch_size = 1
 
-# 每 10 分钟跑一次，后台批量给照片打分/查地点，避免跟用户访问共享子请求预算
+# PhotoProcessingWorkflow：照片上传后的 5 步持久化流水线
+# index → heic-convert → ai-score → enrich-location → purge-cache
+# 每步独立重试，中途失败不影响已完成的步骤
+[[workflows]]
+name = "photo-processing"
+binding = "PHOTO_WORKFLOW"
+class_name = "PhotoProcessingWorkflow"
+
+# 每 10 分钟跑一次，补打历史积压的照片分数/地点（新上传的照片已由 Workflow 实时处理）
 [triggers]
 crons = ["*/10 * * * *"]
 

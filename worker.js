@@ -10,6 +10,7 @@
 
 import "./node-shims.js"; // 必须排在 libheif 之前，垫上它会用到的 __dirname 等 Node 全局变量
 import { createHash } from "node:crypto";
+import { WorkflowEntrypoint } from "cloudflare:workers";
 
 // Workers 不允许运行时动态编译 WASM 字节码（new WebAssembly.Module(bytes) 这种用法），
 // 必须在部署时就编译好——所以不能用内嵌 base64、运行时自己 new Module 的 libheif-bundle.js，
@@ -146,44 +147,30 @@ export default {
     ctx.waitUntil(runBackgroundMaintenance(env));
   },
 
-  // R2 Event Notification -> Queue 推过来的"文件变化"消息：新增/修改增量维护 photos_index，
-  // 顺手把打分（AI 文案/值不值得展示）、查地点（EXIF GPS 反查地名）跑一遍——新照片一上传
-  // 就处理好，不用等下一次 Cron（最多 10 分钟）才轮到。视频跳过打分/查地点（AI 打分要喂图片，
-  // EXIF GPS 也只有 JPEG/HEIC 这两种格式在解析）。删除则把索引表、打分、查地点、配套 HEIC
-  // 预览图一起清掉，不然"那年今日"还会接着展示一张已经不存在的照片。单条失败不 ack（让队列
-  // 按退避重投），别因为一张图算不出拍摄日期/AI 调用超时就拖累同一批里的其他消息。
-  // 处理完了顺手把这张照片对应那天的 /api/memories、/api/map-photos 边缘缓存清掉——
-  // 不然页面还在用之前缓存的旧结果，看不出新增/删除的变化
+  // R2 Event Notification → Queue → 此处仅触发 PhotoProcessingWorkflow。
+  // 原来的"索引+打分+定位"全部移入 Workflow 的独立步骤：每步持久化、独立重试，
+  // AI 超时不再导致整条消息重试，HEIC 也能先转码再打分，彻底解决 exceededMemory 问题。
+  // 删除操作简单且无需重试，继续在此内联处理。
   async queue(batch, env, ctx) {
     for (const message of batch.messages) {
       try {
         const event = message.body;
-        const key = event.object.key;
-        if (event.action === "PutObject" || event.action === "CompleteMultipartUpload" || event.action === "CopyObject") {
-          const meta = await indexPhoto(env, key);
-          if (meta) {
-            await purgeDayCache(meta.month, meta.day);
-          }
-          if (meta && meta.type === "image") {
-            // HEIC 刚上传、还没有预览图的时候不在这里打分——打分要喂图片给模型，没预览图就得现场
-            // 解码一次（几十 MB 原始像素），跟队列本身处理消息的内存预算叠在一起很容易把这次调用炸了
-            // （exceededMemory）。有现成预览图、或者不是 HEIC 的，照常立刻打分；HEIC 没预览图的
-            // 就先跳过，交给 Cron 那边节流过的 HEIC 转码流程，转完预览图后下次 Cron 自然会补打分
-            const isHeicWithoutPreview = /\.heic$/i.test(key) && !(await findHeicPreviewKey(env, key));
-            if (!isHeicWithoutPreview) {
-              await scoreKeys(env, [key]);
-            }
-            await enrichLocations(env, [key]);
-          }
-        } else if (event.action === "DeleteObject" || event.action === "LifecycleDeletion") {
+        const key = event.object?.key;
+        if (!key) { message.ack(); continue; }
+
+        const uploadActions = ["PutObject", "CompleteMultipartUpload", "CopyObject"];
+        const deleteActions = ["DeleteObject", "LifecycleDeletion"];
+
+        if (uploadActions.includes(event.action)) {
+          // 触发持久化 Workflow，立即 ack——后续所有工作由 Workflow 负责重试
+          await env.PHOTO_WORKFLOW.create({ params: { key } });
+        } else if (deleteActions.includes(event.action)) {
           const removed = await removePhotoIndex(env, key);
-          if (removed) {
-            await purgeDayCache(removed.month, removed.day);
-          }
+          if (removed) await purgeDayCache(removed.month, removed.day);
         }
         message.ack();
       } catch (err) {
-        console.error("queue: failed to process", message.body, err);
+        console.error("queue: workflow trigger failed", message.body, err);
         message.retry();
       }
     }
@@ -1786,3 +1773,63 @@ export class MemoryRoom {
   }
 }
 // ────────────────────────────────────────────────────────────────────────────────
+// PhotoProcessingWorkflow — 照片上传后的 5 步持久化处理流水线
+//
+// 触发：queue() 收到 R2 PutObject / CompleteMultipartUpload / CopyObject 通知
+// 步骤：
+//   1. index          — 写 photos_index，拿到 month/day/type
+//   2. heic-convert   — HEIC 专属：先转 JPEG 预览图（跳过则打分会因无图失败）
+//   3. ai-score       — 调 llava-1.5-7b 视觉模型打分 + 生成中文说明文字
+//   4. enrich-location — EXIF GPS → Mapbox 反查地点名称，写 photo_places
+//   5. purge-cache    — 清边缘缓存，让 /api/memories 立即反映新照片
+//
+// 每步独立持久化：某步失败时只重试该步，已完成的步骤不重来。
+// 视频/非图片在步骤 1 之后直接 return，不走后续 AI 流程。
+export class PhotoProcessingWorkflow extends WorkflowEntrypoint {
+  async run(event, step) {
+    const { key } = event.payload;
+
+    // ── Step 1: 索引 ──────────────────────────────────────────────────────────
+    const meta = await step.do("index", async () => {
+      return await indexPhoto(this.env, key);
+    });
+    // 非图片（视频/live photo 等）不需要 AI 打分和地点
+    if (!meta || meta.type !== "image") return;
+
+    // ── Step 2: HEIC 转码（仅 HEIC 文件）────────────────────────────────────
+    // 解决原 queue handler 的 exceededMemory 问题：把 HEIC 解码单独放在一步，
+    // 内存预算全给它，完成后下一步打分直接读现成的 JPEG 预览图
+    if (/\.heic$/i.test(key)) {
+      await step.do("heic-convert", {
+        retries: { limit: 2, delay: "15 seconds", backoff: "exponential" },
+        timeout: "2 minutes",
+      }, async () => {
+        await convertHeicBatch(this.env, [key], 1);
+      });
+    }
+
+    // ── Step 3: AI 打分 ───────────────────────────────────────────────────────
+    // llava-1.5-7b 视觉模型：score(1-10) + hasFace + 中文说明文字
+    // Workers AI 调用有时会超时，最多重试 3 次，间隔指数增长
+    await step.do("ai-score", {
+      retries: { limit: 3, delay: "30 seconds", backoff: "exponential" },
+      timeout: "3 minutes",
+    }, async () => {
+      await scoreKeys(this.env, [key]);
+    });
+
+    // ── Step 4: GPS 反查地点 ─────────────────────────────────────────────────
+    // 从 EXIF 读取经纬度 → Mapbox Geocoding API → 写 photo_places 表
+    await step.do("enrich-location", {
+      retries: { limit: 2, delay: "10 seconds" },
+      timeout: "30 seconds",
+    }, async () => {
+      await enrichLocations(this.env, [key]);
+    });
+
+    // ── Step 5: 清边缘缓存 ───────────────────────────────────────────────────
+    await step.do("purge-cache", async () => {
+      await purgeDayCache(meta.month, meta.day);
+    });
+  }
+}
