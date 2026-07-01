@@ -1297,73 +1297,78 @@ async function generateHeicPreview(env, key) {
 }
 
 
-async function handleThumb(request, env, url) {
-  let key = decodeURIComponent(url.pathname.replace(/^\/thumb\//, ""));
-  if (!key) return new Response("Bad Request", { status: 400 });
+const PREVIEWS_PUBLIC = "https://previews.cuijianzhuang.com";
 
-  // Images binding 不支持 HEIC 输入，直接转码一次太慢、而且每个访问者都要在浏览器里重新解码一遍。
-  // 优先用本地脚本提前转好、存在 PREVIEWS 桶里的 JPEG 预览版；没有的话再退回去转发原图，让前端 heicFallback 兜底解码
-  let bucket = env.PHOTOS;
-  if (/\.heic$/i.test(key)) {
-    const previewKey = await findHeicPreviewKey(env, key);
-    if (previewKey) {
-      key = previewKey; // 命中预览版，走下面正常的 Images binding 缩放流程，但要从 PREVIEWS 桶读
-      bucket = env.PREVIEWS;
+async function handleThumb(request, env, url) {
+  const origKey = decodeURIComponent(url.pathname.replace(/^\/thumb\//, ""));
+  if (!origKey) return new Response("Bad Request", { status: 400 });
+
+  const width  = Math.min(Math.max(Number(url.searchParams.get("w")) || 400, 1), 2000);
+  const height = url.searchParams.get("h") ? Math.min(Math.max(Number(url.searchParams.get("h")), 1), 2000) : undefined;
+  const fit    = url.searchParams.get("fit") || "scale-down";
+
+  // 存进 PREVIEWS 的 WebP 缩略图路径：thumbs/{尺寸}/{原始路径去扩展名}.webp
+  const dimStr   = height ? `${width}x${height}` : `${width}`;
+  const thumbKey = `thumbs/${dimStr}/${origKey.replace(/\.[^.]+$/, "")}.webp`;
+  const publicUrl = `${PREVIEWS_PUBLIC}/${thumbKey}`;
+
+  // 先查边缘缓存（302 本身也可以缓存，省掉每次的 PREVIEWS.head 调用）
+  const cacheKey = new Request(`https://thumb-redirect/${thumbKey}`);
+  const cachedRedirect = await caches.default.match(cacheKey);
+  if (cachedRedirect) return cachedRedirect;
+
+  // 缩略图已存在 → 直接 302，Worker 不再传图片体
+  const existing = await env.PREVIEWS.head(thumbKey);
+  if (existing) {
+    const resp = thumbRedirect(publicUrl);
+    await caches.default.put(cacheKey, resp.clone());
+    return resp;
+  }
+
+  // 找原始素材：HEIC 用已转好的 JPEG 预览，其他直接走原图桶
+  let sourceBucket = env.PHOTOS;
+  let sourceKey    = origKey;
+  if (/\.heic$/i.test(origKey)) {
+    const found = await findHeicPreviewHead(env, origKey);
+    if (found && !isHeicPlaceholder(found.head)) {
+      sourceBucket = env.PREVIEWS;
+      sourceKey    = found.key;
     } else {
+      // HEIC 还没转好，退回原图让前端 heicFallback 兜底
       return handleImage(request, env, new URL(url.toString().replace("/thumb/", "/img/")));
     }
   }
 
-  const width = Math.min(Math.max(Number(url.searchParams.get("w")) || 400, 1), 2000);
-  const height = url.searchParams.get("h") ? Math.min(Math.max(Number(url.searchParams.get("h")), 1), 2000) : undefined;
-  const quality = Math.min(Math.max(Number(url.searchParams.get("q")) || 75, 1), 100);
-  const fit = url.searchParams.get("fit") || "scale-down";
-  // 按浏览器 Accept 头协商更小的格式：同质量下 AVIF/WebP 比 JPEG 能再小 30%-50%，
-  // 不支持的浏览器（Accept 里没带）照样拿 JPEG，不强求
-  const format = pickThumbFormat(request);
-
-  const cache = caches.default;
-  // 缓存键要把协商出来的格式带上——边缘缓存本身不认 Vary，同一个 URL 不分格式存只会有一份，
-  // 不加这个的话谁先访问谁的格式就会被缓存下来，错发给后来不支持那个格式的浏览器
-  const cacheUrl = new URL(url.toString());
-  cacheUrl.searchParams.set("_fmt", format);
-  const cacheKey = new Request(cacheUrl.toString());
-  const cachedResp = await cache.match(cacheKey);
-  if (cachedResp) return cachedResp;
-
-  const object = await bucket.get(key);
+  const object = await sourceBucket.get(sourceKey);
   if (!object) return new Response("Not Found", { status: 404 });
 
   try {
-    // input() 要的是 ReadableStream，不是 ArrayBuffer；quality 要放在 output() 里，不是 transform()；
-    // format 必须写成 "image/jpeg" 这种完整 MIME，不能只写 "jpeg" —— 这几处之前全写错了，导致每张图都转换失败
     const transformed = await env.IMAGES.input(object.body)
-      .transform({ width, height, fit })
-      .output({ format, quality });
-    const tResp = transformed.response();
-    const headers = new Headers(tResp.headers);
-    headers.set("cache-control", "public, max-age=31536000, immutable");
-    const response = new Response(tResp.body, { status: tResp.status, headers });
-    // cache.put() 只认 Vary: Accept-Encoding，塞别的值（包括 Accept）会直接抛 TypeError——
-    // 之前在 clone 前就设了这个头，等于连缓存进去的那份也带着它，每次都在这步炸掉、
-    // 掉进 catch 退回原图，缩略图转换/缓存整个失效。改成只在真正回给浏览器的这份上设
-    const cachedResponse = response.clone();
-    response.headers.set("vary", "Accept");
-    await cache.put(cacheKey, cachedResponse);
-    return response;
+      .transform({ width, ...(height ? { height } : {}), fit })
+      .output({ format: "image/webp", quality: 75 });
+    const buf = await transformed.response().arrayBuffer();
+
+    // 存入 PREVIEWS，后续请求直接走 R2 公开 CDN，不再经过 Worker 的 IMAGES 变换
+    await env.PREVIEWS.put(thumbKey, buf, {
+      httpMetadata: { contentType: "image/webp", cacheControl: "public, max-age=31536000, immutable" },
+    });
+
+    const resp = thumbRedirect(publicUrl);
+    await caches.default.put(cacheKey, resp.clone());
+    return resp;
   } catch {
-    // 转换失败（比如某些边界格式，或者协商出来的格式这次解不了）就回退原图，别让照片整个挂掉
     return handleImage(request, env, new URL(url.toString().replace("/thumb/", "/img/")));
   }
 }
 
-// 按 Accept 头挑一个浏览器实际支持的格式里最小的那个，挑不出来（没带 Accept，或者是没有
-// image/avif、image/webp 的老浏览器/工具）就老实退回 JPEG
-function pickThumbFormat(request) {
-  const accept = request.headers.get("accept") || "";
-  if (accept.includes("image/avif")) return "image/avif";
-  if (accept.includes("image/webp")) return "image/webp";
-  return "image/jpeg";
+function thumbRedirect(publicUrl) {
+  return new Response(null, {
+    status: 302,
+    headers: {
+      "location": publicUrl,
+      "cache-control": "public, max-age=86400",
+    },
+  });
 }
 
 // ---------- AI 选片：用 Workers AI 给照片打"值不值得展示"的分，离线批处理，结果存进 D1 ----------
