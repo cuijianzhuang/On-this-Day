@@ -118,6 +118,10 @@ export default {
       return handleMapPhotos(request, env, url);
     }
 
+    if (url.pathname === "/api/exif") {
+      return handleExif(request, env, url);
+    }
+
     if (url.pathname === "/api/poem") {
       return handlePoem(request, env, url);
     }
@@ -789,6 +793,140 @@ function parseExifTiff(buf, tiffStart) {
   } catch {
     return null;
   }
+}
+
+// 扩展 EXIF 解析：Make / Model / ExposureTime / FNumber / ISO / FocalLength / Lens / 分辨率
+function parseExifForDisplay(buf) {
+  // 找 JPEG EXIF 段（也支持直接 TIFF 文件头）
+  let tiffStart = -1;
+  if (buf[0] === 0xff && buf[1] === 0xd8) {
+    // JPEG
+    let pos = 2;
+    while (pos + 3 < buf.length) {
+      if (buf[pos] !== 0xff) break;
+      const marker = buf[pos + 1];
+      const segLen = (buf[pos + 2] << 8) | buf[pos + 3];
+      if (marker === 0xe1 && pos + 9 < buf.length &&
+        buf[pos + 4] === 0x45 && buf[pos + 5] === 0x78 &&
+        buf[pos + 6] === 0x69 && buf[pos + 7] === 0x66) {
+        tiffStart = pos + 10; // skip APP1 marker(2) + length(2) + "Exif\0\0"(6)
+        break;
+      }
+      if (marker === 0xda) break;
+      pos += 2 + segLen;
+    }
+  } else if ((buf[0] === 0x49 && buf[1] === 0x49) || (buf[0] === 0x4d && buf[1] === 0x4d)) {
+    tiffStart = 0; // raw TIFF / HEIF exif block
+  }
+  if (tiffStart < 0 || tiffStart + 8 > buf.length) return null;
+
+  const little = buf[tiffStart] === 0x49;
+  const u16 = (o) => little ? buf[o] | (buf[o+1]<<8) : (buf[o]<<8)|buf[o+1];
+  const u32 = (o) => (little
+    ? (buf[o]|(buf[o+1]<<8)|(buf[o+2]<<16)|(buf[o+3]<<24))
+    : ((buf[o]<<24)|(buf[o+1]<<16)|(buf[o+2]<<8)|buf[o+3])) >>> 0;
+
+  function ifdEntry(ifdOff, tag) {
+    const cnt = u16(ifdOff);
+    for (let i = 0; i < cnt; i++) {
+      const e = ifdOff + 2 + i * 12;
+      if (e + 11 >= buf.length) break;
+      if (u16(e) === tag) return e;
+    }
+    return -1;
+  }
+
+  function readAscii(e) {
+    const len = u32(e + 4);
+    const off = len <= 4 ? e + 8 : tiffStart + u32(e + 8);
+    if (off >= buf.length) return '';
+    let s = '';
+    for (let i = 0; i < len && off + i < buf.length; i++) {
+      const c = buf[off + i];
+      if (c === 0) break;
+      s += String.fromCharCode(c);
+    }
+    return s.trim();
+  }
+
+  function readRational(e) {
+    const off = tiffStart + u32(e + 8);
+    if (off + 7 >= buf.length) return null;
+    const n = u32(off), d = u32(off + 4);
+    return d ? n / d : null;
+  }
+
+  function readShort(e) {
+    // SHORT (type=3): value fits in 4 bytes at offset+8
+    return u16(e + 8);
+  }
+
+  try {
+    const ifd0 = tiffStart + u32(tiffStart + 4);
+    const result = {};
+
+    const makeE = ifdEntry(ifd0, 0x010F);
+    if (makeE >= 0) result.make = readAscii(makeE);
+
+    const modelE = ifdEntry(ifd0, 0x0110);
+    if (modelE >= 0) result.model = readAscii(modelE);
+
+    // 图像尺寸（IFD0 中）
+    const wE = ifdEntry(ifd0, 0xA002);
+    const hE = ifdEntry(ifd0, 0xA003);
+    // ExifIFD pointer
+    const exifPtrE = ifdEntry(ifd0, 0x8769);
+    if (exifPtrE >= 0) {
+      const exifIfd = tiffStart + u32(exifPtrE + 8);
+
+      const etE = ifdEntry(exifIfd, 0x829A); // ExposureTime
+      if (etE >= 0) result.shutterSpeed = readRational(etE);
+
+      const fnE = ifdEntry(exifIfd, 0x829D); // FNumber
+      if (fnE >= 0) result.aperture = readRational(fnE);
+
+      const isoE = ifdEntry(exifIfd, 0x8827); // ISOSpeedRatings
+      if (isoE >= 0) result.iso = readShort(isoE);
+
+      const flE = ifdEntry(exifIfd, 0x920A); // FocalLength
+      if (flE >= 0) result.focalLength = readRational(flE);
+
+      const fl35E = ifdEntry(exifIfd, 0xA405); // FocalLengthIn35mmFilm
+      if (fl35E >= 0) result.focalLength35 = readShort(fl35E);
+
+      const lensE = ifdEntry(exifIfd, 0xA434); // LensModel
+      if (lensE >= 0) result.lens = readAscii(lensE);
+
+      const pw = ifdEntry(exifIfd, 0xA002); // PixelXDimension
+      const ph = ifdEntry(exifIfd, 0xA003); // PixelYDimension
+      if (pw >= 0) result.width = u32(pw + 8);
+      if (ph >= 0) result.height = u32(ph + 8);
+    }
+    // Fallback dims from IFD0
+    if (!result.width && wE >= 0) result.width = u32(wE + 8);
+    if (!result.height && hE >= 0) result.height = u32(hE + 8);
+
+    return Object.keys(result).length ? result : null;
+  } catch {
+    return null;
+  }
+}
+
+async function handleExif(request, env, url) {
+  const key = url.searchParams.get("key");
+  if (!key || key.length > 500) return new Response("Bad Request", { status: 400 });
+  // 只读前 64KB 就够解析 EXIF（EXIF 段在文件头部）
+  const obj = await env.PHOTOS.get(key, { range: { offset: 0, length: 65536 } });
+  if (!obj) return new Response("Not Found", { status: 404 });
+  const buf = new Uint8Array(await obj.arrayBuffer());
+  const exif = parseExifForDisplay(buf);
+  return new Response(JSON.stringify(exif || {}), {
+    headers: {
+      "content-type": "application/json",
+      "cache-control": "public, max-age=86400, stale-while-revalidate=604800",
+      "access-control-allow-origin": "*",
+    },
+  });
 }
 
 const MIME_TYPES = {
@@ -1751,11 +1889,9 @@ export class MemoryRoom {
     // tag[0]=userId 用于去重；tag[1]=gravatarHash 发给客户端拼 Gravatar URL
     this.state.acceptWebSocket(server, [userId, gravatarHash]);
 
-    const reactions = (await this.state.storage.get("reactions")) || {};
-    // acceptWebSocket 之后 getWebSockets() 已含刚加入的这个，直接计算唯一用户数
+    const reactions_v2 = (await this.state.storage.get("reactions_v2")) || {};
     const { count, list } = this._usersInfo();
-    // you: 告知客户端自己的 userId，用于在头像列表里标"你"
-    server.send(JSON.stringify({ type: "init", count, reactions, you: userId, list }));
+    server.send(JSON.stringify({ type: "init", count, reactions_v2, you: userId, list }));
     this._broadcast({ type: "users", count, list }, server);
 
     return new Response(null, { status: 101, webSocket: client });
@@ -1765,10 +1901,14 @@ export class MemoryRoom {
     try {
       const msg = JSON.parse(typeof raw === "string" ? raw : new TextDecoder().decode(raw));
       if (msg.type === "react" && typeof msg.key === "string" && msg.key.length < 300) {
-        const reactions = (await this.state.storage.get("reactions")) || {};
-        reactions[msg.key] = (reactions[msg.key] || 0) + 1;
-        await this.state.storage.put("reactions", reactions);
-        this._broadcast({ type: "react", key: msg.key, count: reactions[msg.key] });
+        const VALID_EMOJIS = new Set(['👍','❤️','😍','😂','😮','😢','🔥','✨']);
+        const emoji = VALID_EMOJIS.has(msg.emoji) ? msg.emoji : '❤️';
+        const reactions_v2 = (await this.state.storage.get("reactions_v2")) || {};
+        if (!reactions_v2[msg.key]) reactions_v2[msg.key] = {};
+        reactions_v2[msg.key][emoji] = (reactions_v2[msg.key][emoji] || 0) + 1;
+        await this.state.storage.put("reactions_v2", reactions_v2);
+        const count = reactions_v2[msg.key][emoji];
+        this._broadcast({ type: "react", key: msg.key, emoji, count });
       }
     } catch (_) {}
   }
