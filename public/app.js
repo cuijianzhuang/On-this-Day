@@ -254,7 +254,7 @@
     _syncCount(key, _totalReactions(key), false);
     _renderLightboxReactions(key);
     // 触发弹跳动画（传入 btn 的 data-emoji 匹配找到 DOM 元素重新触发）
-    const el = btnEl || document.querySelector(`#lpReactions .lp-emoji-btn[data-emoji="${CSS.escape(emoji)}"]`);
+    const el = btnEl || document.querySelector(`#lbEmojiPopup .lp-emoji-btn[data-emoji="${CSS.escape(emoji)}"]`);
     if (el) { el.classList.remove('pop'); requestAnimationFrame(() => el.classList.add('pop')); }
   };
   // ────────────────────────────────────────────────────────────────────────────────
@@ -665,15 +665,20 @@
   }
 
   function _renderLightboxReactions(key) {
-    const el = document.getElementById('lpReactions');
-    if (!el) return;
     const counts = _roomReactions[key] || {};
     // data-key / data-emoji 避免把 JSON.stringify 的双引号嵌进 HTML 属性里（会截断属性值导致 SyntaxError）
-    el.innerHTML = '<div class="lp-emoji-grid" data-rkey="' + escAttr(key) + '">' + EMOJI_LIST.map(e => {
+    const gridHtml = '<div class="lp-emoji-grid" data-rkey="' + escAttr(key) + '">' + EMOJI_LIST.map(e => {
       const n = counts[e] || 0;
       const cls = n > 0 ? ' reacted' : '';
       return `<button class="lp-emoji-btn${cls}" data-emoji="${escAttr(e)}">${e}<span class="lp-emoji-cnt">${n > 0 ? n : ''}</span></button>`;
     }).join('') + '</div>';
+    const popup = document.getElementById('lbEmojiPopup');
+    if (popup) popup.innerHTML = gridHtml;
+    const countEl = document.getElementById('lbReactCount');
+    if (countEl) {
+      const total = Object.values(counts).reduce((a, b) => a + b, 0);
+      countEl.textContent = total > 0 ? total + ' 个表态' : '';
+    }
   }
 
   // 用事件委托代替每个按钮的 inline onclick——可以安全处理任意键值/emoji
@@ -685,6 +690,21 @@
     const emoji = btn.dataset.emoji;
     if (key && emoji) doReactEmoji(key, emoji, btn);
   });
+
+  // 表态浮动按钮：点击展开/收起 emoji 弹窗
+  const lbReactBtn = document.getElementById('lbReactBtn');
+  const lbEmojiPopup = document.getElementById('lbEmojiPopup');
+  if (lbReactBtn && lbEmojiPopup) {
+    lbReactBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      lbEmojiPopup.classList.toggle('open');
+    });
+    lightbox.addEventListener('click', (e) => {
+      if (!e.target.closest('#lbEmojiPopup') && !e.target.closest('#lbReactBtn')) {
+        lbEmojiPopup.classList.remove('open');
+      }
+    });
+  }
 
   function _renderLightboxInfo(p) {
     const filenameEl = document.getElementById('lpFilename');
@@ -845,6 +865,8 @@
     const p = allPhotos[index];
     if (!p) return;
     currentIndex = index;
+    const _ep = document.getElementById('lbEmojiPopup');
+    if (_ep) _ep.classList.remove('open');
     lightboxDownload.href = p.url + '?dl=1';
     lightboxDownload.download = p.key.split('/').pop();
     lightboxShare.dataset.url = location.origin + p.url;
@@ -927,6 +949,7 @@
   function openLightbox(index, asSlideshow) {
     autoPlaying = !!asSlideshow;
     lightbox.classList.add('open');
+    document.body.classList.add('lb-open');
     document.body.style.overflow = 'hidden';
     if (asSlideshow && lightbox.requestFullscreen) {
       lightbox.requestFullscreen().catch(() => {});
@@ -942,6 +965,9 @@
   }
   function closeLightbox() {
     lightbox.classList.remove('open');
+    document.body.classList.remove('lb-open');
+    const _popup = document.getElementById('lbEmojiPopup');
+    if (_popup) _popup.classList.remove('open');
     stopAutoPlay();
     _lbScale = 1; _lbTx = 0; _lbTy = 0; _lbPanning = false;
     lightboxBody.innerHTML = '';
@@ -992,6 +1018,19 @@
   let _lbZoomHideTimer = null;
 
   function _lbTarget() { return lightboxBody.querySelector('img,video,.live-photo-wrap'); }
+
+  function _lbClamp() {
+    if (_lbScale <= 1) return;
+    const t = _lbTarget();
+    if (!t) return;
+    const stage = lightboxBody.parentElement;
+    const scaledW = t.offsetWidth  * _lbScale;
+    const scaledH = t.offsetHeight * _lbScale;
+    const maxX = Math.max(0, (scaledW - stage.offsetWidth)  / 2);
+    const maxY = Math.max(0, (scaledH - stage.offsetHeight) / 2);
+    _lbTx = Math.max(-maxX, Math.min(maxX, _lbTx));
+    _lbTy = Math.max(-maxY, Math.min(maxY, _lbTy));
+  }
 
   function _lbApplyTransform() {
     const t = _lbTarget();
@@ -1052,6 +1091,7 @@
     if (!_lbPanning) return;
     _lbTx = _lbPanTx0 + e.clientX - _lbPanSX;
     _lbTy = _lbPanTy0 + e.clientY - _lbPanSY;
+    _lbClamp();
     const t = _lbTarget();
     if (t) t.style.transform = `translate(${_lbTx}px,${_lbTy}px) scale(${_lbScale})`;
   });
