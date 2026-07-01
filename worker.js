@@ -1852,7 +1852,8 @@ const APP_CSS = `
   * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
   html, body { scrollbar-width: none; -ms-overflow-style: none; }
   /* overflow-x:hidden 只放 body 上——同时加在 html 上是已知的 iOS Safari 坑，会把纵向滚动整个搞坏 */
-  body { overflow-x: hidden; }
+  /* touch-action:pan-y 禁止横向滑动手势，只保留纵向滚动 */
+  body { overflow-x: hidden; touch-action: pan-y; }
   html::-webkit-scrollbar, body::-webkit-scrollbar { display: none; }
   body {
     font-family: "SF Pro Display", -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
@@ -3211,7 +3212,7 @@ const MAP_HTML = (mapboxPublicToken) => `<!doctype html>
 <html lang="zh">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>足迹 · 那年今日</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <link href="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.css" rel="stylesheet" />
@@ -3236,7 +3237,7 @@ const HTML = `<!doctype html>
 <html lang="zh">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>那年今日</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
