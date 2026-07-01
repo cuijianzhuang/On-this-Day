@@ -2352,12 +2352,26 @@ const APP_CSS = `
     header { padding: 3.2rem 1rem 2.2rem; }
     .subtitle { font-size: 0.85rem; }
     .year-block { padding: 0 1rem; }
-    /* 移动端两列：50% 减掉一半列间距，两张卡片加一个 10px gap 正好撑满容器，
-       避免用 40vw 时因为父元素有 padding 导致右侧留白、缩放后看起来不居中 */
-    .grid { gap: 14px 10px; justify-content: center; }
-    /* 倾斜角（--tilt-deg）在窄屏两列布局里会让竖屏照片视觉宽度比 CSS 宽度多出十几 px，
-       相邻两张倾斜方向不同就显得一宽一窄——移动端去掉旋转，保持图钉/卡纸/阴影不变 */
-    .cell { width: calc(50% - 5px) !important; height: auto !important; transform: none !important; }
+    /* 移动端完全交给 CSS Grid 算列宽：repeat(2,1fr) 不依赖任何 vw/calc/padding 计算，
+       浏览器自动等分，任何屏宽都正确；.grid padding 清零，由父元素 .year-block 统一留白 */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+      padding: 0;
+      perspective: none;
+      align-items: unset;
+      justify-content: unset;
+    }
+    /* 骨架屏容器同理，它不在 .year-block 里，自己保留水平 padding */
+    .skeleton-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+      padding: 1rem 1rem 1.5rem;
+    }
+    /* 卡片宽度交给 grid track，去掉行内 width；倾斜在窄屏会让视觉宽度失衡，一并去掉 */
+    .cell { width: 100% !important; height: auto !important; transform: none !important; }
     .lightbox { padding: 0.8rem; }
     .lightbox-stage img, .lightbox-stage video { max-width: 96vw; max-height: 78vh; }
     .lightbox-nav { font-size: 1.8rem; padding: 0.6rem; }
@@ -3081,12 +3095,11 @@ const APP_JS = `
           btn.textContent = expanded ? '收起' : '展开查看全部 ' + total + ' 张 ›';
         };
 
-        // 移动端 CSS 把 .cell 强制按 calc(50% - 5px) 渲染（容器宽度的一半减半个列间距），
-        // 折算成 px 约等于 0.48 * innerWidth（年份块左右各 1rem + 网格各 0.5rem padding），
-        // 缩略图分辨率要是还按桌面那个 size 算，手机上经常对不上：要小了模糊，要大了白白浪费流量
+        // 移动端用 CSS Grid repeat(2,1fr)：实际渲染宽 = (viewport - year-block水平padding - gap) / 2
+        // year-block padding 1rem*2≈32px，gap 14px，所以 1fr ≈ (innerWidth-46)/2
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
         const isMobileLayout = window.innerWidth <= 640;
-        const mobileRenderSize = window.innerWidth * 0.48;
+        const mobileRenderSize = Math.round((window.innerWidth - 46) / 2);
 
         // 照片不是一次性全部弹出来，按页面上的出场顺序错开一点时间依次淡入；
         // 延迟封顶（0.9s），照片特别多的时候后面那些不用傻等，很快就一起跟上
