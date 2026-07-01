@@ -2355,7 +2355,9 @@ const APP_CSS = `
     /* 移动端两列：50% 减掉一半列间距，两张卡片加一个 10px gap 正好撑满容器，
        避免用 40vw 时因为父元素有 padding 导致右侧留白、缩放后看起来不居中 */
     .grid { gap: 14px 10px; justify-content: center; }
-    .cell { width: calc(50% - 5px) !important; height: auto !important; }
+    /* 倾斜角（--tilt-deg）在窄屏两列布局里会让竖屏照片视觉宽度比 CSS 宽度多出十几 px，
+       相邻两张倾斜方向不同就显得一宽一窄——移动端去掉旋转，保持图钉/卡纸/阴影不变 */
+    .cell { width: calc(50% - 5px) !important; height: auto !important; transform: none !important; }
     .lightbox { padding: 0.8rem; }
     .lightbox-stage img, .lightbox-stage video { max-width: 96vw; max-height: 78vh; }
     .lightbox-nav { font-size: 1.8rem; padding: 0.6rem; }
