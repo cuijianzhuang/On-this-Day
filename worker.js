@@ -126,6 +126,15 @@ export default {
       });
     }
 
+    // 实时共享房间：每个日期一个 Durable Object，家人同时在线时看到彼此人数 + 实时点赞
+    if (url.pathname.startsWith("/api/room/")) {
+      const dateKey = url.pathname.slice("/api/room/".length);
+      if (/^\d{2}-\d{2}$/.test(dateKey)) {
+        const id = env.MEMORY_ROOM.idFromName(dateKey);
+        return env.MEMORY_ROOM.get(id).fetch(request);
+      }
+    }
+
     // 其余请求（/、/favicon.svg、/app.css、/app.js 等）交给 Static Assets CDN
     return env.ASSETS.fetch(request);
   },
@@ -1686,3 +1695,59 @@ const MAP_HTML = (mapboxPublicToken) => `<!doctype html>
 </body>
 </html>`;
 
+// ── Durable Object：实时共享房间 ─────────────────────────────────────────────────
+// 每个日期（"MM-DD"）对应一个 DO 实例。家人同时打开同一天的回忆时：
+//   · 页面顶部显示"👥 N 人在看"
+//   · 每张照片右下角有 ❤️ 按钮，点击全员实时看到计数增长
+// 反应数持久化存在 DO Storage，换一天再回来还能看到。
+// 不需要登录：匿名访问，只统计人数，不存用户信息。
+export class MemoryRoom {
+  constructor(state, env) {
+    this.state = state;
+  }
+
+  async fetch(request) {
+    if (request.headers.get("Upgrade") !== "websocket") {
+      return new Response("WebSocket required", { status: 426 });
+    }
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    this.state.acceptWebSocket(server);
+
+    const reactions = (await this.state.storage.get("reactions")) || {};
+    // getWebSockets() 此时已包含刚 accept 的这个，所以 length 就是含自己的在线人数
+    const count = this.state.getWebSockets().length;
+    server.send(JSON.stringify({ type: "init", count, reactions }));
+    this._broadcast({ type: "users", count }, server);
+
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async webSocketMessage(ws, raw) {
+    try {
+      const msg = JSON.parse(typeof raw === "string" ? raw : new TextDecoder().decode(raw));
+      if (msg.type === "react" && typeof msg.key === "string" && msg.key.length < 300) {
+        const reactions = (await this.state.storage.get("reactions")) || {};
+        reactions[msg.key] = (reactions[msg.key] || 0) + 1;
+        await this.state.storage.put("reactions", reactions);
+        this._broadcast({ type: "react", key: msg.key, count: reactions[msg.key] });
+      }
+    } catch (_) {}
+  }
+
+  webSocketClose(ws) {
+    // 断开时广播最新人数（减去正在关闭的这个）
+    const count = Math.max(0, this.state.getWebSockets().length - 1);
+    this._broadcast({ type: "users", count }, ws);
+  }
+
+  webSocketError() {}
+
+  _broadcast(msg, excludeWs) {
+    const txt = JSON.stringify(msg);
+    for (const ws of this.state.getWebSockets()) {
+      if (ws !== excludeWs) try { ws.send(txt); } catch (_) {}
+    }
+  }
+}
+// ────────────────────────────────────────────────────────────────────────────────

@@ -1,3 +1,79 @@
+  // ── 实时共享房间（Durable Objects WebSocket）────────────────────────────────────
+  let _room = null;           // 当前 WebSocket 连接
+  let _roomKey = null;        // 当前连接的日期 key（"MM-DD"）
+  let _roomReactions = {};    // 从服务端同步来的点赞数 {photoKey: count}
+
+  function _joinRoom(dateKey) {
+    if (_room) { try { _room.close(1000); } catch (_) {} }
+    _roomKey = dateKey;
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${proto}//${location.host}/api/room/${dateKey}`);
+    _room = ws;
+    ws.onmessage = (e) => {
+      try { _handleRoomMsg(JSON.parse(e.data)); } catch (_) {}
+    };
+    ws.onclose = () => {
+      if (_roomKey === dateKey) setTimeout(() => _joinRoom(dateKey), 4000);
+    };
+    ws.onerror = () => {};
+  }
+
+  function _handleRoomMsg(msg) {
+    if (msg.type === 'init') {
+      _roomReactions = msg.reactions || {};
+      _updateBadge(msg.count);
+      _syncAllCounts();
+    } else if (msg.type === 'users') {
+      _updateBadge(msg.count);
+    } else if (msg.type === 'react') {
+      _roomReactions[msg.key] = msg.count;
+      _syncCount(msg.key, msg.count, true);
+    }
+  }
+
+  function _updateBadge(count) {
+    const badge = document.getElementById('onlineBadge');
+    if (!badge) return;
+    badge.style.display = count > 1 ? '' : 'none';
+    const el = document.getElementById('onlineCount');
+    if (el) el.textContent = count;
+  }
+
+  function _syncAllCounts() {
+    document.querySelectorAll('.react-btn[data-key]').forEach(btn => {
+      const n = _roomReactions[btn.dataset.key] || 0;
+      const span = btn.querySelector('.react-cnt');
+      if (span) span.textContent = n > 0 ? n : '';
+    });
+  }
+
+  function _syncCount(key, count, animate) {
+    document.querySelectorAll(`.react-btn[data-key="${CSS.escape(key)}"]`).forEach(btn => {
+      const span = btn.querySelector('.react-cnt');
+      if (span) span.textContent = count > 0 ? count : '';
+      if (animate) _floatHeart(btn);
+    });
+  }
+
+  function _floatHeart(anchor) {
+    const el = document.createElement('span');
+    el.className = 'float-heart';
+    el.textContent = '❤️';
+    anchor.parentElement.appendChild(el);
+    el.addEventListener('animationend', () => el.remove(), { once: true });
+  }
+
+  window.doReact = function(btn) {
+    const key = btn.dataset.key;
+    if (!key) return;
+    if (_room && _room.readyState === WebSocket.OPEN) {
+      _room.send(JSON.stringify({ type: 'react', key }));
+    }
+    // 乐观本地动画，服务端广播回来后再更新计数
+    _floatHeart(btn);
+  };
+  // ────────────────────────────────────────────────────────────────────────────────
+
   // ── 禁止页面缩放 ──────────────────────────────────────────────────────────────
   // iOS Safari 10+ 忽略 viewport user-scalable=no，需要 JS 多层拦截。
   // lightbox 内允许捏合查看图片细节，其余区域全部阻断。
@@ -656,6 +732,7 @@
 
       const apply = () => {
         document.getElementById('title').innerHTML = '<span class="date">' + data.month + '月' + data.day + '日</span>，那些年的此刻';
+        _joinRoom(data.month + '-' + data.day);
 
         if (!data.years.length) {
           subtitle.textContent = '这一天，还没有故事';
@@ -762,15 +839,15 @@
             // 不再传 h= + fit=cover 强制裁成正方形——只限宽，fit=scale-down 按原图比例缩放，不裁内容
             const thumbSrc = p.url.replace('/img/', '/thumb/') + '?w=' + thumbW + '&q=75&fit=scale-down';
             if (p.type === 'video') {
-              return `<div class="cell${extraClass}" style="${style}" onclick="openLightbox(${flatIndex}, false)"><div class="frame-inner"><video data-src="${escAttr(p.url)}#t=0.5" muted loop preload="metadata" onloadeddata="this.classList.add('loaded')" onmouseenter="this.play().catch(()=>{})" onmouseleave="this.pause();this.currentTime=0.5"></video></div><span class="play-badge">▶ 视频</span><span class="frame-year">${y.year}</span></div>`;
+              return `<div class="cell${extraClass}" style="${style}" onclick="openLightbox(${flatIndex}, false)"><div class="frame-inner"><video data-src="${escAttr(p.url)}#t=0.5" muted loop preload="metadata" onloadeddata="this.classList.add('loaded')" onmouseenter="this.play().catch(()=>{})" onmouseleave="this.pause();this.currentTime=0.5"></video></div><span class="play-badge">▶ 视频</span><span class="frame-year">${y.year}</span><button class="react-btn" data-key="${escAttr(p.key)}" onclick="event.stopPropagation();doReact(this)">❤️<span class="react-cnt">${_roomReactions[p.key] > 0 ? _roomReactions[p.key] : ''}</span></button></div>`;
             }
             if (p.type === 'live') {
               // Live Photo 缩略图：默认显示静态图，悬浮（桌面）/长按（移动端）才播放配对的短视频
               // 网格缩略图上不展示 Live Photo 图标——放大（点开灯箱）才提示，网格里看起来就是张普通照片，
               // 悬浮照样会播放配对视频，算是个不张扬的小彩蛋
-              return `<div class="cell${extraClass}" style="${style}" onclick="openLightbox(${flatIndex}, false)"><div class="frame-inner live-photo-cell" onmouseenter="this.classList.add('playing');const v=this.querySelector('video');v.currentTime=0;v.play().catch(()=>{})" onmouseleave="this.classList.remove('playing');this.querySelector('video').pause()" ontouchstart="livePhotoTouchStart(this,event)" ontouchend="livePhotoTouchEnd(this,event)" ontouchcancel="livePhotoTouchEnd(this,event)"><img src="${escAttr(thumbSrc)}" data-src="${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.onerror=null;scheduleImageRetry(this,this.src,this.dataset.src)" /><video src="${p.videoUrl}" loop preload="none" class="cell-live-video"></video></div><span class="frame-year">${y.year}</span></div>`;
+              return `<div class="cell${extraClass}" style="${style}" onclick="openLightbox(${flatIndex}, false)"><div class="frame-inner live-photo-cell" onmouseenter="this.classList.add('playing');const v=this.querySelector('video');v.currentTime=0;v.play().catch(()=>{})" onmouseleave="this.classList.remove('playing');this.querySelector('video').pause()" ontouchstart="livePhotoTouchStart(this,event)" ontouchend="livePhotoTouchEnd(this,event)" ontouchcancel="livePhotoTouchEnd(this,event)"><img src="${escAttr(thumbSrc)}" data-src="${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.onerror=null;scheduleImageRetry(this,this.src,this.dataset.src)" /><video src="${p.videoUrl}" loop preload="none" class="cell-live-video"></video></div><span class="frame-year">${y.year}</span><button class="react-btn" data-key="${escAttr(p.key)}" onclick="event.stopPropagation();doReact(this)">❤️<span class="react-cnt">${_roomReactions[p.key] > 0 ? _roomReactions[p.key] : ''}</span></button></div>`;
             }
-            return `<div class="cell${extraClass}" style="${style}" onclick="openLightbox(${flatIndex}, false)"><div class="frame-inner"><img src="${escAttr(thumbSrc)}" data-src="${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.onerror=null;scheduleImageRetry(this,this.src,this.dataset.src)" /></div><span class="frame-year">${y.year}</span></div>`;
+            return `<div class="cell${extraClass}" style="${style}" onclick="openLightbox(${flatIndex}, false)"><div class="frame-inner"><img src="${escAttr(thumbSrc)}" data-src="${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.onerror=null;scheduleImageRetry(this,this.src,this.dataset.src)" /></div><span class="frame-year">${y.year}</span><button class="react-btn" data-key="${escAttr(p.key)}" onclick="event.stopPropagation();doReact(this)">❤️<span class="react-cnt">${_roomReactions[p.key] > 0 ? _roomReactions[p.key] : ''}</span></button></div>`;
           }).join('');
           const showMoreBtn = extraCount > 0
             ? `<button class="show-more-btn" data-total="${y.photos.length}" onclick="toggleShowMore(this)">展开查看全部 ${y.photos.length} 张 ›</button>`
