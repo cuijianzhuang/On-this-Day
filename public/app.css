@@ -458,7 +458,7 @@
     position: relative;
   }
   .lightbox-stage img, .lightbox-stage video {
-    max-width: calc(100vw - 280px - 7rem);
+    max-width: calc(100vw - 340px - 7rem);
     max-height: calc(100dvh - 68px - 5rem);
     border-radius: 10px; display: block;
     object-fit: contain;
@@ -480,20 +480,28 @@
 
   /* 侧边信息面板 */
   .lightbox-panel {
-    width: 280px; flex-shrink: 0;
-    background: rgba(12,12,14,0.65); backdrop-filter: blur(22px) saturate(1.3);
+    width: 340px; flex-shrink: 0;
+    background: rgba(10,10,12,0.82); backdrop-filter: blur(22px) saturate(1.3);
     border-left: 1px solid rgba(255,255,255,0.07);
     overflow-y: auto; scrollbar-width: none;
     display: flex; flex-direction: column;
-    touch-action: auto; /* restore normal touch for buttons */
+    touch-action: auto;
   }
   .lightbox-panel::-webkit-scrollbar { display: none; }
-  .lp-filename {
-    padding: 1.1rem 1.2rem 0.5rem; font-size: 0.7rem;
-    color: #5a5a5e; font-family: 'Space Grotesk', monospace;
-    word-break: break-all; letter-spacing: 0.02em;
+
+  /* 文件标题区 */
+  .lp-filename { padding: 1.2rem 1.2rem 0.75rem; }
+  .lp-photo-title {
+    font-size: 0.92rem; font-weight: 600; color: #e8e8ec;
+    word-break: break-all; line-height: 1.4; margin-bottom: 0.35rem;
   }
-  .lp-reactions { padding: 0.5rem 1.1rem 0.9rem; border-bottom: 1px solid rgba(255,255,255,0.07); }
+  .lp-photo-caption {
+    font-size: 0.76rem; color: #8a8a8f; line-height: 1.55;
+    font-style: italic;
+  }
+
+  /* emoji 反应条 */
+  .lp-reactions { padding: 0 1.1rem 0.9rem; border-bottom: 1px solid rgba(255,255,255,0.07); }
   .lp-emoji-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.4rem; }
   .lp-emoji-btn {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -510,36 +518,72 @@
   .lp-emoji-btn.pop { animation: emojiPop 0.3s cubic-bezier(0.34,1.56,0.64,1); }
   @keyframes emojiPop { 0%,100%{transform:scale(1)} 50%{transform:scale(1.35)} }
   .lp-emoji-cnt { font-size: 0.6rem; font-family: 'Space Grotesk', sans-serif; color: #8a8a8f; line-height: 1; min-height: 0.7rem; }
-  .lp-section {
-    padding: 0.85rem 1.2rem;
+
+  /* 信息区（取消 lp-section 默认 padding，由内部元素各自控制） */
+  #lpInfo, #lpExif { padding: 0; border-bottom: none; }
+  .lp-section { padding: 0; border-bottom: none; display: block; }
+
+  /* 小地图 */
+  .lp-mini-map {
+    width: 100%; aspect-ratio: 2/1; overflow: hidden;
+    border-top: 1px solid rgba(255,255,255,0.07);
     border-bottom: 1px solid rgba(255,255,255,0.07);
-    display: flex; flex-direction: column; gap: 0.45rem;
   }
-  .lp-section:last-child { border-bottom: none; flex: 1; }
-  .lp-row { display: flex; align-items: baseline; gap: 0.5rem; }
+  .lp-mini-map img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+  /* 区段标题 */
+  .lp-section-title {
+    font-size: 0.6rem; font-weight: 600; letter-spacing: 0.16em;
+    text-transform: uppercase; color: #48484e;
+    font-family: 'Space Grotesk', sans-serif;
+    padding: 0.85rem 1.2rem 0.35rem;
+    border-top: 1px solid rgba(255,255,255,0.06);
+  }
+  #lpInfo .lp-section-title:first-of-type,
+  #lpExif .lp-section-title:first-of-type { border-top: none; }
+
+  /* 信息表格 */
+  .lp-info-table { padding: 0 1.2rem 0.7rem; }
+  .lp-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    gap: 0.5rem; padding: 0.25rem 0;
+    border-bottom: 1px solid rgba(255,255,255,0.035);
+  }
+  .lp-row:last-child { border-bottom: none; }
   .lp-label {
-    font-size: 0.62rem; color: #5a5a5e; text-transform: uppercase;
-    letter-spacing: 0.1em; font-family: 'Space Grotesk', sans-serif;
-    flex-shrink: 0; min-width: 52px;
+    font-size: 0.62rem; color: #48484e; text-transform: none;
+    letter-spacing: 0; font-family: 'Space Grotesk', sans-serif;
+    flex-shrink: 0; white-space: nowrap;
   }
-  .lp-value { font-size: 0.78rem; color: #c7c7cc; line-height: 1.4; }
-  .lp-ai-text {
-    font-size: 0.78rem; color: #9a9a9f; font-style: italic; line-height: 1.55;
-    margin-top: 0.3rem;
+  .lp-value { font-size: 0.76rem; color: #c7c7cc; line-height: 1.5; text-align: right; word-break: break-all; }
+  .lp-mono { font-family: 'Space Grotesk', monospace; letter-spacing: 0.02em; }
+  .lp-small { font-size: 0.68rem; }
+  .lp-exif-loading { font-size: 0.72rem; color: #444448; padding: 1rem 1.2rem; }
+
+  /* 直方图 */
+  .lp-histogram-wrap {
+    padding: 0.2rem 1.2rem 0.75rem;
+    background: rgba(0,0,0,0.3); border-radius: 0;
   }
-  .lp-exif-loading { font-size: 0.72rem; color: #444448; padding: 0.5rem 0; }
-  .lp-camera-name { font-size: 0.82rem; color: #d6d6da; font-weight: 500; margin-bottom: 0.3rem; }
-  body.sun-on .lightbox-panel { background: rgba(235,235,240,0.8); border-left-color: rgba(0,0,0,0.07); }
-  body.sun-on .lp-filename { color: #7a7a80; }
+  .lp-histogram {
+    width: 100%; height: auto; display: block; border-radius: 4px;
+    background: rgba(0,0,0,0.45);
+  }
+
+  /* 日照模式覆盖 */
+  body.sun-on .lightbox-panel { background: rgba(230,232,237,0.92); border-left-color: rgba(0,0,0,0.07); }
+  body.sun-on .lp-photo-title { color: #1c1c1e; }
+  body.sun-on .lp-photo-caption { color: #6e6e73; }
   body.sun-on .lp-reactions { border-color: rgba(0,0,0,0.07); }
   body.sun-on .lp-emoji-btn { background: rgba(0,0,0,0.05); border-color: rgba(0,0,0,0.08); color: #3a3a3c; }
   body.sun-on .lp-emoji-btn:hover { background: rgba(0,0,0,0.1); }
   body.sun-on .lp-emoji-cnt { color: #6e6e73; }
-  body.sun-on .lp-section { border-color: rgba(0,0,0,0.07); }
+  body.sun-on .lp-section-title { color: #8a8a90; border-color: rgba(0,0,0,0.07); }
+  body.sun-on .lp-row { border-color: rgba(0,0,0,0.05); }
   body.sun-on .lp-label { color: #8a8a90; }
   body.sun-on .lp-value { color: #3a3a3c; }
-  body.sun-on .lp-ai-text { color: #5a5a5e; }
-  body.sun-on .lp-camera-name { color: #1c1c1e; }
+  body.sun-on .lp-mini-map { border-color: rgba(0,0,0,0.07); }
+  body.sun-on .lp-histogram-wrap { background: rgba(0,0,0,0.08); }
 
   /* 缩放状态游标 */
   #lightboxBody { display: flex; align-items: center; justify-content: center; }
