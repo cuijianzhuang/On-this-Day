@@ -1,0 +1,37 @@
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #000; color: #f5f5f7;
+    font-family: "SF Pro Display", -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+  }
+  #map { position: fixed; inset: 0; }
+  .back-btn {
+    position: absolute; top: 1.3rem; left: 1.4rem; z-index: 5;
+    width: 36px; height: 36px; border-radius: 50%; border: none;
+    background: rgba(20,20,22,0.8); backdrop-filter: blur(10px); color: #f5f5f7;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    text-decoration: none; box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+  }
+  .back-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .map-empty {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 5;
+    color: #8a8a8f; font-size: 0.95rem; text-align: center; display: none;
+  }
+  .mapboxgl-popup-content {
+    position: relative; background: rgba(24,24,26,0.96); color: #f5f5f7; border-radius: 12px; padding: 0;
+    overflow: hidden; box-shadow: 0 12px 30px rgba(0,0,0,0.5);
+  }
+  .popup-photo { width: 180px; height: 180px; object-fit: cover; display: block; opacity: 0; transition: opacity 0.3s ease; }
+  .popup-photo.loaded { opacity: 1; }
+  .mapboxgl-popup-content::after {
+    content: ''; position: absolute; top: 90px; left: 90px; width: 26px; height: 26px;
+    margin: -13px 0 0 -13px; border-radius: 50%;
+    border: 3px solid rgba(255,143,126,0.25); border-top-color: #ff8f7e;
+    animation: spin 0.8s linear infinite;
+    opacity: 1; transition: opacity 0.25s ease;
+  }
+  .mapboxgl-popup-content:has(.popup-photo.loaded)::after { opacity: 0; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .popup-caption { padding: 0.5rem 0.7rem; font-size: 0.78rem; color: #c7c7cc; }
+  .mapboxgl-popup-close-button { color: #fff; font-size: 1.1rem; padding: 0.2rem 0.5rem; }
+  .mapboxgl-ctrl-attrib { font-size: 0.65rem; }

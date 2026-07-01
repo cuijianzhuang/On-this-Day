@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>那年今日</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/heic2any/dist/heic2any.min.js" defer></script>
+<link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+  <div class="sunlight">
+    <div class="glow"></div>
+    <div class="video-layer">
+      <video id="leafVideo" autoplay muted loop playsinline>
+        <source src="https://image.cuijianzhuang.com/leaves.mp4" type="video/mp4" />
+      </video>
+    </div>
+  </div>
+  <div class="sun-sweep" id="sunSweep"></div>
+  <header>
+    <div class="eyebrow">回忆 · Memories</div>
+    <h1 id="title">那年今日</h1>
+    <div class="subtitle" id="subtitle">正在唤醒回忆</div>
+    <div class="daily-poem" id="dailyPoem"></div>
+    <button class="play-memories" id="playMemories" title="播放回忆" disabled>
+      <svg id="playIconPlay" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z" stroke-linejoin="round"/></svg>
+      <svg id="playIconPause" viewBox="0 0 24 24" style="display:none"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+    </button>
+    <div class="header-controls">
+      <div class="sunlight-switch">
+        <span id="sunlightLabel">LET THE SUN IN</span>
+        <label class="switch">
+          <input type="checkbox" id="sunlightSwitch" checked />
+          <span class="track"></span>
+        </label>
+      </div>
+      <a class="date-toggle" href="/map" id="mapLink" title="看看拍照的地方">
+        <svg viewBox="0 0 24 24"><path d="M9 18l-5 2V4l5-2 6 2 5-2v16l-5 2-6-2z"/><line x1="9" y1="2" x2="9" y2="18"/><line x1="15" y1="4" x2="15" y2="20"/></svg>
+      </a>
+      <button class="date-toggle" id="yearToggle" title="跳到某一年" disabled>
+        <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><circle cx="8.2" cy="14" r="1.1" fill="currentColor" stroke="none"/><circle cx="12" cy="14" r="1.1" fill="currentColor" stroke="none"/><circle cx="15.8" cy="14" r="1.1" fill="currentColor" stroke="none"/></svg>
+      </button>
+      <button class="date-toggle" id="dateToggle" title="查看某一天">
+        <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/></svg>
+      </button>
+    </div>
+    <div class="year-menu" id="yearMenu"></div>
+    <audio id="ambientAudio" loop preload="none">
+      <source src="https://image.cuijianzhuang.com/forest.mp3" type="audio/mpeg" />
+    </audio>
+    <div class="date-picker" id="datePicker">
+      <div class="cal-header">
+        <button class="cal-nav-btn" id="calPrevMonth" type="button">‹</button>
+        <span class="cal-month-label" id="calMonthLabel"></span>
+        <button class="cal-nav-btn" id="calNextMonth" type="button">›</button>
+      </div>
+      <div class="cal-weekdays">
+        <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+      </div>
+      <div class="cal-grid" id="calGrid"></div>
+      <div class="row">
+        <a class="action-btn" id="datePickerToday" href="/">回到今天</a>
+      </div>
+    </div>
+  </header>
+  <div id="fingertip"></div>
+  <div id="cursorDot">
+    <span class="br tl"></span>
+    <span class="br tr"></span>
+    <span class="br bl"></span>
+    <span class="br brc"></span>
+    <span class="center-dot"></span>
+  </div>
+  <div id="content">
+    <div class="skeleton-grid">
+      <div class="cell" style="width:150px;--tilt-deg:-3;--sway-dur:4.0s;--sway-delay:0.0s;--enter-delay:0.00s;"><div class="frame-inner"></div></div>
+      <div class="cell" style="width:190px;--tilt-deg:-1.5;--sway-dur:4.7s;--sway-delay:0.5s;--enter-delay:0.05s;"><div class="frame-inner"></div></div>
+      <div class="cell" style="width:230px;--tilt-deg:0;--sway-dur:5.4s;--sway-delay:1.0s;--enter-delay:0.10s;"><div class="frame-inner"></div></div>
+      <div class="cell" style="width:170px;--tilt-deg:1.5;--sway-dur:6.1s;--sway-delay:1.5s;--enter-delay:0.15s;"><div class="frame-inner"></div></div>
+      <div class="cell" style="width:210px;--tilt-deg:3;--sway-dur:4.0s;--sway-delay:2.0s;--enter-delay:0.20s;"><div class="frame-inner"></div></div>
+    </div>
+  </div>
+
+  <div class="lightbox" id="lightbox">
+    <div class="lightbox-actions">
+      <a class="lightbox-btn" id="lightboxShare" title="分享">
+        <svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/><line x1="15.4" y1="6.5" x2="8.6" y2="10.5"/></svg>
+      </a>
+      <a class="lightbox-btn" id="lightboxDownload" title="下载">
+        <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+      </a>
+      <span class="lightbox-btn close" id="lightboxClose" title="关闭">
+        <svg viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+      </span>
+    </div>
+    <span class="lightbox-nav prev" id="navPrev">‹</span>
+    <span class="lightbox-nav next" id="navNext">›</span>
+    <div class="lightbox-stage">
+      <div id="lightboxBody"></div>
+      <div class="lightbox-caption" id="lightboxCaption"></div>
+      <div class="lightbox-ai-caption" id="lightboxAiCaption"></div>
+    </div>
+  </div>
+  <div class="toast" id="toast"></div>
+  <button class="back-to-top" id="backToTop" title="回到顶部">
+    <svg viewBox="0 0 24 24"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+  </button>
+
+<script src="/app.js" defer></script>
+</body>
+</html>
