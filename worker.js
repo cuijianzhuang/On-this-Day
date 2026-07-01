@@ -122,6 +122,10 @@ export default {
       return handleExif(request, env, url);
     }
 
+    if (url.pathname === "/api/static-map") {
+      return handleStaticMap(request, env, url);
+    }
+
     if (url.pathname === "/api/poem") {
       return handlePoem(request, env, url);
     }
@@ -901,10 +905,88 @@ function parseExifForDisplay(buf) {
       const ph = ifdEntry(exifIfd, 0xA003); // PixelYDimension
       if (pw >= 0) result.width = u32(pw + 8);
       if (ph >= 0) result.height = u32(ph + 8);
+
+      // Extended EXIF tags
+      const dtE = ifdEntry(exifIfd, 0x9003); // DateTimeOriginal
+      if (dtE >= 0) result.dateTime = readAscii(dtE);
+
+      const csE = ifdEntry(exifIfd, 0xA001); // ColorSpace (1=sRGB)
+      if (csE >= 0) result.colorSpace = readShort(csE) === 1 ? 'sRGB' : 'uncalibrated';
+
+      const wbE = ifdEntry(exifIfd, 0xA403); // WhiteBalance (0=auto, 1=manual)
+      if (wbE >= 0) result.whiteBalance = readShort(wbE);
+
+      const epE = ifdEntry(exifIfd, 0x8822); // ExposureProgram
+      if (epE >= 0) result.exposureProgram = readShort(epE);
+
+      const mmE = ifdEntry(exifIfd, 0x9207); // MeteringMode
+      if (mmE >= 0) result.meteringMode = readShort(mmE);
+
+      const flashE = ifdEntry(exifIfd, 0x9209); // Flash
+      if (flashE >= 0) result.flash = readShort(flashE);
+
+      const maxAptE = ifdEntry(exifIfd, 0x9205); // MaxApertureValue (APEX rational)
+      if (maxAptE >= 0) {
+        const apex = readRational(maxAptE);
+        if (apex !== null) result.maxAperture = +(Math.pow(2, apex / 2).toFixed(2));
+      }
+
+      const sctE = ifdEntry(exifIfd, 0xA406); // SceneCaptureType
+      if (sctE >= 0) result.sceneCaptureType = readShort(sctE);
     }
     // Fallback dims from IFD0
     if (!result.width && wE >= 0) result.width = u32(wE + 8);
     if (!result.height && hE >= 0) result.height = u32(hE + 8);
+
+    // GPS IFD
+    const gpsPtrE = ifdEntry(ifd0, 0x8825);
+    if (gpsPtrE >= 0) {
+      const gpsOff = tiffStart + u32(gpsPtrE + 8);
+      if (gpsOff + 2 < buf.length) {
+        function readRationalArr(e, count) {
+          const off = tiffStart + u32(e + 8);
+          const out = [];
+          for (let k = 0; k < count; k++) {
+            const base = off + k * 8;
+            if (base + 7 >= buf.length) break;
+            const n = u32(base), d = u32(base + 4);
+            out.push(d ? n / d : 0);
+          }
+          return out;
+        }
+        const latRefE = ifdEntry(gpsOff, 0x0001);
+        const latGE  = ifdEntry(gpsOff, 0x0002);
+        const lngRefE = ifdEntry(gpsOff, 0x0003);
+        const lngGE  = ifdEntry(gpsOff, 0x0004);
+        if (latGE >= 0 && lngGE >= 0) {
+          const la = readRationalArr(latGE, 3);
+          const ln = readRationalArr(lngGE, 3);
+          if (la.length === 3 && ln.length === 3) {
+            const latDeg = la[0] + la[1] / 60 + la[2] / 3600;
+            const lngDeg = ln[0] + ln[1] / 60 + ln[2] / 3600;
+            const latRef = latRefE >= 0 ? readAscii(latRefE) : 'N';
+            const lngRef = lngRefE >= 0 ? readAscii(lngRefE) : 'E';
+            result.lat = latRef.startsWith('S') ? -latDeg : latDeg;
+            result.lng = lngRef.startsWith('W') ? -lngDeg : lngDeg;
+            function toDMS(v, posC, negC) {
+              const a = Math.abs(v), d = Math.floor(a);
+              const mt = (a - d) * 60, m = Math.floor(mt);
+              const s = ((mt - m) * 60).toFixed(2);
+              return `${d}°${m}'${s}"${v >= 0 ? posC : negC}`;
+            }
+            result.latDMS = toDMS(result.lat, 'N', 'S');
+            result.lngDMS = toDMS(result.lng, 'E', 'W');
+          }
+        }
+        const altRefE = ifdEntry(gpsOff, 0x0005);
+        const altGE  = ifdEntry(gpsOff, 0x0006);
+        if (altGE >= 0) {
+          const alt = readRational(altGE);
+          const sign = (altRefE >= 0 && buf[altRefE + 8] === 1) ? -1 : 1;
+          if (alt !== null) result.altitude = Math.round(alt * sign);
+        }
+      }
+    }
 
     return Object.keys(result).length ? result : null;
   } catch {
@@ -919,12 +1001,36 @@ async function handleExif(request, env, url) {
   const obj = await env.PHOTOS.get(key, { range: { offset: 0, length: 65536 } });
   if (!obj) return new Response("Not Found", { status: 404 });
   const buf = new Uint8Array(await obj.arrayBuffer());
-  const exif = parseExifForDisplay(buf);
-  return new Response(JSON.stringify(exif || {}), {
+  const exif = parseExifForDisplay(buf) || {};
+  if (obj.size) exif.fileSize = obj.size;
+  return new Response(JSON.stringify(exif), {
     headers: {
       "content-type": "application/json",
       "cache-control": "public, max-age=86400, stale-while-revalidate=604800",
       "access-control-allow-origin": "*",
+    },
+  });
+}
+
+async function handleStaticMap(request, env, url) {
+  const lat = parseFloat(url.searchParams.get("lat"));
+  const lng = parseFloat(url.searchParams.get("lng"));
+  if (!isFinite(lat) || !isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    return new Response("Bad Request", { status: 400 });
+  }
+  const token = env.MAPBOX_PUBLIC_TOKEN;
+  if (!token) return new Response("Not configured", { status: 503 });
+  const mapUrl =
+    `https://api.mapbox.com/styles/v1/mapbox/dark-v11/static/` +
+    `pin-s+e84a3a(${lng.toFixed(6)},${lat.toFixed(6)})/` +
+    `${lng.toFixed(6)},${lat.toFixed(6)},13,0/` +
+    `320x160@2x?access_token=${token}`;
+  const resp = await fetch(mapUrl);
+  if (!resp.ok) return new Response("Map unavailable", { status: 502 });
+  return new Response(resp.body, {
+    headers: {
+      "content-type": resp.headers.get("content-type") || "image/png",
+      "cache-control": "public, max-age=86400, stale-while-revalidate=604800",
     },
   });
 }

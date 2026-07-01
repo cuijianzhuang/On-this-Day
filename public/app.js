@@ -293,6 +293,17 @@
 
   // 拼 HTML 字符串时用来转义属性值，避免文件名/路径里万一带了引号之类的字符把属性或内嵌脚本弄断
   function escAttr(s) { return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;'); }
+  function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function _formatFileSize(b) {
+    if (b < 1024) return b + ' B';
+    if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+    return (b / 1048576).toFixed(2) + ' MB';
+  }
+  function _formatExifDate(dt) {
+    if (!dt) return '';
+    // "YYYY:MM:DD HH:MM:SS" → "YYYY/MM/DD HH:MM"
+    return dt.slice(0, 10).replace(/:/g, '/') + ' ' + dt.slice(11, 16);
+  }
 
   // 缩略图第一次加载失败，先按 5s/15s/45s 退避重试原来的 /thumb/ 链接几次（破一下缓存强制重新请求）——
   // 很多裂图只是服务端转码/边缘缓存这会儿还没跟上，过一会儿自己就好了，不用等用户手动刷新整页。
@@ -562,6 +573,48 @@
 
   const EMOJI_LIST = ['👍','❤️','😍','😂','😮','😢','🔥','✨'];
 
+  function _renderHistogram(canvas) {
+    const img = lightboxBody.querySelector('img');
+    if (!img) return;
+    function draw() {
+      try {
+        const SIZE = 200;
+        const oc = document.createElement('canvas');
+        const sc = Math.min(SIZE / img.naturalWidth, SIZE / img.naturalHeight, 1);
+        oc.width = Math.max(1, Math.round(img.naturalWidth * sc));
+        oc.height = Math.max(1, Math.round(img.naturalHeight * sc));
+        const cx2 = oc.getContext('2d', { willReadFrequently: true });
+        cx2.drawImage(img, 0, 0, oc.width, oc.height);
+        const px = cx2.getImageData(0, 0, oc.width, oc.height).data;
+        const r = new Float32Array(256), g = new Float32Array(256), b = new Float32Array(256);
+        for (let i = 0; i < px.length; i += 4) { r[px[i]]++; g[px[i+1]]++; b[px[i+2]]++; }
+        let maxV = 0;
+        for (let i = 0; i < 256; i++) maxV = Math.max(maxV, r[i], g[i], b[i]);
+        if (!maxV) return;
+        const ctx = canvas.getContext('2d');
+        const W = canvas.width, H = canvas.height;
+        ctx.clearRect(0, 0, W, H);
+        function ch(counts, color) {
+          ctx.beginPath();
+          ctx.moveTo(0, H);
+          for (let i = 0; i <= 255; i++) {
+            const x = (i / 255) * W, y = H - (counts[i] / maxV) * H;
+            i === 0 ? ctx.lineTo(x, H) : ctx.lineTo(x, y);
+          }
+          ctx.lineTo(W, H);
+          ctx.closePath();
+          ctx.fillStyle = color;
+          ctx.fill();
+        }
+        ch(r, 'rgba(235,60,60,0.6)');
+        ch(g, 'rgba(50,185,50,0.55)');
+        ch(b, 'rgba(60,100,235,0.6)');
+      } catch (_) { canvas.style.display = 'none'; }
+    }
+    if (img.complete && img.naturalWidth > 0) draw();
+    else img.addEventListener('load', draw, { once: true });
+  }
+
   function _renderLightboxReactions(key) {
     const el = document.getElementById('lpReactions');
     if (!el) return;
@@ -586,36 +639,105 @@
 
   function _renderLightboxInfo(p) {
     const filenameEl = document.getElementById('lpFilename');
-    if (filenameEl) filenameEl.textContent = p.key.split('/').pop();
+    if (filenameEl) {
+      const name = p.key.split('/').pop().replace(/\.[^.]+$/, '');
+      filenameEl.innerHTML =
+        `<div class="lp-photo-title">${escHtml(name)}</div>` +
+        (p.caption ? `<div class="lp-photo-caption">${escHtml(p.caption)}</div>` : '');
+    }
 
     const infoEl = document.getElementById('lpInfo');
     if (!infoEl) return;
-    const rows = [];
-    rows.push(`<div class="lp-row"><span class="lp-label">年份</span><span class="lp-value">${p.year} 年</span></div>`);
-    if (p.place) rows.push(`<div class="lp-row"><span class="lp-label">地点</span><span class="lp-value">${p.place}</span></div>`);
-    if (p.caption) rows.push(`<div class="lp-ai-text">${p.caption}</div>`);
-    infoEl.innerHTML = rows.join('');
+    const filename = p.key.split('/').pop();
+    const rows = [
+      `<div class="lp-row"><span class="lp-label">文件名</span><span class="lp-value lp-mono lp-small">${escHtml(filename)}</span></div>`,
+      `<div class="lp-row"><span class="lp-label">年份</span><span class="lp-value">${escHtml(p.year)} 年</span></div>`,
+    ];
+    if (p.place) rows.push(`<div class="lp-row"><span class="lp-label">地点</span><span class="lp-value">${escHtml(p.place)}</span></div>`);
+    infoEl.innerHTML =
+      '<div id="lpMapPlaceholder"></div>' +
+      '<div class="lp-section-title">基本信息</div>' +
+      '<div class="lp-info-table" id="lpBasicTable">' + rows.join('') + '</div>';
   }
 
-  function _renderLightboxExif(exif) {
+  function _renderLightboxExif(exif, p) {
     const el = document.getElementById('lpExif');
     if (!el) return;
     if (!exif || Object.keys(exif).length === 0) { el.innerHTML = ''; return; }
-    const rows = [];
-    if (exif.make || exif.model) {
-      const cam = [exif.make, exif.model].filter(Boolean).join(' ');
-      rows.push(`<div class="lp-camera-name">${cam}</div>`);
+
+    // Mini map (GPS)
+    if (exif.lat !== undefined && exif.lng !== undefined) {
+      const slot = document.getElementById('lpMapPlaceholder');
+      if (slot) slot.innerHTML = `<div class="lp-mini-map"><img src="/api/static-map?lat=${exif.lat.toFixed(6)}&lng=${exif.lng.toFixed(6)}" alt="拍摄地点" loading="lazy" onerror="this.parentElement.remove()" /></div>`;
     }
-    if (exif.lens) rows.push(`<div class="lp-row"><span class="lp-label">镜头</span><span class="lp-value">${exif.lens}</span></div>`);
-    const params = [];
-    if (exif.focalLength35) params.push(exif.focalLength35 + 'mm');
-    else if (exif.focalLength) params.push(exif.focalLength.toFixed(1) + 'mm');
-    if (exif.aperture) params.push('f/' + exif.aperture.toFixed(1));
-    if (exif.shutterSpeed) params.push(_formatShutter(exif.shutterSpeed));
-    if (exif.iso) params.push('ISO ' + exif.iso);
-    if (params.length) rows.push(`<div class="lp-row"><span class="lp-label">参数</span><span class="lp-value">${params.join('  ')}</span></div>`);
-    if (exif.width && exif.height) rows.push(`<div class="lp-row"><span class="lp-label">分辨率</span><span class="lp-value">${exif.width} × ${exif.height}</span></div>`);
-    el.innerHTML = rows.join('');
+
+    // Append extra rows to 基本信息
+    const basicTable = document.getElementById('lpBasicTable');
+    if (basicTable) {
+      const extras = [];
+      if (exif.fileSize) extras.push(['文件大小', _formatFileSize(exif.fileSize)]);
+      if (exif.width && exif.height) {
+        extras.push(['分辨率', `${exif.width} × ${exif.height}`]);
+        extras.push(['像素', `${(exif.width * exif.height / 1e6).toFixed(2)} MP`]);
+      }
+      if (exif.dateTime) extras.push(['拍摄时间', _formatExifDate(exif.dateTime)]);
+      if (exif.colorSpace) extras.push(['色彩空间', exif.colorSpace]);
+      if (exif.latDMS) extras.push(['纬度', exif.latDMS]);
+      if (exif.lngDMS) extras.push(['经度', exif.lngDMS]);
+      if (exif.altitude !== undefined) extras.push(['海拔', `${exif.altitude} m`]);
+      for (const [lbl, val] of extras) {
+        const div = document.createElement('div');
+        div.className = 'lp-row';
+        div.innerHTML = `<span class="lp-label">${lbl}</span><span class="lp-value">${escHtml(String(val))}</span>`;
+        basicTable.appendChild(div);
+      }
+    }
+
+    // Helper for section HTML
+    function sec(title, rows) {
+      return `<div class="lp-section-title">${title}</div><div class="lp-info-table">${rows.map(([l,v,cls]) => `<div class="lp-row"><span class="lp-label">${l}</span><span class="lp-value${cls?' '+cls:''}">${escHtml(String(v))}</span></div>`).join('')}</div>`;
+    }
+
+    let html = '';
+
+    // 拍摄参数
+    const shotRows = [];
+    if (exif.focalLength35) shotRows.push(['焦距', exif.focalLength35 + ' mm']);
+    else if (exif.focalLength) shotRows.push(['焦距', exif.focalLength.toFixed(1) + ' mm']);
+    if (exif.aperture) shotRows.push(['光圈', 'f/' + exif.aperture.toFixed(1)]);
+    if (exif.shutterSpeed) shotRows.push(['曝光时间', _formatShutter(exif.shutterSpeed)]);
+    if (exif.iso) shotRows.push(['ISO', String(exif.iso)]);
+    if (shotRows.length) html += sec('拍摄参数', shotRows);
+
+    // 直方图
+    html += '<div class="lp-section-title">直方图</div><div class="lp-histogram-wrap"><canvas class="lp-histogram" id="lbHistogram" width="296" height="80"></canvas></div>';
+
+    // 设备信息
+    const devRows = [];
+    if (exif.make || exif.model) devRows.push(['相机', [exif.make, exif.model].filter(Boolean).join(' ')]);
+    if (exif.maxAperture) devRows.push(['最大光圈', 'f/' + exif.maxAperture.toFixed(2)]);
+    if (exif.focalLength) devRows.push(['焦距', exif.focalLength.toFixed(1) + ' mm']);
+    if (exif.focalLength35) devRows.push(['35mm 等效', exif.focalLength35 + ' mm']);
+    if (exif.lens) devRows.push(['镜头', exif.lens, 'lp-small']);
+    if (devRows.length) html += sec('设备信息', devRows);
+
+    // 拍摄模式
+    const EP_NAMES = ['不定义','手动','程序自动曝光','光圈优先','快门优先','创意模式','运动模式','人像模式','风景模式'];
+    const MM_NAMES = ['未知','平均','中央重点平均测光','点测光','多点测光','多区域测光','局部测光'];
+    const SCT_NAMES = ['标准','风景','人像','夜景'];
+    const modeRows = [];
+    if (exif.whiteBalance !== undefined) modeRows.push(['白平衡', exif.whiteBalance === 0 ? '自动' : '手动']);
+    if (exif.exposureProgram !== undefined) modeRows.push(['曝光程序', EP_NAMES[exif.exposureProgram] || '未知']);
+    if (exif.meteringMode !== undefined) modeRows.push(['测光模式', MM_NAMES[exif.meteringMode] || '未知']);
+    if (exif.flash !== undefined) modeRows.push(['闪光灯', (exif.flash & 1) ? '已闪光' : '关闭, 不闪光']);
+    if (exif.sceneCaptureType !== undefined) modeRows.push(['场景捕捉', SCT_NAMES[exif.sceneCaptureType] || '标准']);
+    if (modeRows.length) html += sec('拍摄模式', modeRows);
+
+    el.innerHTML = html;
+
+    // Render histogram after panel is in DOM
+    const histCanvas = document.getElementById('lbHistogram');
+    if (histCanvas) _renderHistogram(histCanvas);
   }
 
   function _formatShutter(seconds) {
@@ -634,8 +756,8 @@
     _exifAbort = ctrl;
     fetch('/api/exif?key=' + encodeURIComponent(p.key), { signal: ctrl.signal })
       .then(r => r.ok ? r.json() : null)
-      .then(exif => { if (!ctrl.signal.aborted) _renderLightboxExif(exif); })
-      .catch(() => { if (el) el.innerHTML = ''; });
+      .then(exif => { if (!ctrl.signal.aborted) _renderLightboxExif(exif, p); })
+      .catch(() => { const el2 = document.getElementById('lpExif'); if (el2) el2.innerHTML = ''; });
   }
 
   function _renderFilmstrip(activeIndex) {
