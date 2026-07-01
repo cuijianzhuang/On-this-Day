@@ -414,7 +414,7 @@
   .lightbox-stage {
     flex: 1; display: flex; align-items: center; justify-content: center;
     min-height: 0; padding: 2.5rem 3.5rem;
-    position: relative;
+    position: relative; overflow: hidden;
   }
   .lightbox-stage img, .lightbox-stage video {
     max-width: calc(100vw - 340px - 7rem);
@@ -552,7 +552,7 @@
   body.sun-on .lp-histogram-wrap { background: rgba(0,0,0,0.08); }
 
   /* 缩放状态游标 */
-  #lightboxBody { display: flex; align-items: center; justify-content: center; }
+  #lightboxBody { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
   #lightboxBody.zoomed { cursor: grab; }
   #lightboxBody.zoomed.panning { cursor: grabbing; }
   #lightboxBody img, #lightboxBody video { transition: opacity 0.4s ease, transform 0.4s ease; }
@@ -639,22 +639,43 @@
   .live-photo-wrap { position: relative; display: inline-block; cursor: pointer; }
   .live-photo-video {
     position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
-    border-radius: 10px; opacity: 0; pointer-events: none;
+    border-radius: 10px; opacity: 0; pointer-events: none; transition: opacity 0.3s ease;
   }
   .live-photo-wrap.playing .live-photo-video { opacity: 1; }
   .live-photo-wrap.playing img { opacity: 0; }
+  /* 实况照片角标：始终可见（低不透明度），播放时高亮 + 图标脉冲 */
   .live-photo-badge {
-    position: absolute; top: 0.8rem; left: 50%; transform: translateX(-50%);
-    display: flex; align-items: center; gap: 0.4rem; color: #fff; font-size: 0.78rem;
-    letter-spacing: 0.03em; text-shadow: 0 1px 3px rgba(0,0,0,0.6); pointer-events: none;
-    opacity: 0; transition: opacity 0.3s ease;
+    position: absolute; top: 0.7rem; left: 0.8rem;
+    display: flex; align-items: center; gap: 0.35rem;
+    padding: 0.22rem 0.55rem 0.22rem 0.42rem; border-radius: 999px;
+    background: rgba(0,0,0,0.42); backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.16);
+    color: rgba(255,255,255,0.88); font-size: 0.7rem; font-weight: 500;
+    letter-spacing: 0.05em; font-family: 'Space Grotesk', sans-serif;
+    pointer-events: none; user-select: none;
+    opacity: 0.82; transition: opacity 0.3s ease;
   }
-  .live-photo-wrap:hover .live-photo-badge, .live-photo-wrap.playing .live-photo-badge { opacity: 1; }
-  .live-photo-icon {
-    width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid #fff;
-    border-top-color: transparent; box-sizing: border-box;
+  .live-photo-wrap.playing .live-photo-badge { opacity: 1; }
+  /* Apple Live Photo 图标：外圆 + 中心点 */
+  .lp-live-icon {
+    width: 13px; height: 13px; flex-shrink: 0; position: relative;
   }
-  .live-photo-wrap.playing .live-photo-icon { animation: spin 1.2s linear infinite; }
+  .lp-live-icon::before {
+    content: ''; position: absolute; inset: 0; border-radius: 50%;
+    border: 1.5px solid currentColor;
+  }
+  .lp-live-icon::after {
+    content: ''; position: absolute; top: 50%; left: 50%;
+    width: 5px; height: 5px; border-radius: 50%;
+    background: currentColor; transform: translate(-50%, -50%);
+  }
+  .live-photo-wrap.playing .lp-live-icon::before {
+    animation: lpRingPulse 1.4s ease-in-out infinite;
+  }
+  @keyframes lpRingPulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.4); opacity: 0.35; }
+  }
   .lightbox-actions {
     position: absolute; top: 1rem; right: 1rem; z-index: 52;
     display: flex; gap: 0.5rem; align-items: center;
