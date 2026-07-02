@@ -148,19 +148,18 @@
     }
   });
 
-  // 移动端放大后单指平移
+  // 移动端放大后单指平移（touchstart 只记录起点，不设 _cpanning，避免屏蔽双击检测）
   cardMedia.addEventListener('touchstart', (e) => {
     if (_cs > 1 && e.touches.length === 1) {
       e.preventDefault();
-      _cpanning = true;
-      cardMedia.classList.add('panning');
       _cpsx = e.touches[0].clientX; _cpsy = e.touches[0].clientY;
       _cptx0 = _ctx; _cpty0 = _cty;
     }
   }, { passive: false });
   cardMedia.addEventListener('touchmove', (e) => {
-    if (_cpanning && e.touches.length === 1) {
+    if (_cs > 1 && e.touches.length === 1) {
       e.preventDefault();
+      if (!_cpanning) { _cpanning = true; cardMedia.classList.add('panning'); }
       _ctx = _cptx0 + e.touches[0].clientX - _cpsx;
       _cty = _cpty0 + e.touches[0].clientY - _cpsy;
       _cClamp();
