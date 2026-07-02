@@ -790,6 +790,7 @@
     // 不然图片还没下载完就先淡入，看到的就是浏览器原生的"裂图"占位图标，等真实画面到了才覆盖上去
     const showWhenReady = (target) => requestAnimationFrame(() => requestAnimationFrame(() => target.classList.add('show')));
 
+    _lbIsLivePhoto = false;
     if (p.type === 'video') {
       const el = document.createElement('video');
       el.className = pickEffect();
@@ -865,6 +866,7 @@
       wrap.addEventListener('touchend', () => { if (!stickyPlay) stopLive(); });
 
       // 提示文字
+      _lbIsLivePhoto = true;
       const _hint = document.getElementById('lbZoomHint');
       if (_hint) {
         clearTimeout(_lbZoomHideTimer);
@@ -873,6 +875,7 @@
         _lbZoomHideTimer = setTimeout(() => { if (_hint) _hint.style.opacity = '0'; }, 3000);
       }
     } else {
+      _lbIsLivePhoto = false;
       const el = document.createElement('img');
       el.className = pickEffect();
       el.decoding = 'async';
@@ -971,6 +974,7 @@
   let _lbDragEndTime = 0;
   let _lbAnimating = false;
   let _currentBlobUrl = null;
+  let _lbIsLivePhoto = false;
 
   function _loadImgWithProgress(url, img, onReady, onError) {
     const progEl = document.getElementById('lbLoadProgress');
@@ -1060,7 +1064,7 @@
       clearTimeout(_lbZoomHideTimer);
       if (_lbScale > 1) {
         hint.style.opacity = '0';
-      } else {
+      } else if (!_lbIsLivePhoto) {
         hint.textContent = '双击或用鼠标滚轮缩放';
         hint.style.opacity = '1';
         _lbZoomHideTimer = setTimeout(() => { if (hint) hint.style.opacity = '0'; }, 2500);
@@ -1094,6 +1098,7 @@
     _lbTy += dy * (oldScale - newScale);
     _lbScale = newScale;
     if (_lbScale === 1) { _lbTx = 0; _lbTy = 0; }
+    _lbClamp();
     _lbApplyTransform();
   }, { passive: false });
 
