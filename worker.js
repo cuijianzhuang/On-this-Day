@@ -1285,18 +1285,22 @@ async function handleMemories(request, env, url, ctx) {
   const cachedResp = await cache.match(cacheKey);
   if (cachedResp) return cachedResp;
 
+  const includeLunar = url.searchParams.get("lunar") === "1";
+
   const matchedByYear = await matchPhotosForDay(env, month, day);
   // 只查这一天命中的那几十张照片，不用把整张 photo_scores/photo_places 表都读出来——
   // 这两张表是跟着整个库的年头一起涨的，按 key 过滤之后查询成本只跟"今天"的照片数挂钩
   const matchedKeys = matchedByYear.flatMap((y) => y.photos.map((p) => p.key));
 
-  // 农历同日：同一农历日在往年对应的公历日期，公历同日已出现的照片会被排除。
+  // 农历同日默认不查、不展示；只有前端开关传 lunar=1 时才计算，避免默认视图额外查库。
   // 出错不影响主内容（label 照常返回，段落为空）
   let lunar = null;
-  try {
-    lunar = await matchLunarPhotos(env, month, day, new Set(matchedKeys));
-  } catch (err) {
-    console.error("matchLunarPhotos failed", err);
+  if (includeLunar) {
+    try {
+      lunar = await matchLunarPhotos(env, month, day, new Set(matchedKeys));
+    } catch (err) {
+      console.error("matchLunarPhotos failed", err);
+    }
   }
   const lunarKeys = lunar ? lunar.years.flatMap((y) => y.photos.map((p) => p.key)) : [];
 
@@ -1939,14 +1943,54 @@ function parseExifForDisplay(buf) {
   }
 }
 
+async function readHeicExifForDisplay(bucket, key) {
+  const headObj = await bucket.get(key, { range: { offset: 0, length: 262144 } });
+  if (!headObj) return null;
+  const buf = new Uint8Array(await headObj.arrayBuffer());
+
+  const metaBox = findIsoBox(buf, 0, buf.length, "meta");
+  if (!metaBox) return null;
+  const metaContentStart = metaBox.contentStart + 4;
+
+  const iinfBox = findIsoBox(buf, metaContentStart, metaBox.contentEnd, "iinf");
+  const ilocBox = findIsoBox(buf, metaContentStart, metaBox.contentEnd, "iloc");
+  if (!iinfBox || !ilocBox) return null;
+
+  const exifItemId = findExifItemId(buf, iinfBox.contentStart, iinfBox.contentEnd);
+  if (exifItemId == null) return null;
+
+  const extent = findIlocExtent(buf, ilocBox.contentStart, ilocBox.contentEnd, exifItemId);
+  if (!extent || extent.length < 8) return null;
+
+  const exifObj = await bucket.get(key, { range: { offset: extent.offset, length: extent.length } });
+  if (!exifObj) return null;
+  const exifBuf = new Uint8Array(await exifObj.arrayBuffer());
+
+  // HEIC 的 Exif item 前 4 字节是 TIFF 头偏移；把 TIFF 切出来后复用展示页的 EXIF 解析器。
+  const tiffHeaderOffset = (exifBuf[0] << 24) | (exifBuf[1] << 16) | (exifBuf[2] << 8) | exifBuf[3];
+  const tiffStart = 4 + tiffHeaderOffset;
+  if (tiffStart < 0 || tiffStart + 8 > exifBuf.length) return null;
+  return parseExifForDisplay(exifBuf.slice(tiffStart));
+}
+
 async function handleExif(request, env, url) {
   const key = url.searchParams.get("key");
   if (!key || key.length > 500) return new Response("Bad Request", { status: 400 });
-  // 只读前 64KB 就够解析 EXIF（EXIF 段在文件头部）
-  const obj = await env.PHOTOS.get(key, { range: { offset: 0, length: 65536 } });
+
+  let obj = null;
+  let exif = {};
+  if (/\.heic$/i.test(key)) {
+    // HEIC 的 EXIF 不在普通图片头里，先按 ISOBMFF meta/iinf/iloc 找到 Exif item 再解析。
+    exif = (await readHeicExifForDisplay(env.PHOTOS, key)) || {};
+    obj = await env.PHOTOS.head(key);
+  } else {
+    // JPEG 的 EXIF 通常在文件头部，读一小段即可。
+    obj = await env.PHOTOS.get(key, { range: { offset: 0, length: 65536 } });
+    if (!obj) return new Response("Not Found", { status: 404 });
+    const buf = new Uint8Array(await obj.arrayBuffer());
+    exif = parseExifForDisplay(buf) || {};
+  }
   if (!obj) return new Response("Not Found", { status: 404 });
-  const buf = new Uint8Array(await obj.arrayBuffer());
-  const exif = parseExifForDisplay(buf) || {};
   if (obj.size) exif.fileSize = obj.size;
   return new Response(JSON.stringify(exif), {
     headers: {
@@ -2698,6 +2742,7 @@ async function purgeDayCache(month, day) {
   const cache = caches.default;
   const targets = [
     `${SITE_ORIGIN}/api/memories?month=${month}&day=${day}`,
+    `${SITE_ORIGIN}/api/memories?month=${month}&day=${day}&lunar=1`,
     `${SITE_ORIGIN}/api/map-photos?month=${month}&day=${day}`,
   ];
   const deleted = [];

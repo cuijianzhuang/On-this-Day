@@ -104,6 +104,26 @@
   .date-toggle:disabled { opacity: 0.35; cursor: default; }
   .date-toggle:disabled:hover { background: rgba(255,255,255,0.08); }
   .date-toggle svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+  .lunar-toggle {
+    height: 32px; border: none; border-radius: 999px;
+    display: flex; align-items: center; gap: 0.32rem;
+    padding: 0 0.72rem 0 0.58rem; flex-shrink: 0;
+    background: rgba(255,255,255,0.08); backdrop-filter: blur(10px);
+    color: #98989d; cursor: pointer; font-family: inherit;
+    font-size: 0.78rem; font-weight: 600; letter-spacing: 0.01em;
+    transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, transform 0.12s ease;
+  }
+  .lunar-toggle:hover { background: rgba(255,255,255,0.16); color: #f5f5f7; }
+  .lunar-toggle:active { transform: scale(0.96); }
+  .lunar-toggle.active {
+    color: #f7d778; background: rgba(201,185,138,0.14);
+    box-shadow: inset 0 0 0 1px rgba(201,185,138,0.24);
+  }
+  .lunar-toggle-moon { font-size: 0.86rem; line-height: 1; filter: saturate(1.15); }
+  body.sun-on .lunar-toggle { color: #5a5a5e; background: rgba(255,255,255,0.65); box-shadow: 0 2px 10px rgba(0,0,0,0.18); }
+  body.sun-on .lunar-toggle:hover { color: #1c1c1e; background: rgba(255,255,255,0.85); }
+  body.sun-on .lunar-toggle.active { color: #7a5b12; background: rgba(255,244,196,0.82); box-shadow: 0 2px 10px rgba(0,0,0,0.16); }
   .date-picker {
     position: absolute; top: 3.9rem; right: 1.4rem; width: 268px;
     display: flex; flex-direction: column; gap: 0.7rem;
@@ -197,6 +217,8 @@
   .sr-meta { color: #8a8a8f; font-size: 0.68rem; font-family: 'Space Grotesk', sans-serif; }
   @media (max-width: 640px) {
     .search-panel { top: 3.4rem; right: 0.8rem; left: 0.8rem; width: auto; }
+    .lunar-toggle { width: 32px; padding: 0; justify-content: center; }
+    .lunar-toggle span:not(.lunar-toggle-moon) { display: none; }
   }
 
   .cal-header { display: flex; align-items: center; justify-content: space-between; }
@@ -464,7 +486,11 @@
   }
 
   .lightbox {
-    position: fixed; inset: 0; background: rgba(0,0,0,0.92);
+    position: fixed; inset: 0;
+    background:
+      radial-gradient(circle at 38% 55%, rgba(126,138,133,0.58), transparent 46%),
+      linear-gradient(90deg, rgba(0,0,0,0.78) 0%, rgba(30,42,35,0.66) 52%, rgba(10,12,10,0.76) 100%);
+    backdrop-filter: blur(10px) saturate(1.08);
     display: flex; flex-direction: column; z-index: 200;
     opacity: 0; visibility: hidden; pointer-events: none;
     transition: opacity 0.25s ease;
@@ -483,7 +509,7 @@
     position: relative; overflow: hidden;
   }
   .lightbox-stage img, .lightbox-stage video {
-    max-width: calc(100vw - 360px - 7rem);
+    max-width: calc(100vw - 390px - 7rem);
     max-height: calc(100dvh - 68px - 5rem);
     border-radius: 10px; display: block;
     object-fit: contain;
@@ -505,10 +531,11 @@
 
   /* 侧边信息面板 */
   .lightbox-panel {
-    width: 360px; flex-shrink: 0;
-    background: rgba(8,6,4,0.58); backdrop-filter: blur(40px) saturate(1.8);
-    border-left: 1px solid rgba(255,255,255,0.07);
-    box-shadow: inset 1px 0 0 rgba(255,255,255,0.03);
+    width: 390px; flex-shrink: 0;
+    background: linear-gradient(180deg, rgba(21,26,21,0.74), rgba(37,42,39,0.62));
+    backdrop-filter: blur(34px) saturate(1.45);
+    border-left: 1px solid rgba(255,255,255,0.10);
+    box-shadow: inset 1px 0 0 rgba(255,255,255,0.05), -18px 0 50px rgba(0,0,0,0.24);
     overflow-y: auto; scrollbar-width: none;
     display: flex; flex-direction: column;
     touch-action: auto;
@@ -516,9 +543,9 @@
   .lightbox-panel::-webkit-scrollbar { display: none; }
 
   /* 文件标题区 */
-  .lp-filename { padding: 1.2rem 1.2rem 0.75rem; }
+  .lp-filename { padding: 1.25rem 1.45rem 0.9rem; }
   .lp-photo-title {
-    font-size: 0.92rem; font-weight: 600; color: #e8e8ec;
+    font-size: 1rem; font-weight: 700; color: #f3f3f1;
     word-break: break-all; line-height: 1.4; margin-bottom: 0.35rem;
   }
   .lp-photo-caption {
@@ -551,41 +578,44 @@
 
   /* 小地图 */
   .lp-mini-map {
-    width: 100%; aspect-ratio: 16/9; overflow: hidden;
+    display: block; margin: 0 1.45rem 1rem; width: auto;
+    aspect-ratio: 16/9; overflow: hidden; border-radius: 10px;
+    background: rgba(255,255,255,0.08);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.10), 0 10px 28px rgba(0,0,0,0.18);
   }
-  .lp-mini-map img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .lp-mini-map img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0.92; }
 
   /* 区段标题 */
   .lp-section-title {
-    font-size: 0.6rem; font-weight: 600; letter-spacing: 0.16em;
-    text-transform: uppercase; color: #76767e;
-    font-family: 'Space Grotesk', sans-serif;
-    padding: 0.85rem 1.2rem 0.35rem;
-    border-top: 1px solid rgba(255,255,255,0.06);
+    font-size: 0.86rem; font-weight: 700; letter-spacing: -0.01em;
+    text-transform: none; color: rgba(255,255,255,0.92);
+    font-family: inherit;
+    padding: 1rem 1.45rem 0.45rem;
+    border-top: 1px solid rgba(255,255,255,0.08);
   }
   #lpInfo .lp-section-title:first-of-type,
   #lpExif .lp-section-title:first-of-type { border-top: none; }
 
   /* 信息表格 */
-  .lp-info-table { padding: 0 1.2rem 0.7rem; }
+  .lp-info-table { padding: 0 1.45rem 0.95rem; }
   .lp-row {
-    display: flex; justify-content: space-between; align-items: baseline;
-    gap: 0.5rem; padding: 0.25rem 0;
-    border-bottom: 1px solid rgba(255,255,255,0.035);
+    display: flex; justify-content: space-between; align-items: flex-start;
+    gap: 1rem; padding: 0.34rem 0;
+    border-bottom: none;
   }
   .lp-row:last-child { border-bottom: none; }
   .lp-label {
-    font-size: 0.62rem; color: #8a8a92; text-transform: none;
-    letter-spacing: 0; font-family: 'Space Grotesk', sans-serif;
+    font-size: 0.78rem; color: rgba(255,255,255,0.72); text-transform: none;
+    letter-spacing: 0; font-family: inherit; font-weight: 600;
     flex-shrink: 0; white-space: nowrap;
     display: flex; align-items: center; gap: 0.3rem;
   }
   .lp-icon {
-    width: 10px; height: 10px; flex-shrink: 0;
-    stroke: currentColor; opacity: 0.6;
+    width: 14px; height: 14px; flex-shrink: 0;
+    stroke: currentColor; opacity: 0.82;
     vertical-align: middle;
   }
-  .lp-value { font-size: 0.76rem; color: #dcdce0; line-height: 1.5; text-align: right; word-break: break-all; }
+  .lp-value { font-size: 0.8rem; color: rgba(255,255,255,0.92); line-height: 1.45; text-align: right; word-break: break-word; font-weight: 650; }
   .lp-mono { font-family: 'Space Grotesk', monospace; letter-spacing: 0.02em; }
   .lp-small { font-size: 0.68rem; }
   .lp-exif-loading { font-size: 0.72rem; color: #68686e; padding: 1rem 1.2rem; }
@@ -620,12 +650,12 @@
 
   /* 直方图 */
   .lp-histogram-wrap {
-    padding: 0.2rem 1.2rem 0.75rem;
-    background: rgba(0,0,0,0.3); border-radius: 0;
+    margin: 0.2rem 1.45rem 0.95rem; padding: 0;
+    background: rgba(0,0,0,0.24); border-radius: 10px; overflow: hidden;
   }
   .lp-histogram {
-    width: 100%; height: auto; display: block; border-radius: 4px;
-    background: rgba(0,0,0,0.45);
+    width: 100%; height: auto; display: block; border-radius: 10px;
+    background: rgba(0,0,0,0.36);
   }
 
   /* 灯箱面板始终保持深色主题，photo viewer 不跟随日照模式反色 */
@@ -650,8 +680,32 @@
     body.lb-open.custom-cursor-active #lightboxBody.zoomed.panning * { cursor: grabbing !important; }
   }
 
-  /* 顶部实况指示条（移动端用，桌面隐藏） */
-  .lb-live-bar { display: none; }
+  /* 顶部实况指示条：实况照片时在左上角显示，非实况为空时隐藏 */
+  .lb-live-bar:empty { display: none; }
+  .lb-live-bar {
+    position: fixed; top: 1rem; left: 1rem; z-index: 52;
+    display: flex; align-items: center; gap: 0.45rem;
+  }
+  .lb-live-pill {
+    display: inline-flex; align-items: center; gap: 0.32rem;
+    height: 28px; padding: 0 0.55rem; border-radius: 999px;
+    color: #ffe600; background: rgba(0,0,0,0.46);
+    border: 1px solid rgba(255,230,0,0.22); backdrop-filter: blur(12px) saturate(1.35);
+    font-size: 0.76rem; font-weight: 700; letter-spacing: 0.02em;
+    box-shadow: 0 4px 18px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.08);
+  }
+  .lb-live-mute {
+    width: 28px; height: 28px; border: none; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: #fff; background: rgba(0,0,0,0.46); backdrop-filter: blur(12px) saturate(1.35);
+    box-shadow: 0 4px 18px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.08);
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
+    transition: transform 0.12s ease, background 0.15s ease, opacity 0.15s ease;
+  }
+  .lb-live-mute::before { content: '🔊'; font-size: 0.82rem; line-height: 1; }
+  .lb-live-mute.muted::before { content: '🔇'; }
+  .lb-live-mute:hover { background: rgba(255,255,255,0.16); transform: scale(1.06); }
+  .lb-live-mute:active { transform: scale(0.94); }
 
   /* 底部提示 + 表态栏包装（桌面：覆盖整个舞台；移动：fixed 底部条） */
   .lb-bottom-bar {
@@ -729,9 +783,9 @@
     position: absolute; top: 0.7rem; left: 0.8rem;
     display: flex; align-items: center; gap: 0.35rem;
     padding: 0.22rem 0.55rem 0.22rem 0.42rem; border-radius: 999px;
-    background: rgba(0,0,0,0.42); backdrop-filter: blur(8px);
-    border: 1px solid rgba(255,255,255,0.16);
-    color: rgba(255,255,255,0.88); font-size: 0.7rem; font-weight: 500;
+    background: rgba(0,0,0,0.46); backdrop-filter: blur(10px) saturate(1.35);
+    border: 1px solid rgba(255,230,0,0.22);
+    color: #ffe600; font-size: 0.72rem; font-weight: 700;
     letter-spacing: 0.05em; font-family: 'Space Grotesk', sans-serif;
     pointer-events: none; user-select: none;
     opacity: 0.82; transition: opacity 0.3s ease;
@@ -839,7 +893,7 @@
   .lightbox-nav:hover { opacity: 1; }
   .lightbox-nav.prev { left: 0.5rem; }
   /* 右箭头要在信息面板左侧，避免渲染在面板上 */
-  .lightbox-nav.next { right: calc(360px + 0.5rem); }
+  .lightbox-nav.next { right: calc(390px + 0.5rem); }
 
   #fingertip {
     position: fixed; top: 0; left: 0; width: 70px; height: 70px;
@@ -939,10 +993,11 @@
 
     /* 实况指示（顶栏左侧） */
     .lb-live-bar {
-      display: flex; flex: 1; align-items: center; gap: 0.45rem;
+      position: static; display: flex; flex: 1; align-items: center; gap: 0.45rem;
       font-size: 0.73rem; color: rgba(255,255,255,0.82); letter-spacing: 0.03em;
     }
-    .lb-live-bar .lp-live-icon { width: 14px; height: 14px; color: #fff; }
+    .lb-live-pill { height: 28px; padding: 0 0.55rem; }
+    .lb-live-bar .lp-live-icon { width: 14px; height: 14px; color: currentColor; }
 
     /* 隐藏左右箭头（用滑动代替） */
     .lightbox-nav { display: none; }
