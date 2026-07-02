@@ -632,6 +632,8 @@
 
   /* 缩放状态游标 */
   #lightboxBody { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+  /* 双保险：CSS 层面也禁掉图片原生拖拽（dragstart preventDefault 之外的兜底） */
+  #lightboxBody img { -webkit-user-drag: none; }
   #lightboxBody.zoomed { cursor: grab; }
   #lightboxBody.zoomed.panning { cursor: grabbing; }
   #lightboxBody img, #lightboxBody video { transition: opacity 0.4s ease, transform 0.4s ease; }
