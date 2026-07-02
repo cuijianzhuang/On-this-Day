@@ -5,8 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>那年今日</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-<link rel="manifest" href="/manifest.json" />
+<!-- use-credentials：manifest 请求默认不带 Cookie，站点在 Cloudflare Access 后面时会被打回登录页（CORS 报错），带上凭证才能过 -->
+<link rel="manifest" href="/manifest.json" crossorigin="use-credentials" />
 <meta name="theme-color" content="#000000" />
+<meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="那年今日" />
