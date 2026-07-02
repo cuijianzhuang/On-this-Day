@@ -385,6 +385,9 @@
     lunarToggle.setAttribute('aria-pressed', isLunarMode ? 'true' : 'false');
     lunarToggle.title = isLunarMode ? '当前农历，点击切到公历' : '当前公历，点击切到农历';
   }
+  function removeLunarMemoriesFromDom() {
+    document.querySelectorAll('.lunar-divider, .year-block.lunar-year-block').forEach((el) => el.remove());
+  }
   syncLunarToggle();
   if (lunarToggle) {
     lunarToggle.onclick = () => {
@@ -392,6 +395,8 @@
       localStorage.setItem('calendarMode', calendarMode);
       localStorage.setItem('showLunarMemories', calendarMode === 'lunar' ? '1' : '0');
       syncLunarToggle();
+      // 关闭时先把已经渲染出来的农历段落立即移除，避免等待接口期间看起来像开关没生效。
+      if (!showLunar) removeLunarMemoriesFromDom();
       loadMemories(month, day);
     };
   }
@@ -1618,8 +1623,7 @@
       });
     }
 
-    const calendarModeForRequest = calendarMode;
-    const includeLunarForRequest = calendarModeForRequest === 'lunar';
+    const includeLunarForRequest = showLunar;
     const fetchPromise = fetch('/api/memories?month=' + month + '&day=' + day + (includeLunarForRequest ? '&lunar=1' : '&lunar=0')).then(r => {
       if (!r.ok) throw new Error('memories fetch failed: ' + r.status);
       return r.json();
@@ -1631,15 +1635,13 @@
       if (seq !== _memSeq) return; // 用户已切换到别的日期，丢弃过期结果
 
       const apply = () => {
-        const lunarYears = includeLunarForRequest && data.lunar ? (data.lunar.years || []) : [];
-        const visibleYears = includeLunarForRequest ? lunarYears : data.years;
-        const dateTitle = includeLunarForRequest && data.lunar
-          ? '农历' + escHtml(data.lunar.label)
-          : data.month + '月' + data.day + '日';
-        document.getElementById('title').innerHTML = '<span class="date">' + dateTitle + '</span>，那些年的此刻';
-        _joinRoom((includeLunarForRequest ? 'lunar-' : 'solar-') + data.month + '-' + data.day);
+        document.getElementById('title').innerHTML = '<span class="date">' + data.month + '月' + data.day + '日</span>，那些年的此刻';
+        _joinRoom(data.month + '-' + data.day);
 
-        if (!visibleYears.length) {
+        // 农历同日段落（后端算好：同一农历日在往年对应的公历日期的照片，公历同日重复的已排除）
+        const lunarYears = includeLunarForRequest && showLunar && data.lunar ? (data.lunar.years || []) : [];
+
+        if (!data.years.length && !lunarYears.length) {
           subtitle.textContent = '这一天，还没有故事';
           content.innerHTML = '<div class="empty">去拍一张，留给未来的自己</div>';
           fadeIn();
