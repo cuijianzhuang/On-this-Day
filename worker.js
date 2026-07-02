@@ -396,8 +396,72 @@ function injectOgTags(assetResp, url) {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
+// 把 Workflow 登记的"今天新照片"聚合成一条 Telegram 消息推送出去。
+// 每次 Cron（10 分钟）跑一趟：有多少发多少（图最多带 10 张，条数说总量），
+// 发送成功才把队列里对应的 key 删掉，失败留着下一趟重试
+async function flushPendingNotifications(env) {
+  if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) return;
+  const { results } = await env.DB.prepare(
+    "SELECT key FROM meta WHERE key LIKE 'notify:%' LIMIT 50"
+  ).all();
+  if (!results.length) return;
+  const metaKeys = results.map((r) => r.key);
+  const photoKeys = metaKeys.map((k) => k.slice("notify:".length));
+
+  // 生成直链，最多带 10 张；单张生成失败跳过（key 照删，坏图不卡队列）
+  const media = [];
+  for (const k of photoKeys) {
+    if (media.length >= 10) break;
+    const photoUrl = await tgPhotoUrl(env, k);
+    if (photoUrl) media.push({ type: "photo", media: photoUrl });
+  }
+
+  const { month, day } = bjToday();
+  const caption = `📸 今天新增 ${photoKeys.length} 张照片\n🔗 ${SITE_ORIGIN}/?month=${month}&day=${day}`;
+  const tgBase = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`;
+
+  let resp;
+  if (media.length === 0) {
+    // 全部生成失败——退化为纯文本，至少让人知道有新照片
+    resp = await fetch(`${tgBase}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: caption }),
+    });
+  } else if (media.length === 1) {
+    resp = await fetch(`${tgBase}/sendPhoto`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, photo: media[0].media, caption }),
+    });
+  } else {
+    media[0].caption = caption;
+    resp = await fetch(`${tgBase}/sendMediaGroup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, media }),
+    });
+  }
+
+  if (!resp.ok) {
+    console.error("flushPendingNotifications: Telegram API error", resp.status, await resp.text());
+    return; // 失败保留队列，下一趟 Cron 重试
+  }
+  const placeholders = metaKeys.map(() => "?").join(",");
+  await env.DB.prepare(`DELETE FROM meta WHERE key IN (${placeholders})`).bind(...metaKeys).run();
+  console.log(`flushPendingNotifications: notified ${photoKeys.length} new photos`);
+}
+
 async function runBackgroundMaintenance(env) {
   const BATCH_SIZE = 10;
+
+  // 今天新照片的聚合推送放在最前面——很轻（多数时候队列是空的，一条 SELECT 就返回），
+  // 不跟后面的回填/打分抢内存
+  try {
+    await flushPendingNotifications(env);
+  } catch (err) {
+    console.error("flushPendingNotifications failed", err);
+  }
 
   // 回填（listAll 扫全量 ~16000 张建一个大数组）跟 HEIC 解码（单张就能占几十 MB 原始像素）
   // 是这个函数里两个最吃内存的环节，干万不能凑到同一次调用里——上一次就是因为两个撞一起
@@ -2587,6 +2651,19 @@ export class PhotoProcessingWorkflow extends WorkflowEntrypoint {
     // ── Step 5: 清边缘缓存 ───────────────────────────────────────────────────
     await step.do("purge-cache", async () => {
       await purgeDayCache(meta.month, meta.day);
+    });
+
+    // ── Step 6: 今天拍的照片登记进待推送队列 ─────────────────────────────────
+    // 不在这里直接发 Telegram：批量上传会一张一条刷屏。只把 key 登记进 D1
+    // （meta 表 notify: 前缀），由 */10 Cron 聚合成一条消息推送
+    // （见 flushPendingNotifications）
+    await step.do("queue-notify", async () => {
+      const today = bjToday();
+      if (meta.month === today.month && meta.day === today.day) {
+        await this.env.DB.prepare(
+          "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        ).bind(`notify:${key}`, new Date().toISOString()).run();
+      }
     });
   }
 }
