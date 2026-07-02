@@ -1460,7 +1460,10 @@
         document.getElementById('title').innerHTML = '<span class="date">' + data.month + '月' + data.day + '日</span>，那些年的此刻';
         _joinRoom(data.month + '-' + data.day);
 
-        if (!data.years.length) {
+        // 农历同日段落（后端算好：同一农历日在往年对应的公历日期的照片，公历同日重复的已排除）
+        const lunarYears = (data.lunar && data.lunar.years) || [];
+
+        if (!data.years.length && !lunarYears.length) {
           subtitle.textContent = '这一天，还没有故事';
           content.innerHTML = '<div class="empty">去拍一张，留给未来的自己</div>';
           fadeIn();
@@ -1468,7 +1471,9 @@
         }
 
         const totalPhotos = data.years.reduce((s, y) => s + y.photos.length, 0);
-        subtitle.textContent = '横跨 ' + data.years.length + ' 个年头，' + totalPhotos + ' 个瞬间';
+        subtitle.textContent = data.years.length
+          ? '横跨 ' + data.years.length + ' 个年头，' + totalPhotos + ' 个瞬间'
+          : '公历的这天还没有故事，但农历的这天有';
 
         // 切日期会把整面墙的照片换掉，旧的 cell 元素马上就从 DOM 里消失了——
         // 不清的话 visibleCells/cellCenters 里攒着的是已经被扔掉的旧元素引用，越点几次日期切换越积越多
@@ -1477,7 +1482,10 @@
           cellCenters.clear();
           allPhotos = [];
         }
+        // 注意顺序：先公历后农历，必须跟下面 content.innerHTML 的渲染顺序一致，
+        // flatIndex（openLightbox 的下标）才对得上
         data.years.forEach(y => y.photos.forEach(p => allPhotos.push({ ...p, year: y.year })));
+        lunarYears.forEach(y => y.photos.forEach(p => allPhotos.push({ ...p, year: y.year })));
 
         // 给每张图随机一个尺寸档位、轻微倾斜角度，再配一个随机的晃动周期和延迟，做出挂在墙上被风吹的参差感
         const SIZES = [150, 190, 230, 170, 210];
@@ -1541,7 +1549,7 @@
         // 照片不是一次性全部弹出来，按页面上的出场顺序错开一点时间依次淡入；
         // 延迟封顶（0.9s），照片特别多的时候后面那些不用傻等，很快就一起跟上
         let globalCellIndex = 0;
-        content.innerHTML = data.years.map(y => {
+        const renderYearBlock = (y, idPrefix) => {
           const featured = pickFeatured(y.photos, FEATURED_LIMIT);
           const extraCount = featured ? y.photos.length - featured.size : 0;
           const cells = y.photos.map((p, pi) => {
@@ -1578,13 +1586,18 @@
             ? `<button class="show-more-btn" data-total="${y.photos.length}" onclick="toggleShowMore(this)">展开查看全部 ${y.photos.length} 张 ›</button>`
             : '';
           return `
-      <div class="year-block" id="year-${y.year}">
+      <div class="year-block" id="${idPrefix}${y.year}">
         <div class="year-title">${y.year} 年 <span class="count">（${y.photos.length} 份）</span></div>
         <div class="grid">${cells}</div>
         ${showMoreBtn}
       </div>
     `;
-        }).join('');
+        };
+        const lunarHtml = lunarYears.length
+          ? '<div class="lunar-divider"><span class="lunar-moon">🌙</span>农历' + escHtml(data.lunar.label) + ' · 那些年</div>'
+            + lunarYears.map(y => renderYearBlock(y, 'lunar-year-')).join('')
+          : '';
+        content.innerHTML = data.years.map(y => renderYearBlock(y, 'year-')).join('') + lunarHtml;
         content.querySelectorAll('.cell').forEach((cell) => cellObserver.observe(cell));
         content.querySelectorAll('.cell video[data-src]').forEach((v) => videoLazyObserver.observe(v));
 
