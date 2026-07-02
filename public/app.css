@@ -105,25 +105,29 @@
   .date-toggle:disabled:hover { background: rgba(255,255,255,0.08); }
   .date-toggle svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
-  .lunar-toggle {
-    height: 32px; border: none; border-radius: 999px;
-    display: flex; align-items: center; gap: 0.32rem;
-    padding: 0 0.72rem 0 0.58rem; flex-shrink: 0;
-    background: rgba(255,255,255,0.08); backdrop-filter: blur(10px);
-    color: #98989d; cursor: pointer; font-family: inherit;
-    font-size: 0.78rem; font-weight: 600; letter-spacing: 0.01em;
-    transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, transform 0.12s ease;
+  .calendar-mode-toggle {
+    position: relative; width: 58px; height: 32px; border: none; border-radius: 999px; padding: 3px;
+    display: grid; grid-template-columns: 1fr 1fr; align-items: center; flex-shrink: 0;
+    background: rgba(255,255,255,0.08); backdrop-filter: blur(10px); color: #98989d;
+    cursor: pointer; font-family: inherit; font-size: 0.78rem; font-weight: 700;
+    transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
   }
-  .lunar-toggle:hover { background: rgba(255,255,255,0.16); color: #f5f5f7; }
-  .lunar-toggle:active { transform: scale(0.96); }
-  .lunar-toggle.active {
-    color: #f7d778; background: rgba(201,185,138,0.14);
-    box-shadow: inset 0 0 0 1px rgba(201,185,138,0.24);
+  .calendar-mode-toggle::before {
+    content: ''; position: absolute; top: 3px; left: 3px; width: 26px; height: 26px; border-radius: 50%;
+    background: rgba(255,255,255,0.18); box-shadow: 0 1px 4px rgba(0,0,0,0.18);
+    transition: transform 0.18s ease, background 0.18s ease;
   }
-  .lunar-toggle-moon { font-size: 0.86rem; line-height: 1; filter: saturate(1.15); }
-  body.sun-on .lunar-toggle { color: #5a5a5e; background: rgba(255,255,255,0.65); box-shadow: 0 2px 10px rgba(0,0,0,0.18); }
-  body.sun-on .lunar-toggle:hover { color: #1c1c1e; background: rgba(255,255,255,0.85); }
-  body.sun-on .lunar-toggle.active { color: #7a5b12; background: rgba(255,244,196,0.82); box-shadow: 0 2px 10px rgba(0,0,0,0.16); }
+  .calendar-mode-toggle.active::before { transform: translateX(26px); background: rgba(247,215,120,0.82); }
+  .calendar-mode-toggle:hover { background: rgba(255,255,255,0.16); color: #f5f5f7; }
+  .calendar-mode-toggle:active::before { transform: scale(0.92); }
+  .calendar-mode-toggle.active:active::before { transform: translateX(26px) scale(0.92); }
+  .calendar-mode-option { position: relative; z-index: 1; text-align: center; line-height: 26px; }
+  .calendar-mode-toggle:not(.active) .solar { color: #f5f5f7; }
+  .calendar-mode-toggle.active .lunar { color: #4b3a08; }
+  body.sun-on .calendar-mode-toggle { color: #5a5a5e; background: rgba(255,255,255,0.65); box-shadow: 0 2px 10px rgba(0,0,0,0.18); }
+  body.sun-on .calendar-mode-toggle::before { background: #fff; }
+  body.sun-on .calendar-mode-toggle:hover { color: #1c1c1e; background: rgba(255,255,255,0.85); }
+  body.sun-on .calendar-mode-toggle.active::before { background: rgba(255,221,112,0.95); }
   .date-picker {
     position: absolute; top: 3.9rem; right: 1.4rem; width: 268px;
     display: flex; flex-direction: column; gap: 0.7rem;
@@ -217,8 +221,6 @@
   .sr-meta { color: #8a8a8f; font-size: 0.68rem; font-family: 'Space Grotesk', sans-serif; }
   @media (max-width: 640px) {
     .search-panel { top: 3.4rem; right: 0.8rem; left: 0.8rem; width: auto; }
-    .lunar-toggle { width: 32px; padding: 0; justify-content: center; }
-    .lunar-toggle span:not(.lunar-toggle-moon) { display: none; }
   }
 
   .cal-header { display: flex; align-items: center; justify-content: space-between; }
