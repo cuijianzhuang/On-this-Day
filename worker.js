@@ -1352,13 +1352,25 @@ async function handleUploadHeicPreview(request, env, url) {
   }
 
   const buffer = new Uint8Array(await request.arrayBuffer());
-  // 简单校验一下确实是 JPEG（FF D8 开头），免得垫一些奇怪的内容进桶
+  // 快速预检：JPEG 魔数（FF D8 开头），不是的直接拒绝，省掉后面的解码开销
   if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) {
     return new Response("Bad Request: not a JPEG", { status: 400 });
   }
   // 限制一下大小，浏览器端解码出来的预览图正常不会很大，避免有人故意传超大文件占地方
   if (buffer.length > 10 * 1024 * 1024) {
     return new Response("Payload Too Large", { status: 413 });
+  }
+  // 真解码验证：魔数很容易伪造（前两个字节对了就行），用 IMAGES binding 实际解一遍，
+  // 确认整个文件是合法 JPEG 且尺寸在合理范围——站点是公开的，这个端点等于对外可写 R2，
+  // 校验必须做在服务端
+  try {
+    const info = await env.IMAGES.info(new Blob([buffer]).stream());
+    if (info.format !== "image/jpeg" || !info.width || !info.height ||
+        info.width > 12000 || info.height > 12000) {
+      return new Response("Bad Request: invalid image", { status: 400 });
+    }
+  } catch {
+    return new Response("Bad Request: undecodable image", { status: 400 });
   }
 
   // 已经有真预览版（不管是服务端转的还是别人先传过的）就不用再写一次；如果只是个失败占位图
