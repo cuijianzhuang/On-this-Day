@@ -925,6 +925,10 @@
   .lightbox-nav.prev { left: 0.5rem; }
   /* 右箭头要在信息面板左侧，避免渲染在面板上 */
   .lightbox-nav.next { right: calc(390px + 0.5rem); }
+  /* ⓘ 收起详细信息面板后，照片占满整个灯箱，右箭头贴回右缘 */
+  .lightbox.panel-hidden .lightbox-panel { display: none; }
+  .lightbox.panel-hidden .lightbox-nav.next { right: 0.5rem; }
+  .lightbox-btn.active { color: #fff; background: rgba(255,255,255,0.24); }
 
   #fingertip {
     position: fixed; top: 0; left: 0; width: 70px; height: 70px;
@@ -996,7 +1000,14 @@
     /* 卡片宽度交给 grid track，去掉行内 width；倾斜在窄屏会让视觉宽度失衡，一并去掉 */
     .cell { width: 100% !important; height: auto !important; transform: none !important; }
     /* ── 移动端灯箱：全屏图片 + 顶部导航栏 + 底部毛玻璃条 ── */
+    /* 详细信息默认不占布局；点顶栏 ⓘ 时变成顶栏之下的全屏浮层 */
     .lightbox-panel { display: none; }
+    .lightbox:not(.panel-hidden) .lightbox-panel {
+      display: flex; position: fixed; top: 50px; left: 0; right: 0; bottom: 0;
+      width: 100%; z-index: 205; border-left: none;
+      background: rgba(13,15,14,0.97);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
     .lightbox-inner { position: relative; }
 
     /* 舞台无内边距，图片填满宽度 */

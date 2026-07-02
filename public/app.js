@@ -1117,6 +1117,7 @@
 
   function openLightbox(index, asSlideshow) {
     autoPlaying = !!asSlideshow;
+    _syncLbPanel();
     lightbox.classList.add('open');
     document.body.classList.add('lb-open');
     document.body.style.overflow = 'hidden';
@@ -1153,6 +1154,16 @@
   document.addEventListener('fullscreenchange', () => {
     if (!document.fullscreenElement && lightbox.classList.contains('open') && autoPlaying) closeLightbox();
   });
+
+  // 详细信息面板开关：触屏设备（手机/平板）默认收起——iPad 上 390px 的侧栏会把照片挤成一小块，
+  // 点顶栏 ⓘ 再展开；桌面鼠标环境默认展开。选择在本次会话内记住，刷新回到默认
+  let _lbPanelOpen = !window.matchMedia('(pointer: coarse)').matches;
+  function _syncLbPanel() {
+    lightbox.classList.toggle('panel-hidden', !_lbPanelOpen);
+    const infoBtn = document.getElementById('lightboxInfo');
+    if (infoBtn) infoBtn.classList.toggle('active', _lbPanelOpen);
+  }
+  document.getElementById('lightboxInfo').onclick = () => { _lbPanelOpen = !_lbPanelOpen; _syncLbPanel(); };
 
   document.getElementById('lightboxClose').onclick = closeLightbox;
   lightboxShare.onclick = async (e) => {
