@@ -101,7 +101,7 @@
     const place = (items.find(p => p.name) || {}).name || '';
     const sorted = items.slice().sort((a, b) => (a.year + a.month + a.day).localeCompare(b.year + b.month + b.day));
     const first = sorted[0], last = sorted[sorted.length - 1];
-    const fmt = (p) => p.year + '/' + parseInt(p.month) + '/' + parseInt(p.day);
+    const fmt = (p) => p.year + '/' + parseInt(p.month || mapMonth) + '/' + parseInt(p.day || mapDay);
     const range = fmt(first) + (sorted.length > 1 && fmt(last) !== fmt(first) ? ' – ' + fmt(last) : '');
 
     const thumbs = items.slice(0, 6).map((p, i) => {
