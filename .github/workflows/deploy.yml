@@ -17,7 +17,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # wrangler 4.107 要求 Node ≥ 22（20 会在 secret/deploy 时直接退出并提示装 nvm），
+          # 直接上 24（当前 LTS，也是 GitHub Actions runner 的默认版本）
+          node-version: '24'
           cache: 'npm'
 
       - run: npm ci
