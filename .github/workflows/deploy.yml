@@ -2,7 +2,11 @@ name: Deploy to Cloudflare Workers
 
 on:
   push:
-    branches: [main]
+    # 本仓库默认分支是 master（不是 main）——之前写成 main 导致这个
+    # workflow 从来没有触发过一次（Actions 历史 0 条运行记录）
+    branches: [master, main]
+  # 手动触发入口，随时可以在 Actions 页面点 Run workflow 强制部署一次
+  workflow_dispatch:
 
 jobs:
   deploy:
