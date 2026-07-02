@@ -925,9 +925,15 @@
   .lightbox-nav.prev { left: 0.5rem; }
   /* 右箭头要在信息面板左侧，避免渲染在面板上 */
   .lightbox-nav.next { right: calc(390px + 0.5rem); }
-  /* ⓘ 收起详细信息面板后，照片占满整个灯箱，右箭头贴回右缘 */
+  /* ⓘ 收起详细信息面板后，照片占满整个灯箱，右箭头贴回右缘。
+     图片的 max-width 基础值给面板预留了 390px——收起后必须一起放开，
+     不然 iPad 竖屏上照片只剩 300 来像素宽的一小块 */
   .lightbox.panel-hidden .lightbox-panel { display: none; }
   .lightbox.panel-hidden .lightbox-nav.next { right: 0.5rem; }
+  .lightbox.panel-hidden .lightbox-stage img,
+  .lightbox.panel-hidden .lightbox-stage video {
+    max-width: calc(100vw - 7rem);
+  }
   .lightbox-btn.active { color: #fff; background: rgba(255,255,255,0.24); }
 
   #fingertip {
