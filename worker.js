@@ -241,7 +241,7 @@ async function sendDailyMemories(env) {
   // 今日诗词（复用现有缓存逻辑）
   let poemLine = "";
   try {
-    const poem = await getDailyPoem();
+    const poem = await getDailyPoem(env);
     if (poem?.content) {
       poemLine = `「${poem.content}」`;
       if (poem.dynasty || poem.author) {
@@ -1992,26 +1992,45 @@ async function getJinrishiciToken() {
   return token;
 }
 
-// 诗词本身按"今天的真实日期"缓存一份，一天之内重复访问不会重新调用第三方接口，
-// 也不会让每个访问者都各自换到不同的句子——同一天看到的应该是同一句
-async function getDailyPoem() {
+// 每日诗词：按"北京时间的今天"为 key，权威副本存 D1 meta 表——
+// Workers Cache 是按机房隔离的，只用 Cache 的话不同大区当天会各自抽到不同句子，
+// Telegram 推送里的句子也可能跟网页对不上。D1 全球一份，保证同一天全世界同一句；
+// Cache API 降级为 L1，挡住同机房的重复读，避免每次页面访问都打 D1
+async function getDailyPoem(env) {
+  const bjToday = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10); // 北京时间 YYYY-MM-DD
   const cache = caches.default;
-  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD（UTC），够用，不需要按时区精确到当地"今天"
-  const cacheKey = new Request("https://memories.internal/daily-poem/" + today);
+  const cacheKey = new Request("https://memories.internal/daily-poem/" + bjToday);
   const cached = await cache.match(cacheKey);
   if (cached) return await cached.json();
 
-  const token = await getJinrishiciToken();
-  const resp = await fetch("https://v2.jinrishici.com/sentence", {
-    headers: { "X-User-Token": token },
-  });
-  const data = await resp.json();
-  const poem = {
-    content: data.data.content,
-    title: data.data.origin.title,
-    author: data.data.origin.author,
-    dynasty: data.data.origin.dynasty,
-  };
+  const metaKey = `poem:${bjToday}`;
+  let poem;
+  const row = await env.DB.prepare("SELECT value FROM meta WHERE key = ?").bind(metaKey).first();
+  if (row?.value) {
+    poem = JSON.parse(row.value);
+  } else {
+    const token = await getJinrishiciToken();
+    const resp = await fetch("https://v2.jinrishici.com/sentence", {
+      headers: { "X-User-Token": token },
+    });
+    const data = await resp.json();
+    poem = {
+      content: data.data.content,
+      title: data.data.origin.title,
+      author: data.data.origin.author,
+      dynasty: data.data.origin.dynasty,
+    };
+    // 并发时第一个写进去的胜出（INSERT OR IGNORE），写完重读一次，
+    // 保证即使两个机房同时初始化，最终大家用的也是同一句
+    await env.DB.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)")
+      .bind(metaKey, JSON.stringify(poem)).run();
+    const winner = await env.DB.prepare("SELECT value FROM meta WHERE key = ?").bind(metaKey).first();
+    if (winner?.value) poem = JSON.parse(winner.value);
+    // 顺手清掉 7 天前的旧句子，meta 表不积灰（ISO 日期字典序可比）
+    const cutoff = new Date(Date.now() + 8 * 60 * 60 * 1000 - 7 * 86400 * 1000).toISOString().slice(0, 10);
+    await env.DB.prepare("DELETE FROM meta WHERE key LIKE 'poem:%' AND key < ?").bind(`poem:${cutoff}`).run();
+  }
+
   await cache.put(
     cacheKey,
     new Response(JSON.stringify(poem), {
@@ -2023,7 +2042,7 @@ async function getDailyPoem() {
 
 async function handlePoem(request, env, url) {
   try {
-    const poem = await getDailyPoem();
+    const poem = await getDailyPoem(env);
     return new Response(JSON.stringify(poem), {
       headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=3600" },
     });
