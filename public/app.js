@@ -376,6 +376,23 @@
   // 地图图标带上当前正在看的日期，这样从某个历史日期点进地图，看到的也是那一天的照片
   document.getElementById('mapLink').href = '/map?month=' + month + '&day=' + day;
 
+  const lunarToggle = document.getElementById('lunarToggle');
+  let showLunar = false;
+  function syncLunarToggle() {
+    if (!lunarToggle) return;
+    lunarToggle.classList.toggle('active', showLunar);
+    lunarToggle.setAttribute('aria-pressed', showLunar ? 'true' : 'false');
+    lunarToggle.title = showLunar ? '隐藏农历同日' : '显示农历同日';
+  }
+  syncLunarToggle();
+  if (lunarToggle) {
+    lunarToggle.onclick = () => {
+      showLunar = !showLunar;
+      syncLunarToggle();
+      loadMemories(month, day);
+    };
+  }
+
   // 自制日历：点小日历图标展开，选好日期跳转到 ?month=&day=
   // 不用原生 <input type="date">，因为浏览器自带的日历弹层样式没法跟这套深色 UI 统一
   const dateToggle = document.getElementById('dateToggle');
@@ -764,7 +781,7 @@
     // Mini map (GPS)
     if (exif.lat !== undefined && exif.lng !== undefined) {
       const slot = document.getElementById('lpMapPlaceholder');
-      if (slot) slot.innerHTML = `<div class="lp-mini-map"><img src="/api/static-map?lat=${exif.lat.toFixed(6)}&lng=${exif.lng.toFixed(6)}" alt="拍摄地点" loading="lazy" onerror="this.parentElement.remove()" /></div>`;
+      if (slot) slot.innerHTML = `<a class="lp-mini-map" href="/map?month=${p.month}&day=${p.day}" title="在地图中查看这一天"><img src="/api/static-map?lat=${exif.lat.toFixed(6)}&lng=${exif.lng.toFixed(6)}" alt="拍摄地点" loading="lazy" onerror="this.parentElement.remove()" /></a>`;
     }
 
     // Append extra rows to 基本信息
@@ -849,6 +866,7 @@
   }
 
   let _exifAbort = null;
+  let _lbLiveMuted = true;
   function _loadLightboxExif(p) {
     const el = document.getElementById('lpExif');
     if (!el) return;
@@ -856,7 +874,7 @@
     el.innerHTML = '<div class="lp-exif-loading">加载相机信息…</div>';
     const ctrl = new AbortController();
     _exifAbort = ctrl;
-    fetch('/api/exif?key=' + encodeURIComponent(p.key), { signal: ctrl.signal })
+    fetch('/api/exif?v=2&key=' + encodeURIComponent(p.key), { signal: ctrl.signal })
       .then(r => r.ok ? r.json() : null)
       .then(exif => { if (!ctrl.signal.aborted) _renderLightboxExif(exif, p); })
       .catch(() => { const el2 = document.getElementById('lpExif'); if (el2) el2.innerHTML = ''; });
@@ -941,11 +959,14 @@
       video.src = p.videoUrl;
       video.loop = true;
       video.preload = 'metadata';
+      // 实况照片默认静音，确保打开照片后的自动预览不会被浏览器的自动播放策略拦截。
+      video.muted = _lbLiveMuted;
+      video.playsInline = true;
 
       const badge = document.createElement('div');
       badge.className = 'live-photo-badge';
       badge.style.opacity = '0';
-      badge.innerHTML = '<span class="lp-live-icon"></span>实况';
+      badge.innerHTML = '<span class="lp-live-icon"></span><span>实况</span>';
 
       const wrap = document.createElement('div');
       wrap.className = 'live-photo-wrap';
@@ -955,12 +976,29 @@
       lightboxBody.appendChild(wrap);
 
       let stickyPlay = false;
-      const playLive = () => {
-        video.loop = true; video.currentTime = 0;
-        video.play().catch(() => {}); wrap.classList.add('playing');
+      const syncLiveMuteButton = () => {
+        const btn = document.getElementById('lbLiveMute');
+        if (!btn) return;
+        btn.classList.toggle('muted', _lbLiveMuted);
+        btn.setAttribute('aria-label', _lbLiveMuted ? '开启实况声音' : '关闭实况声音');
+        btn.title = _lbLiveMuted ? '开启声音' : '关闭声音';
       };
-      const stopLive = () => {
-        stickyPlay = false; video.pause(); wrap.classList.remove('playing');
+      const playLive = ({ restart = true, muted = _lbLiveMuted } = {}) => {
+        video.loop = true;
+        video.muted = muted;
+        if (restart) video.currentTime = 0;
+        wrap.classList.add('playing');
+        video.play().catch(() => {
+          // 如果带声音播放被浏览器拦截，回退成静音预览，用户仍可再次点声音按钮开启。
+          video.muted = true;
+          _lbLiveMuted = true;
+          syncLiveMuteButton();
+          video.play().catch(() => {});
+        });
+      };
+      const stopLive = ({ clearSticky = true } = {}) => {
+        if (clearSticky) stickyPlay = false;
+        video.pause(); wrap.classList.remove('playing');
       };
 
       // 图片加载完成后自动播放一次，告知用户这是实况照片
@@ -972,11 +1010,13 @@
           setTimeout(() => {
             if (!document.body.contains(wrap)) return;
             video.loop = false;
+            video.muted = true;
             video.currentTime = 0;
-            video.play().catch(() => {});
             wrap.classList.add('playing');
+            video.play().catch(() => {});
             video.onended = () => {
               video.loop = true;
+              video.muted = _lbLiveMuted;
               if (!stickyPlay) wrap.classList.remove('playing');
             };
           }, 500);
@@ -985,27 +1025,44 @@
       );
 
       // 悬浮预览（桌面）
-      wrap.addEventListener('mouseenter', () => { if (!stickyPlay) playLive(); });
-      wrap.addEventListener('mouseleave', () => { if (!stickyPlay) stopLive(); });
+      wrap.addEventListener('mouseenter', () => { if (!stickyPlay) playLive({ muted: true }); });
+      wrap.addEventListener('mouseleave', () => { if (!stickyPlay) stopLive({ clearSticky: false }); });
       // 点击切换粘性循环播放
       wrap.addEventListener('click', () => {
         if (Date.now() - _lbDragEndTime < 300) return;
         stickyPlay = !stickyPlay;
-        if (stickyPlay) playLive(); else stopLive();
+        if (stickyPlay) playLive({ muted: _lbLiveMuted }); else stopLive();
       });
       // 移动端：按住播放，松开停止
-      wrap.addEventListener('touchstart', (e) => { e.preventDefault(); playLive(); }, { passive: false });
-      wrap.addEventListener('touchend', () => { if (!stickyPlay) stopLive(); });
+      wrap.addEventListener('touchstart', (e) => { e.preventDefault(); playLive({ muted: _lbLiveMuted }); }, { passive: false });
+      wrap.addEventListener('touchend', () => { if (!stickyPlay) stopLive({ clearSticky: false }); });
 
-      // 顶部实况指示（移动端）
-      if (_lbLiveBar) _lbLiveBar.innerHTML = '<span class="lp-live-icon"></span><span>实况</span>';
+      // 顶部实况指示 + 声音开关（桌面/移动端共用）
+      if (_lbLiveBar) {
+        _lbLiveBar.innerHTML = '<span class="lb-live-pill"><span class="lp-live-icon"></span><span>实况</span></span><button class="lb-live-mute" id="lbLiveMute" type="button"></button>';
+        const muteBtn = document.getElementById('lbLiveMute');
+        syncLiveMuteButton();
+        if (muteBtn) {
+          muteBtn.onclick = (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            _lbLiveMuted = !_lbLiveMuted;
+            video.muted = _lbLiveMuted;
+            syncLiveMuteButton();
+            if (!_lbLiveMuted) {
+              stickyPlay = true;
+              playLive({ restart: false, muted: false });
+            }
+          };
+        }
+      }
 
       // 提示文字
       _lbIsLivePhoto = true;
       const _hint = document.getElementById('lbZoomHint');
       if (_hint) {
         clearTimeout(_lbZoomHideTimer);
-        _hint.textContent = '悬浮播放实况 · 点击锁定 · 双击缩放';
+        _hint.textContent = '悬浮预览 · 点击锁定播放 · 声音按钮可开关声音';
         _hint.style.opacity = '1';
         _lbZoomHideTimer = setTimeout(() => { if (_hint) _hint.style.opacity = '0'; }, 3000);
       }
@@ -1558,7 +1615,7 @@
       });
     }
 
-    const fetchPromise = fetch('/api/memories?month=' + month + '&day=' + day).then(r => {
+    const fetchPromise = fetch('/api/memories?month=' + month + '&day=' + day + (showLunar ? '&lunar=1' : '')).then(r => {
       if (!r.ok) throw new Error('memories fetch failed: ' + r.status);
       return r.json();
     });
@@ -1573,7 +1630,7 @@
         _joinRoom(data.month + '-' + data.day);
 
         // 农历同日段落（后端算好：同一农历日在往年对应的公历日期的照片，公历同日重复的已排除）
-        const lunarYears = (data.lunar && data.lunar.years) || [];
+        const lunarYears = showLunar && data.lunar ? (data.lunar.years || []) : [];
 
         if (!data.years.length && !lunarYears.length) {
           subtitle.textContent = '这一天，还没有故事';
