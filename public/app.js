@@ -1705,9 +1705,9 @@
       </div>
     `;
         };
-        // 渲染顺序必须跟 allPhotos 的 push 顺序一致（先公历后农历）——
-        // globalCellIndex 是边渲染边递增的，先算 lunarHtml 会让农历照片抢走
-        // 前面的 flatIndex，公历卡片点开的就全是错位的照片
+        // 先渲染公历块、再渲染农历块；renderYearBlock 会递增 globalCellIndex，
+        // 这个求值顺序必须和 allPhotos（公历在前、农历在后）的填充顺序完全一致，
+        // 否则卡片上的 openLightbox(flatIndex) 会整体错位。
         const solarHtml = data.years.map(y => renderYearBlock(y, 'year-')).join('');
         const lunarHtml = lunarYears.length
           ? '<div class="lunar-divider"><span class="lunar-moon">🌙</span>农历' + escHtml(data.lunar.label) + ' · 那些年</div>'

@@ -16,15 +16,15 @@
 
 ### 数据索引（photos_index）
 - R2 里的照片/视频不再靠每次访问现场 `list()` 扫描——新增了一张 D1 索引表 `photos_index`（key, type, year, month, day, size, uploaded），按 month/day 建了索引，查询比扫全量 R2 便宜得多
-- **R2 Event Notification → Queue → `queue()` consumer** 增量维护这张表：新文件一上传（`PutObject`/`CompleteMultipartUpload`/`CopyObject`）就自动建好索引、顺手打分/查地点、清掉对应日期的页面缓存；文件被删除（`DeleteObject`/`LifecycleDeletion`）则把索引、打分、查地点、配套 HEIC 预览图一起清掉，避免页面继续展示已经不存在的照片
-- 队列消费者 `max_batch_size` 故意设成 1——批量打分要喂图片给 AI 模型，没有现成 JPEG 预览图的 HEIC 还要现场解码，几条消息的内存压力叠在同一次调用里很容易撞上 Workers 的内存限制（exceededMemory）
+- **R2 Event Notification → Queue → Workflow** 增量维护这张表：新文件一上传（`PutObject`/`CompleteMultipartUpload`/`CopyObject`），`queue()` consumer 只负责触发 `PhotoProcessingWorkflow`，真正的索引、HEIC 转预览、AI 打分、查地点、清缓存分散到 Workflow 的独立步骤里；文件被删除（`DeleteObject`/`LifecycleDeletion`）则在队列消费者里同步清掉索引、打分、查地点、配套 HEIC 预览图和对应日期缓存，避免页面继续展示已经不存在的照片
+- 队列消费者 `max_batch_size` 仍保留为 1：上传事件会立即 ack 并交给 Workflow 持久化重试，内存压力不再堆在 Queue consumer 里；删除事件轻量内联处理，避免为了删除再跑一整条流水线
 - 首次部署或者存量库很大时，需要先跑一次性回填：`GET /admin/backfill-photos-index?token=xxx&limit=200`（见下方 API），Cron 也会自动按节拍慢慢补，不用一直手动点
 
 ### 成本控制（边缘缓存）
 - `/api/memories`、`/api/map-photos` 的结果都用 Workers Cache API 缓存，避免每次访问都重新扫一遍 R2（List 是 A 类操作，比 Get 贵很多）；新文件上传/删除时队列消费者会自动清掉对应那天的缓存，不用等 30 分钟自然过期
 - `/img/` 图片字节本身也显式缓存在边缘节点，同一张照片被反复请求不会重复打 R2；206 Range 响应（视频拖动/取封面帧）不缓存——Cache API 不支持缓存 Partial Content
-- `/thumb/` 缩略图按浏览器 `Accept` 头协商输出 AVIF/WebP（同质量下比 JPEG 小 30%-50%），不支持的浏览器照样拿 JPEG；缓存键里带上协商出来的格式，避免边缘缓存不区分格式导致错发
-- 页面内联的 CSS/JS 拆成独立文件，按内容算指纹生成 `/static/app-<hash>.css|js`、`/static/map-<hash>.css|js`，走 `immutable` 强缓存；HTML 文档本身仍然 `no-store`，内容一变 hash 自动跟着变，不用手动清缓存
+- `/thumb/` 缩略图统一由 Cloudflare Images binding 转成 WebP 后写入 `PREVIEWS` 桶，再用 302 跳到公开预览 URL；302 和缩略图对象都可缓存，后续同尺寸请求不再重复走图片转换
+- 页面 CSS/JS 拆成 `public/app.css`、`public/app.js`、`public/map.css`、`public/map.js`，由 Cloudflare Static Assets 托管；Worker 只处理 API、图片代理、缩略图、地图 HTML 等动态路由，其余静态资源回落到 `env.ASSETS.fetch()`
 - AI 打分、查地点、HEIC 转码、索引回填等批量后台处理改用 **Cron 定时任务**（每 10 分钟跑一次，见下方"后台任务"），跟用户访问页面完全分开，不会因为叠加子请求把 `/api/memories` 撞到 Workers 单次调用的子请求上限
 
 ### AI 选片 + 文案
@@ -64,9 +64,17 @@
 ## 目录结构
 
 ```
-worker.js       # Worker 全部逻辑（API + 图片代理 + AI 打分 + 地图页 + 前端页面，单文件）
-wrangler.toml   # Cloudflare 部署配置（R2/AI/D1 绑定、路由、环境变量、Cron）
-schema.sql      # D1 数据库表结构
+worker.js          # Worker 全部逻辑（API + 图片代理 + AI 打分 + 地图页 HTML + Durable Object + Workflow，单文件）
+public/index.html  # 主页面静态 HTML
+public/app.css     # 主页面样式
+public/app.js      # 主页面交互（日期切换、灯箱、Live Photo、实时表态等）
+public/map.css     # 地图页样式
+public/map.js      # 地图页交互（Mapbox GL 打点、缩略图弹窗）
+public/favicon.svg # 站点图标
+schema.sql         # D1 数据库表结构
+wrangler.toml      # Cloudflare 部署配置（Static Assets、R2、AI、Images、D1、Queue、Workflow、DO、Cron）
+node-shims.js      # 本地/打包环境需要时的 Node 兼容占位
+package.json       # 项目元数据（当前没有 npm scripts）
 ```
 
 ## 数据约定
@@ -193,7 +201,7 @@ AI 打分、拍摄地点、照片索引、"最近查看的日期"这几类元数
 
 ### `GET /admin/backfill-photos-index?token=xxx&limit=200`
 
-一次性回填脚本，把上线 R2 Event Notification 之前已经存在的旧文件补进 `photos_index`（最多 300 张/次）。新上传的文件由队列消费者增量维护，这个端点只用来补历史存量，跑到 `remaining` 降到 0 就完事了。
+一次性回填脚本，把上线 R2 Event Notification 之前已经存在的旧文件补进 `photos_index`（最多 300 张/次）。新上传的文件由 Workflow 增量维护，这个端点只用来补历史存量，跑到 `remaining` 降到 0 就完事了。
 
 ```json
 { "indexedThisBatch": 200, "remaining": 7800, "totalCandidates": 8000, "alreadyIndexed": 200, "errors": [] }
@@ -202,6 +210,11 @@ AI 打分、拍摄地点、照片索引、"最近查看的日期"这几类元数
 ### `GET /admin/purge-cache?token=xxx&month=MM&day=DD`
 
 手动清掉某个 month/day 的 `/api/memories`、`/api/map-photos` 边缘缓存。新文件上传/删除时队列消费者会自动清，这个端点主要用于手动验证效果或者排查问题。
+
+
+### `GET /admin/backfill-workflows?token=xxx&limit=20`
+
+给历史积压图片批量触发 `PhotoProcessingWorkflow`。它适合两个场景：普通 JPEG 已进索引但还没 AI 打分，或者历史 HEIC 还没有预览图、需要先走 Workflow 的转码步骤再打分。
 
 ### `GET /api/poem`
 
@@ -213,22 +226,12 @@ AI 打分、拍摄地点、照片索引、"最近查看的日期"这几类元数
 
 ## HEIC 照片
 
-Cloudflare 的图片处理（Images binding、Image Resizing）都不支持 HEIC 作为输入格式，浏览器原生也大多解不开 HEIC，所以：
+浏览器原生大多解不开 HEIC，所以项目同时准备了服务端和浏览器端两条兜底链路：
 
-- `/thumb/` 接口会优先找 `PREVIEWS` 桶里的 `{年}/{月}/{日}/{文件名}.heic-preview.jpg`（提前转码好的 JPEG，跟原图分桶存，按拍摄日期分文件夹而不是照搬原图的年/月路径），按那个做缩放；也可以调用 `/admin/convert-heic-photos?token=xxx&limit=3` 让服务端自己解码生成（需要 Workers Paid 套餐）。在改成按日期分文件夹之前生成的旧预览图（路径直接照搬原图的年/月）也认得，不会被当成"没转"重新生成，但新生成的都会落在新路径下
-- 没有伴生文件时，前端会用 [heic2any](https://github.com/alexcorvi/heic2any) 在浏览器里现场解码兜底——能用，但每个访问者都要重新解码一次，HEIC 多的话会很慢
-- 所以建议用 `scripts/convert-heic-previews.sh` 提前批量生成预览图，新增 HEIC 照片后也跑一遍：
-
-  ```bash
-  npm install   # 装 heic-convert
-  # 拿到所有 HEIC 的 key 列表（已经打过分/查过地点的，覆盖大部分）：
-  npx wrangler d1 execute memories-db --remote --json \
-    --command "SELECT key FROM photo_scores WHERE key LIKE '%.heic' UNION SELECT key FROM photo_places WHERE key LIKE '%.heic'" \
-    | node -e "const d=JSON.parse(require('fs').readFileSync(0));console.log(d[0].results.map(r=>r.key).join('\n'))" > heic_keys.txt
-  bash scripts/convert-heic-previews.sh heic_keys.txt
-  ```
-
-  已经生成过预览图的会自动跳过，可以放心重复跑。
+- `/thumb/` 接口优先用 Cloudflare Images binding 从原图生成 WebP 缩略图，并把结果写进 `PREVIEWS` 桶的 `thumbs/{尺寸}/{原始路径}.webp`；后续请求直接 302 到 `PREVIEWS_PUBLIC_URL` 下的静态缩略图，Worker 不再搬运图片体
+- AI 打分前如果遇到 HEIC，会优先复用 `PREVIEWS` 桶里的 `{年}/{月}/{日}/{文件名}.heic-preview.jpg` 或旧路径预览图；没有预览图时再通过 Images binding 临时转成 JPEG 喂给视觉模型
+- 前端仍加载 [heic2any](https://github.com/alexcorvi/heic2any) 做最后兜底：缩略图/大图多次加载失败时，在浏览器里现场把 HEIC 解成 JPEG，并通过 `/api/upload-heic-preview` 回传到 `PREVIEWS` 桶，后续访问者就不用再解码一次
+- 历史 HEIC 如果没有预览图，可以用 `GET /admin/backfill-workflows?token=xxx&limit=20` 批量触发 Workflow；Workflow 会先跑 HEIC 转预览，再继续 AI 打分和地点补全
 
 - Cron 任务（`scheduled()`）也会自动跑这个转码，但**只转服务器真实"今天"拍的**（不像打分/查地点那样还顺带覆盖"最近浏览日期"或者存量库），每次最多 1 张（解码一张全尺寸 HEIC 到原始像素的内存开销很重，调太大容易撞上 Workers 的内存限制），且跟索引回填错峰跑（同一次 Cron 调用不会同时出现）
 - 转码失败的会写一个 4 字节的占位 JPEG 标记"试过了"，并记一个重试次数（R2 自定义元数据）。**服务端**重试次数没到 **5 次**上限之前还会继续重试，到了上限就放弃自动重试（避免对一张真解不开的坏文件反复浪费 CPU）；**浏览器端**（`heic2any`）解码不占用这个重试名额——哪怕服务端 5 次都失败放弃了，用户自己在浏览器里解码成功并回传上来，照样会被接受存进去
