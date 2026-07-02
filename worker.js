@@ -2167,7 +2167,8 @@ export class MemoryRoom {
     // tag[0]=userId 用于去重；tag[1]=gravatarHash 发给客户端拼 Gravatar URL
     this.state.acceptWebSocket(server, [userId, gravatarHash]);
 
-    const reactions_v2 = (await this.state.storage.get("reactions_v2")) || {};
+    await this._migrateReactions();
+    const reactions_v2 = await this._allReactions();
     const my_reactions = (await this.state.storage.get(`mr:${userId}`)) || {};
     const { count, list } = this._usersInfo();
     server.send(JSON.stringify({ type: "init", count, reactions_v2, my_reactions, you: userId, list }));
@@ -2176,46 +2177,61 @@ export class MemoryRoom {
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  // 旧版把整个房间的表态挤在一个 "reactions_v2" key 里，DO 单 key 有 128KB 上限，
+  // 照片数 × emoji 种类长年累积会顶到头。现在按照片拆成 rx:<photoKey> 独立 key，
+  // 首次访问时把旧数据懒迁移过去。DO 的 input gate 保证 storage await 期间不插入
+  // 其他事件，整段迁移事实上是原子的
+  async _migrateReactions() {
+    const legacy = await this.state.storage.get("reactions_v2");
+    if (!legacy) return;
+    const entries = Object.entries(legacy);
+    // storage.put 批量写一次最多 128 个键值对，分批
+    for (let i = 0; i < entries.length; i += 128) {
+      const batch = {};
+      for (const [k, v] of entries.slice(i, i + 128)) batch[`rx:${k}`] = v;
+      await this.state.storage.put(batch);
+    }
+    await this.state.storage.delete("reactions_v2");
+  }
+
+  // 聚合所有 rx: key，拼回 {photoKey: {emoji: count}}——发给客户端的 init 消息
+  // 字段名保持 reactions_v2 不变，前端无需任何改动
+  async _allReactions() {
+    const map = await this.state.storage.list({ prefix: "rx:" });
+    const out = {};
+    for (const [k, v] of map) out[k.slice(3)] = v;
+    return out;
+  }
+
   async webSocketMessage(ws, raw) {
     try {
       const msg = JSON.parse(typeof raw === "string" ? raw : new TextDecoder().decode(raw));
-      if (msg.type === "react" && typeof msg.key === "string" && msg.key.length < 300) {
+      const isReact = msg.type === "react";
+      const isUnreact = msg.type === "unreact";
+      if ((isReact || isUnreact) && typeof msg.key === "string" && msg.key.length < 300) {
         const VALID_EMOJIS = new Set(['👍','❤️','😍','😂','😮','😢','🔥','✨']);
         const emoji = VALID_EMOJIS.has(msg.emoji) ? msg.emoji : '❤️';
         const [userId] = this.state.getTags(ws);
         const mrKey = `mr:${userId}`;
         const myR = (await this.state.storage.get(mrKey)) || {};
-        const alreadyDone = (myR[msg.key] || []).includes(emoji);
-        if (alreadyDone) return;
-        if (!myR[msg.key]) myR[msg.key] = [];
-        myR[msg.key].push(emoji);
-        const reactions_v2 = (await this.state.storage.get("reactions_v2")) || {};
-        if (!reactions_v2[msg.key]) reactions_v2[msg.key] = {};
-        reactions_v2[msg.key][emoji] = (reactions_v2[msg.key][emoji] || 0) + 1;
+        const mine = myR[msg.key] || [];
+        const has = mine.includes(emoji);
+        if (isReact ? has : !has) return; // 幂等：重复 react / 无中生有的 unreact 直接忽略
+        const rxKey = `rx:${msg.key}`;
+        const counts = (await this.state.storage.get(rxKey)) || {};
+        if (isReact) {
+          mine.push(emoji);
+          counts[emoji] = (counts[emoji] || 0) + 1;
+        } else {
+          mine.splice(mine.indexOf(emoji), 1);
+          counts[emoji] = Math.max(0, (counts[emoji] || 0) - 1);
+        }
+        myR[msg.key] = mine;
         await Promise.all([
           this.state.storage.put(mrKey, myR),
-          this.state.storage.put("reactions_v2", reactions_v2),
+          this.state.storage.put(rxKey, counts),
         ]);
-        const count = reactions_v2[msg.key][emoji];
-        this._broadcast({ type: "react", key: msg.key, emoji, count });
-      } else if (msg.type === "unreact" && typeof msg.key === "string" && msg.key.length < 300) {
-        const VALID_EMOJIS = new Set(['👍','❤️','😍','😂','😮','😢','🔥','✨']);
-        const emoji = VALID_EMOJIS.has(msg.emoji) ? msg.emoji : '❤️';
-        const [userId] = this.state.getTags(ws);
-        const mrKey = `mr:${userId}`;
-        const myR = (await this.state.storage.get(mrKey)) || {};
-        const idx = (myR[msg.key] || []).indexOf(emoji);
-        if (idx === -1) return;
-        myR[msg.key].splice(idx, 1);
-        const reactions_v2 = (await this.state.storage.get("reactions_v2")) || {};
-        if (!reactions_v2[msg.key]) reactions_v2[msg.key] = {};
-        reactions_v2[msg.key][emoji] = Math.max(0, (reactions_v2[msg.key][emoji] || 0) - 1);
-        await Promise.all([
-          this.state.storage.put(mrKey, myR),
-          this.state.storage.put("reactions_v2", reactions_v2),
-        ]);
-        const count = reactions_v2[msg.key][emoji];
-        this._broadcast({ type: "react", key: msg.key, emoji, count });
+        this._broadcast({ type: "react", key: msg.key, emoji, count: counts[emoji] });
       }
     } catch (_) {}
   }
