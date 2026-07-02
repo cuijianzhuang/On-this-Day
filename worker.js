@@ -105,6 +105,16 @@ export default {
       return handleOgImage(request, env, url);
     }
 
+    if (url.pathname === "/api/top-loved") {
+      return handleTopLoved(request, env, url);
+    }
+
+    if (url.pathname === "/loved") {
+      return new Response(LOVED_HTML, {
+        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+      });
+    }
+
     if (url.pathname === "/api/poem") {
       return handlePoem(request, env, url);
     }
@@ -309,6 +319,23 @@ async function sendDailyMemories(env) {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
+// 后加的辅助表（表态镜像/手记）不走手动 schema.sql 流程，运行时自动建表，
+// 每个 isolate 只跑一次，之后就是纯内存判断
+let _auxTablesReady = false;
+async function ensureAuxTables(env) {
+  if (_auxTablesReady) return;
+  await env.DB.batch([
+    env.DB.prepare(
+      "CREATE TABLE IF NOT EXISTS photo_reactions (key TEXT NOT NULL, emoji TEXT NOT NULL, " +
+      "count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (key, emoji))"
+    ),
+    env.DB.prepare(
+      "CREATE TABLE IF NOT EXISTS photo_notes (key TEXT PRIMARY KEY, note TEXT NOT NULL, updated_at TEXT)"
+    ),
+  ]);
+  _auxTablesReady = true;
+}
+
 // 北京时间（UTC+8）的今天，返回 { month: "MM", day: "DD" }
 function bjToday() {
   const bj = new Date(Date.now() + 8 * 60 * 60 * 1000);
@@ -368,6 +395,111 @@ async function handleOgImage(request, env, url) {
   await cache.put(cacheKey, resp.clone());
   return resp;
 }
+
+// ── 全家最爱 ──────────────────────────────────────────────────────────────────
+// 跨所有日期聚合表态计数（数据来自 MemoryRoom 写入的 photo_reactions 镜像表）。
+// 注意：镜像从部署后开始积累，历史表态要等对应日期的房间再次有人表态才会补进来
+async function handleTopLoved(request, env, url) {
+  await ensureAuxTables(env);
+  const cache = caches.default;
+  const cacheKey = new Request(`${SITE_ORIGIN}/api/top-loved`);
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  const { results } = await env.DB.prepare(
+    `SELECT pr.key AS key, SUM(pr.count) AS total, pi.year, pi.month, pi.day, pi.type
+     FROM photo_reactions pr
+     JOIN photos_index pi ON pr.key = pi.key
+     GROUP BY pr.key
+     HAVING total > 0
+     ORDER BY total DESC
+     LIMIT 24`
+  ).all();
+
+  const photos = results.map((r) => ({
+    key: r.key,
+    url: `/img/${encodeURIComponent(r.key)}`,
+    type: r.type,
+    total: r.total,
+    year: r.year,
+    month: r.month,
+    day: r.day,
+  }));
+
+  const response = new Response(JSON.stringify({ photos }), {
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "public, max-age=300",
+    },
+  });
+  await cache.put(cacheKey, response.clone());
+  return response;
+}
+
+const LOVED_HTML = `<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>全家最爱 · 那年今日</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #000; color: #f5f5f7; min-height: 100vh;
+    font-family: "SF Pro Display", -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    padding: 3.5rem 1.2rem 4rem;
+  }
+  .back {
+    position: fixed; top: max(1rem, env(safe-area-inset-top)); left: max(1rem, env(safe-area-inset-left));
+    width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,0.1); backdrop-filter: blur(10px); color: #fff; text-decoration: none; z-index: 5;
+  }
+  h1 { text-align: center; font-size: 1.5rem; margin: 1rem 0 0.3rem; letter-spacing: -0.01em; }
+  .sub { text-align: center; color: #8a8a8f; font-size: 0.82rem; margin-bottom: 2rem; }
+  .grid { max-width: 1000px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 14px; }
+  @media (max-width: 640px) { .grid { grid-template-columns: repeat(2, 1fr); gap: 10px; } }
+  .card {
+    position: relative; border-radius: 10px; overflow: hidden; display: block;
+    background: #1c1c1e; aspect-ratio: 1; text-decoration: none;
+  }
+  .card img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity 0.35s ease; }
+  .card img.loaded { opacity: 1; }
+  .badge {
+    position: absolute; left: 8px; bottom: 8px; display: flex; align-items: center; gap: 4px;
+    background: rgba(0,0,0,0.55); backdrop-filter: blur(8px); border-radius: 999px;
+    padding: 3px 9px; color: #fff; font-size: 0.72rem; font-weight: 600;
+  }
+  .date { position: absolute; right: 8px; bottom: 8px; color: rgba(255,255,255,0.85); font-size: 0.66rem;
+    background: rgba(0,0,0,0.45); backdrop-filter: blur(8px); border-radius: 999px; padding: 3px 8px; }
+  .empty { text-align: center; color: #6e6e73; padding: 5rem 1rem; line-height: 1.7; }
+</style>
+</head>
+<body>
+  <a class="back" href="/" title="回到今天">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+  </a>
+  <h1>❤️ 全家最爱</h1>
+  <div class="sub">被表态最多的照片</div>
+  <div class="grid" id="grid"></div>
+  <div class="empty" id="empty" style="display:none">还没有人表态过<br>去照片里点一个 ❤️ 吧</div>
+<script>
+  fetch('/api/top-loved').then(function (r) { return r.json(); }).then(function (data) {
+    var photos = data.photos || [];
+    if (!photos.length) { document.getElementById('empty').style.display = 'block'; return; }
+    document.getElementById('grid').innerHTML = photos.map(function (p) {
+      var thumb = p.url.replace('/img/', '/thumb/') + '?w=400&h=400&q=75&fit=cover';
+      var dateTxt = p.year + '/' + p.month + '/' + p.day;
+      var href = '/?month=' + p.month + '&day=' + p.day;
+      return '<a class="card" href="' + href + '">' +
+        '<img src="' + thumb.replace(/"/g, '&quot;') + '" loading="lazy" onload="this.classList.add(\\'loaded\\')" />' +
+        '<span class="badge">❤️ ' + p.total + '</span><span class="date">' + dateTxt + '</span></a>';
+    }).join('');
+  });
+</script>
+</body>
+</html>`;
 
 // 首页 HTML 注入 og meta。month/day 都是校验过的两位数字，title 只含数字和汉字，
 // 不存在注入面
@@ -2467,6 +2599,7 @@ const MAP_HTML = (mapboxPublicToken) => `<!doctype html>
 export class MemoryRoom {
   constructor(state, env) {
     this.state = state;
+    this.env = env;
   }
 
   async fetch(request) {
@@ -2551,6 +2684,15 @@ export class MemoryRoom {
           this.state.storage.put(rxKey, counts),
         ]);
         this._broadcast({ type: "react", key: msg.key, emoji, count: counts[emoji] });
+        // 计数镜像到 D1（"全家最爱"页面要跨所有日期房间聚合，DO 之间没法互相枚举，
+        // 只能在写入时同步一份出去）。写绝对值幂等，失败不影响实时体验
+        try {
+          await ensureAuxTables(this.env);
+          await this.env.DB.prepare(
+            "INSERT INTO photo_reactions (key, emoji, count) VALUES (?, ?, ?) " +
+            "ON CONFLICT(key, emoji) DO UPDATE SET count = excluded.count"
+          ).bind(msg.key, emoji, counts[emoji]).run();
+        } catch (_) {}
       }
     } catch (_) {}
   }
