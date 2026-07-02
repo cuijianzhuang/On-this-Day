@@ -958,9 +958,22 @@ async function runBackgroundMaintenance(env) {
   // 又把 Cron 炸了（exceededMemory）。按当前分钟单双轮流跑，保证它俩永远不同时出现
   const doBackfillThisTick = new Date().getMinutes() % 20 < 10;
   if (doBackfillThisTick) {
-    // 自动把存量照片慢慢补进 photos_index，不用再手动一次次点 /admin/backfill-photos-index——
-    // 跑到 remaining 降到 0 之后，这步本身就退化成"扫一遍发现没有新文件"的轻量操作，不用专门关掉
-    await backfillPhotosIndexBatch(env, 300);
+    // 自动把存量照片慢慢补进 photos_index，不用再手动一次次点 /admin/backfill-photos-index。
+    // 回填全部完成后写个时间戳标记：之后每天只核对一次，不再每 20 分钟白白 listAll 扫一遍
+    // 全桶 + 全表 SELECT 来发现"没活干"（新上传的照片走 queue 增量维护，不依赖这里）
+    const doneRow = await env.DB.prepare("SELECT value FROM meta WHERE key = 'backfill_done_at'").first();
+    const doneAt = doneRow ? Date.parse(doneRow.value) : NaN;
+    if (!(Date.now() - doneAt < 24 * 3600 * 1000)) {
+      const res = await backfillPhotosIndexBatch(env, 300);
+      if (res.remaining === 0) {
+        await env.DB.prepare(
+          "INSERT INTO meta (key, value) VALUES ('backfill_done_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        ).bind(new Date().toISOString()).run();
+      } else {
+        // 又出现了没索引的文件（比如 R2 事件丢了）——清掉标记，恢复每 20 分钟一批的追赶节奏
+        await env.DB.prepare("DELETE FROM meta WHERE key = 'backfill_done_at'").run();
+      }
+    }
   }
 
   // 之前这里用 listAll() 扫一遍整个 R2 桶 + matchPhotosForDay() 对每个年份再扫一遍、
@@ -979,25 +992,12 @@ async function runBackgroundMaintenance(env) {
     priorityDays.push(lastViewed);
   }
 
-  const { results: allIndexed } = await env.DB.prepare("SELECT key, type FROM photos_index").all();
-  const imageKeys = allIndexed.filter((r) => r.type === "image").map((r) => r.key);
-  const prioritizedKeys = new Set();
-  for (const { month, day } of priorityDays) {
-    const { results: rows } = await env.DB.prepare(
-      "SELECT key FROM photos_index WHERE month = ? AND day = ? AND type = 'image'"
-    )
-      .bind(month, day)
-      .all();
-    for (const row of rows) prioritizedKeys.add(row.key);
-  }
-  const restKeys = imageKeys.filter((key) => !prioritizedKeys.has(key));
-  const prioritized = [...prioritizedKeys, ...restKeys];
-
-  const scores = await loadScores(env);
-  const needScore = prioritized.filter((key) => needsScoring(scores, key));
+  // 原来这里把整张 photos_index + photo_scores（含 raw_response 大文本）+ photo_places
+  // 全部读进内存再逐个过滤，内存随库存线性涨。改成 LEFT JOIN 在 SQL 侧直接筛出
+  // "还没打分/还没查地点"的 key（优先日期先查、全库补足），每次只拿一小批候选进内存
+  const candidatesToCheck = await collectCandidates(env, findUnscoredKeys, priorityDays, BATCH_SIZE * 3);
   // 跟队列消费者那边一样：没预览图的 HEIC 不在这里打分（打分要现场解码，好几张堆在同一次
-  // Cron 调用里很容易把内存吃爆）。只检查前面一小段候选（head() 很便宜），凑够一批就够了
-  const candidatesToCheck = needScore.slice(0, BATCH_SIZE * 3);
+  // Cron 调用里很容易把内存吃爆）。只检查这一小批候选（head() 很便宜），凑够一批就够了
   const checked = await mapWithConcurrency(candidatesToCheck, 4, async (key) => {
     if (/\.heic$/i.test(key) && !(await findHeicPreviewKey(env, key))) return null;
     return key;
@@ -1005,8 +1005,7 @@ async function runBackgroundMaintenance(env) {
   const unscored = checked.filter(Boolean).slice(0, BATCH_SIZE);
   if (unscored.length > 0) await scoreKeys(env, unscored);
 
-  const places = await loadPlaces(env);
-  const unlocated = prioritized.filter((key) => !(key in places)).slice(0, BATCH_SIZE);
+  const unlocated = await collectCandidates(env, findUnlocatedKeys, priorityDays, BATCH_SIZE);
   if (unlocated.length > 0) await enrichLocations(env, unlocated);
 
   // HEIC 预览图只转"今天"（服务器真实今天）拍的——不像打分/查地点那样还顺带覆盖"最近浏览日期"
@@ -2336,22 +2335,9 @@ function thumbRedirect(publicUrl) {
 }
 
 // ---------- AI 选片：用 Workers AI 给照片打"值不值得展示"的分，离线批处理，结果存进 D1 ----------
-async function loadScores(env) {
-  const { results } = await env.DB.prepare(
-    "SELECT key, score, has_face, caption, raw_response, updated_at FROM photo_scores"
-  ).all();
-  const scores = {};
-  for (const row of results) {
-    scores[row.key] = {
-      score: row.score,
-      hasFace: !!row.has_face,
-      caption: row.caption || "",
-      rawResponse: row.raw_response || "",
-      updatedAt: row.updated_at || "",
-    };
-  }
-  return scores;
-}
+// （原来这里有个全表版 loadScores()——连 raw_response 大文本一起整张读进内存，
+//   照片多了以后是 Cron 的头号内存包袱。所有调用方都改成 loadScoresForKeys /
+//   findUnscoredKeys 的 SQL 侧筛选后已删除，别再加回来）
 
 // D1 单条语句的绑定参数上限是 100 个——年头跨度大、某天又凑巧拍得多时，一天命中的 key 数量
 // 完全可能超过 100，IN (?,?,...) 一超就直接报错（之前是这里把整个 /api/memories 拖成 500）。
@@ -2480,9 +2466,59 @@ function needsScoring(scores, key) {
   return !caption || !/[一-鿿]/.test(caption);
 }
 
+// needsScoring 的 SQL 版：直接在库里 LEFT JOIN 筛出需要打分的 key，调用方不用再把整张
+// photo_scores（含 raw_response 大文本列）读进内存逐个过滤——那是 Cron 里最大的内存包袱。
+// "文案没有中文"用 字节数==字符数（纯 ASCII）近似：有中文时 UTF-8 字节数必然大于字符数。
+// 跟正则 /[一-鿿]/ 的口径差在纯 emoji/带音标文案会被当成"有内容"，但文案是提示词约定的中文，
+// 实际打出来不会是那两种
+const NEEDS_SCORE_SQL =
+  "(s.key IS NULL OR s.caption IS NULL OR s.caption = '' OR length(CAST(s.caption AS BLOB)) = length(s.caption))";
+
+async function findUnscoredKeys(env, { month, day, limit }) {
+  const conds = ["i.type = 'image'", NEEDS_SCORE_SQL];
+  const binds = [];
+  if (month && day) { conds.push("i.month = ?", "i.day = ?"); binds.push(month, day); }
+  const { results } = await env.DB.prepare(
+    `SELECT i.key FROM photos_index i LEFT JOIN photo_scores s ON s.key = i.key WHERE ${conds.join(" AND ")} LIMIT ?`
+  ).bind(...binds, limit).all();
+  return results.map((r) => r.key);
+}
+
+// 同上：还没查过地点的 key（enrichLocations 对没 GPS 的也会记一行空结果，
+// 所以 photo_places 里没有行 == 真没处理过）
+async function findUnlocatedKeys(env, { month, day, limit }) {
+  const conds = ["i.type = 'image'", "p.key IS NULL"];
+  const binds = [];
+  if (month && day) { conds.push("i.month = ?", "i.day = ?"); binds.push(month, day); }
+  const { results } = await env.DB.prepare(
+    `SELECT i.key FROM photos_index i LEFT JOIN photo_places p ON p.key = i.key WHERE ${conds.join(" AND ")} LIMIT ?`
+  ).bind(...binds, limit).all();
+  return results.map((r) => r.key);
+}
+
+// 按"优先日期在前，其余照片补足"凑一批候选 key。findFn 是上面两个 SQL 筛选函数之一
+async function collectCandidates(env, findFn, priorityDays, poolSize) {
+  const out = [];
+  const seen = new Set();
+  for (const { month, day } of priorityDays) {
+    if (out.length >= poolSize) break;
+    for (const key of await findFn(env, { month, day, limit: poolSize - out.length })) {
+      if (!seen.has(key)) { seen.add(key); out.push(key); }
+    }
+  }
+  if (out.length < poolSize) {
+    // 全库查询会把优先日期的 key 再查出来一遍，多要一些配额再靠 seen 去重
+    for (const key of await findFn(env, { limit: poolSize + out.length })) {
+      if (out.length >= poolSize) break;
+      if (!seen.has(key)) { seen.add(key); out.push(key); }
+    }
+  }
+  return out;
+}
+
 // 给一批 key 打分并存进 D1（内部会跳过已经打过分+有文案的 key），返回这次实际处理了几张
 async function scoreKeys(env, keys) {
-  const scores = await loadScores(env);
+  const scores = await loadScoresForKeys(env, keys);
   const toScore = keys.filter((key) => needsScoring(scores, key));
   for (const key of toScore) {
     const info = await scoreOnePhoto(env, key);
@@ -2492,14 +2528,8 @@ async function scoreKeys(env, keys) {
 }
 
 // ---------- 拍摄地点：从 EXIF GPS 反向地理编码成地名，离线批处理，结果存进 D1 ----------
-async function loadPlaces(env) {
-  const { results } = await env.DB.prepare("SELECT key, lat, lon, name FROM photo_places").all();
-  const places = {};
-  for (const row of results) {
-    places[row.key] = { lat: row.lat, lon: row.lon, name: row.name || "" };
-  }
-  return places;
-}
+// （全表版 loadPlaces() 同 loadScores() 一起删了——调用方都改走 loadPlacesForKeys /
+//   findUnlocatedKeys 的 SQL 侧筛选）
 
 // 同 loadScoresForKeys：只查指定 key 列表
 async function loadPlacesForKeys(env, keys) {
@@ -2577,7 +2607,7 @@ async function reverseGeocode(env, lat, lon) {
 // 返回这次实际处理了几张。视频跳过，没有 GPS 信息的也会记一个空结果，避免下次又重新查一遍
 // 存的是 {lat, lon, name}（不只是地名文字），这样地图页才能直接拿来打点，不用再重新读一遍 EXIF
 async function enrichLocations(env, keys) {
-  const places = await loadPlaces(env);
+  const places = await loadPlacesForKeys(env, keys);
   const toProcess = keys.filter((key) => !(key in places) && IMAGE_EXT.test(key));
   for (const key of toProcess) {
     const gps = await getExifGps(env.PHOTOS, key);
@@ -2601,22 +2631,21 @@ async function handleScorePhotos(request, env, url) {
   }
 
   const limit = Math.min(Number(url.searchParams.get("limit")) || 5, 20);
-  const scores = await loadScores(env);
 
-  // 查 photos_index 而不是 listAll() 扫一遍 R2——8000+ 张照片之后那样会把内存吃爆
-  // （之前 Cron/这个端点都吃过 exceededMemory 这个亏）。回填没跑完之前 totalPhotos 不是 100% 准
-  const { results } = await env.DB.prepare("SELECT key FROM photos_index WHERE type = 'image'").all();
-  const imageKeys = results.map((r) => r.key);
-  const unscored = imageKeys.filter((key) => needsScoring(scores, key));
-  const batch = unscored.slice(0, limit);
-
+  // SQL 侧直接筛出待打分的 key + COUNT 统计，不再把整张 photo_scores 读进内存过滤
+  // （回填没跑完之前 totalPhotos 不是 100% 准）
+  const batch = await findUnscoredKeys(env, { limit });
   const scoredCount = await scoreKeys(env, batch);
+  const totalRow = await env.DB.prepare("SELECT COUNT(*) AS n FROM photos_index WHERE type = 'image'").first();
+  const remainRow = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM photos_index i LEFT JOIN photo_scores s ON s.key = i.key WHERE i.type = 'image' AND ${NEEDS_SCORE_SQL}`
+  ).first();
 
   return new Response(
     JSON.stringify({
       scoredThisBatch: scoredCount,
-      remaining: unscored.length - scoredCount,
-      totalPhotos: imageKeys.length,
+      remaining: remainRow.n,
+      totalPhotos: totalRow.n,
     }),
     { headers: { "content-type": "application/json; charset=utf-8" } }
   );
@@ -2666,21 +2695,20 @@ async function handleLocatePhotos(request, env, url) {
   }
 
   const limit = Math.min(Number(url.searchParams.get("limit")) || 10, 20);
-  const places = await loadPlaces(env);
 
-  // 同 /admin/score-photos：查 photos_index 而不是 listAll() 扫一遍 R2，省内存
-  const { results } = await env.DB.prepare("SELECT key FROM photos_index WHERE type = 'image'").all();
-  const imageKeys = results.map((r) => r.key);
-  const unlocated = imageKeys.filter((key) => !(key in places));
-  const batch = unlocated.slice(0, limit);
-
+  // 同 /admin/score-photos：SQL 侧筛选 + COUNT，不把整张 photo_places 读进内存
+  const batch = await findUnlocatedKeys(env, { limit });
   const processedCount = await enrichLocations(env, batch);
+  const totalRow = await env.DB.prepare("SELECT COUNT(*) AS n FROM photos_index WHERE type = 'image'").first();
+  const remainRow = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM photos_index i LEFT JOIN photo_places p ON p.key = i.key WHERE i.type = 'image' AND p.key IS NULL"
+  ).first();
 
   return new Response(
     JSON.stringify({
       processedThisBatch: processedCount,
-      remaining: unlocated.length - processedCount,
-      totalPhotos: imageKeys.length,
+      remaining: remainRow.n,
+      totalPhotos: totalRow.n,
     }),
     { headers: { "content-type": "application/json; charset=utf-8" } }
   );
