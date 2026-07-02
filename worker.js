@@ -105,6 +105,10 @@ export default {
       return handleOgImage(request, env, url);
     }
 
+    if (url.pathname === "/app-icon") {
+      return handleAppIcon(request, env, url);
+    }
+
     if (url.pathname === "/api/top-loved") {
       return handleTopLoved(request, env, url);
     }
@@ -806,6 +810,54 @@ const LOVED_HTML = `<!doctype html>
 </script>
 </body>
 </html>`;
+
+// ── PWA 应用图标 ──────────────────────────────────────────────────────────────
+// 用全库 AI 评分最高的照片裁成方形做安装图标（PWA manifest + apple-touch-icon），
+// 每个尺寸的成品缓存在 PREVIEWS，边缘缓存一天
+async function handleAppIcon(request, env, url) {
+  const allowed = [180, 192, 512];
+  const size = allowed.includes(Number(url.searchParams.get("size"))) ? Number(url.searchParams.get("size")) : 512;
+
+  const cache = caches.default;
+  const cacheKey = new Request(`${SITE_ORIGIN}/app-icon?size=${size}`);
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  const row = await env.DB.prepare(
+    `SELECT pi.key AS key FROM photos_index pi
+     JOIN photo_scores ps ON ps.key = pi.key
+     WHERE pi.type = 'image' AND ps.score IS NOT NULL
+     ORDER BY ps.score DESC LIMIT 1`
+  ).first();
+  if (!row) return new Response("Not Found", { status: 404 });
+
+  const iconKey = `icon/${size}/${row.key.replace(/\.[^.]+$/, "")}.jpg`;
+  let buf;
+  const existing = await env.PREVIEWS.get(iconKey);
+  if (existing) {
+    buf = await existing.arrayBuffer();
+  } else {
+    const object = await env.PHOTOS.get(row.key);
+    if (!object) return new Response("Not Found", { status: 404 });
+    try {
+      const transformed = await env.IMAGES.input(object.body)
+        .transform({ width: size, height: size, fit: "cover" })
+        .output({ format: "image/jpeg", quality: 85 });
+      buf = await transformed.response().arrayBuffer();
+    } catch {
+      return new Response("Unprocessable", { status: 422 });
+    }
+    await env.PREVIEWS.put(iconKey, buf, {
+      httpMetadata: { contentType: "image/jpeg", cacheControl: "public, max-age=31536000, immutable" },
+    });
+  }
+
+  const resp = new Response(buf, {
+    headers: { "content-type": "image/jpeg", "cache-control": "public, max-age=86400" },
+  });
+  await cache.put(cacheKey, resp.clone());
+  return resp;
+}
 
 // 首页 HTML 注入 og meta。month/day 都是校验过的两位数字，title 只含数字和汉字，
 // 不存在注入面
