@@ -220,7 +220,7 @@ async function sendDailyMemories(env) {
     poemLine ? `` : null,
     poemLine || null,
     ``,
-    `🔗 memories.cuijianzhuang.com/${month}${day}`,
+    `🔗 memories.cuijianzhuang.com/?month=${month}&day=${day}`,
   ].filter((l) => l !== null).join("\n");
 
   const tgBase = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`;
