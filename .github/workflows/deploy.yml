@@ -37,6 +37,10 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # 必须锁 wrangler 4：action 自带的 3.90.0 不认识 [images] 配置段，
+          # 只警告不报错，部署出来的 Worker 直接丢掉 IMAGES 绑定（env.IMAGES undefined，
+          # 缩略图转 WebP 全挂）。版本跟 package.json devDependencies 保持一致
+          wranglerVersion: "4.107.0"
           command: deploy
           secrets: |
             ADMIN_TOKEN
