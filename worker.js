@@ -77,7 +77,10 @@ export default {
     }
 
     if (url.pathname === "/admin/test-telegram") {
-      if (!checkAdminToken(request, env)) return new Response("Unauthorized", { status: 401 });
+      const token = url.searchParams.get("token");
+      if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
+        return new Response("Forbidden", { status: 403 });
+      }
       try {
         await sendDailyMemories(env);
         return new Response("OK", { status: 200 });
@@ -179,11 +182,15 @@ async function sendDailyMemories(env) {
   const month = String(bjNow.getUTCMonth() + 1).padStart(2, "0");
   const day = String(bjNow.getUTCDate()).padStart(2, "0");
 
-  // 查当天历史上评分最高的图片，最多取 5 张
+  // 查当天历史上评分最高的图片，最多取 5 张。
+  // 分数在 photo_scores 表（photos_index 里没有 score 列），JOIN 起来查；
+  // 没打过分的照片（ps.score IS NULL）不参与精选
   const { results: photos } = await env.DB.prepare(
-    `SELECT key, url, year, name, lat, lon FROM photos_index
-     WHERE month = ? AND day = ? AND type = 'image' AND score IS NOT NULL
-     ORDER BY score DESC LIMIT 5`
+    `SELECT pi.key AS key, pi.year AS year, ps.score AS score
+     FROM photos_index pi
+     JOIN photo_scores ps ON pi.key = ps.key
+     WHERE pi.month = ? AND pi.day = ? AND pi.type = 'image' AND ps.score IS NOT NULL
+     ORDER BY ps.score DESC LIMIT 5`
   ).bind(month, day).all();
 
   if (!photos.length) {
@@ -225,9 +232,9 @@ async function sendDailyMemories(env) {
 
   const tgBase = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`;
 
-  // 构建缩略图 URL（Worker 图片变换接口）
+  // 构建缩略图 URL——必须是绝对地址，Telegram 服务器要从公网拉这张图
   function thumbUrl(p) {
-    return p.url.replace("/img/", "/thumb/") + "?w=1200&h=900&q=85&fit=scale-down";
+    return `${SITE_ORIGIN}/thumb/${encodeURIComponent(p.key)}?w=1200&h=900&q=85&fit=scale-down`;
   }
 
   let resp;
