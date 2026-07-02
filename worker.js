@@ -101,6 +101,42 @@ export default {
       return handleStaticMap(request, env, url);
     }
 
+    if (url.pathname === "/og-image") {
+      return handleOgImage(request, env, url);
+    }
+
+    if (url.pathname === "/app-icon") {
+      return handleAppIcon(request, env, url);
+    }
+
+    if (url.pathname === "/api/top-loved") {
+      return handleTopLoved(request, env, url);
+    }
+
+    if (url.pathname === "/api/search") {
+      return handleSearch(request, env, url);
+    }
+
+    if (url.pathname === "/api/note") {
+      return handleNote(request, env, url);
+    }
+
+    if (url.pathname === "/loved") {
+      return new Response(LOVED_HTML, {
+        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+      });
+    }
+
+    if (url.pathname === "/api/recap") {
+      return handleRecap(request, env, url);
+    }
+
+    if (url.pathname === "/recap") {
+      return new Response(RECAP_HTML, {
+        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+      });
+    }
+
     if (url.pathname === "/api/poem") {
       return handlePoem(request, env, url);
     }
@@ -124,7 +160,14 @@ export default {
       }
     }
 
-    // 其余请求（/、/favicon.svg、/app.css、/app.js 等）交给 Static Assets CDN
+    // 首页：静态 HTML 出来后动态注入 og meta——分享到微信/Telegram/Twitter 时
+    // 预览卡片能带上"当天最高分照片 + 日期标题"，链接不再是光秃秃一行字
+    if (url.pathname === "/") {
+      const assetResp = await env.ASSETS.fetch(request);
+      return injectOgTags(assetResp, url);
+    }
+
+    // 其余请求（/favicon.svg、/app.css、/app.js 等）交给 Static Assets CDN
     return env.ASSETS.fetch(request);
   },
 
@@ -201,10 +244,7 @@ async function sendDailyMemories(env) {
   }
 
   // 北京时间当前日期（UTC+8）
-  const now = new Date();
-  const bjNow = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-  const month = String(bjNow.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(bjNow.getUTCDate()).padStart(2, "0");
+  const { month, day } = bjToday();
 
   // 查当天历史上评分最高的图片，最多取 5 张。
   // LEFT JOIN：还没打完分的新照片（比如当天刚上传、Workflow 还在排队）按上传时间兜底补位，
@@ -301,8 +341,617 @@ async function sendDailyMemories(env) {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
+// 后加的辅助表（表态镜像/手记）不走手动 schema.sql 流程，运行时自动建表，
+// 每个 isolate 只跑一次，之后就是纯内存判断
+let _auxTablesReady = false;
+async function ensureAuxTables(env) {
+  if (_auxTablesReady) return;
+  await env.DB.batch([
+    env.DB.prepare(
+      "CREATE TABLE IF NOT EXISTS photo_reactions (key TEXT NOT NULL, emoji TEXT NOT NULL, " +
+      "count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (key, emoji))"
+    ),
+    env.DB.prepare(
+      "CREATE TABLE IF NOT EXISTS photo_notes (key TEXT PRIMARY KEY, note TEXT NOT NULL, updated_at TEXT)"
+    ),
+  ]);
+  _auxTablesReady = true;
+}
+
+// 北京时间（UTC+8）的今天，返回 { month: "MM", day: "DD" }
+function bjToday() {
+  const bj = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  return {
+    month: String(bj.getUTCMonth() + 1).padStart(2, "0"),
+    day: String(bj.getUTCDate()).padStart(2, "0"),
+  };
+}
+
+// ── OG 分享卡片 ────────────────────────────────────────────────────────────────
+// /og-image?month=MM&day=DD：当天最高分照片裁成 1200×630 JPEG（OG 标准尺寸）。
+// 成品按张缓存在 PREVIEWS（og/ 前缀），响应本身走边缘缓存一天——分数更新后
+// 第二天换封面
+async function handleOgImage(request, env, url) {
+  const today = bjToday();
+  const month = /^\d{2}$/.test(url.searchParams.get("month") || "") ? url.searchParams.get("month") : today.month;
+  const day = /^\d{2}$/.test(url.searchParams.get("day") || "") ? url.searchParams.get("day") : today.day;
+
+  const cache = caches.default;
+  const cacheKey = new Request(`${SITE_ORIGIN}/og-image?month=${month}&day=${day}`);
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  const { results } = await env.DB.prepare(
+    `SELECT pi.key AS key FROM photos_index pi
+     LEFT JOIN photo_scores ps ON pi.key = ps.key
+     WHERE pi.month = ? AND pi.day = ? AND pi.type = 'image'
+     ORDER BY ps.score DESC, pi.uploaded DESC LIMIT 1`
+  ).bind(month, day).all();
+  if (!results.length) return new Response("Not Found", { status: 404 });
+  const key = results[0].key;
+
+  const ogKey = `og/${key.replace(/\.[^.]+$/, "")}.jpg`;
+  let buf;
+  const existing = await env.PREVIEWS.get(ogKey);
+  if (existing) {
+    buf = await existing.arrayBuffer();
+  } else {
+    const object = await env.PHOTOS.get(key);
+    if (!object) return new Response("Not Found", { status: 404 });
+    try {
+      const transformed = await env.IMAGES.input(object.body)
+        .transform({ width: 1200, height: 630, fit: "cover" })
+        .output({ format: "image/jpeg", quality: 82 });
+      buf = await transformed.response().arrayBuffer();
+    } catch {
+      return new Response("Unprocessable", { status: 422 });
+    }
+    await env.PREVIEWS.put(ogKey, buf, {
+      httpMetadata: { contentType: "image/jpeg", cacheControl: "public, max-age=31536000, immutable" },
+    });
+  }
+
+  const resp = new Response(buf, {
+    headers: { "content-type": "image/jpeg", "cache-control": "public, max-age=86400" },
+  });
+  await cache.put(cacheKey, resp.clone());
+  return resp;
+}
+
+// ── 全家最爱 ──────────────────────────────────────────────────────────────────
+// 跨所有日期聚合表态计数（数据来自 MemoryRoom 写入的 photo_reactions 镜像表）。
+// 注意：镜像从部署后开始积累，历史表态要等对应日期的房间再次有人表态才会补进来
+async function handleTopLoved(request, env, url) {
+  await ensureAuxTables(env);
+  const cache = caches.default;
+  const cacheKey = new Request(`${SITE_ORIGIN}/api/top-loved`);
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  const { results } = await env.DB.prepare(
+    `SELECT pr.key AS key, SUM(pr.count) AS total, pi.year, pi.month, pi.day, pi.type
+     FROM photo_reactions pr
+     JOIN photos_index pi ON pr.key = pi.key
+     GROUP BY pr.key
+     HAVING total > 0
+     ORDER BY total DESC
+     LIMIT 24`
+  ).all();
+
+  const photos = results.map((r) => ({
+    key: r.key,
+    url: `/img/${encodeURIComponent(r.key)}`,
+    type: r.type,
+    total: r.total,
+    year: r.year,
+    month: r.month,
+    day: r.day,
+  }));
+
+  const response = new Response(JSON.stringify({ photos }), {
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "public, max-age=300",
+    },
+  });
+  await cache.put(cacheKey, response.clone());
+  return response;
+}
+
+// ── 年度回忆放映 ──────────────────────────────────────────────────────────────
+// 取某一年 AI 评分最高的 40 张，按时间顺序放映。没传 year 就用最近一个有打分照片的年份
+async function handleRecap(request, env, url) {
+  const cache = caches.default;
+  const cacheKey = new Request(url.toString());
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  const { results: yearRows } = await env.DB.prepare(
+    `SELECT DISTINCT pi.year AS year FROM photos_index pi
+     JOIN photo_scores ps ON ps.key = pi.key
+     WHERE pi.type = 'image' AND ps.score IS NOT NULL
+     ORDER BY pi.year DESC`
+  ).all();
+  const years = yearRows.map((r) => r.year);
+
+  let year = url.searchParams.get("year");
+  if (!/^\d{4}$/.test(year || "")) year = years[0] || String(new Date().getUTCFullYear());
+
+  const { results } = await env.DB.prepare(
+    `SELECT pi.key AS key, pi.month, pi.day, ps.caption, pp.name AS place
+     FROM photos_index pi
+     JOIN photo_scores ps ON ps.key = pi.key
+     LEFT JOIN photo_places pp ON pp.key = pi.key
+     WHERE pi.year = ? AND pi.type = 'image' AND ps.score IS NOT NULL
+     ORDER BY ps.score DESC LIMIT 40`
+  ).bind(year).all();
+  // 精选完按拍摄时间排回去，放映是"一年走过来"的叙事顺序
+  results.sort((a, b) => (a.month + a.day).localeCompare(b.month + b.day));
+
+  const photos = results.map((r) => ({
+    key: r.key,
+    url: `/img/${encodeURIComponent(r.key)}`,
+    month: r.month,
+    day: r.day,
+    caption: r.caption || "",
+    place: r.place || "",
+  }));
+
+  const response = new Response(JSON.stringify({ year, years, photos }), {
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "public, max-age=3600",
+    },
+  });
+  await cache.put(cacheKey, response.clone());
+  return response;
+}
+
+const RECAP_HTML = `<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>年度回忆 · 那年今日</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+  body {
+    margin: 0; background: #000; color: #fff; overflow: hidden;
+    height: 100dvh; font-family: "SF Pro Display", -apple-system, "PingFang SC", sans-serif;
+  }
+  #stage { position: fixed; inset: 0; }
+  #stage img {
+    position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+    opacity: 0; transition: opacity 1.1s ease;
+  }
+  #stage img.on { opacity: 1; }
+  #stage img.kb { animation: kenburns 6s ease-out forwards; }
+  @keyframes kenburns { from { transform: scale(1); } to { transform: scale(1.07); } }
+  #intro {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 0.6rem;
+    background: #000; z-index: 5; transition: opacity 1s ease;
+  }
+  #intro.hide { opacity: 0; pointer-events: none; }
+  #intro .y { font-size: clamp(3rem, 12vw, 6rem); font-weight: 700; letter-spacing: 0.02em; }
+  #intro .t { color: #8a8a8f; font-size: 0.95rem; letter-spacing: 0.35em; text-transform: uppercase; }
+  #caption {
+    position: fixed; left: max(1.4rem, env(safe-area-inset-left)); bottom: max(1.6rem, env(safe-area-inset-bottom));
+    z-index: 3; max-width: 72vw; text-shadow: 0 1px 10px rgba(0,0,0,0.8);
+  }
+  #caption .d { font-size: 1.25rem; font-weight: 700; margin-bottom: 0.25rem; }
+  #caption .c { font-size: 0.8rem; color: rgba(255,255,255,0.75); line-height: 1.5; }
+  #bar { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 4; background: rgba(255,255,255,0.14); }
+  #bar i { display: block; height: 100%; width: 0; background: #fff; transition: width 0.2s linear; }
+  .btn {
+    position: fixed; z-index: 6; width: 38px; height: 38px; border-radius: 50%;
+    border: none; display: flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,0.12); backdrop-filter: blur(12px); color: #fff;
+    cursor: pointer; text-decoration: none; font-size: 0.9rem;
+  }
+  #back { top: max(1rem, env(safe-area-inset-top)); left: max(1rem, env(safe-area-inset-left)); }
+  #music { top: max(1rem, env(safe-area-inset-top)); right: max(1rem, env(safe-area-inset-right)); }
+  #yearNav {
+    position: fixed; bottom: max(1.5rem, env(safe-area-inset-bottom)); right: max(1.2rem, env(safe-area-inset-right));
+    z-index: 6; display: flex; gap: 0.4rem;
+  }
+  #yearNav a {
+    color: rgba(255,255,255,0.55); text-decoration: none; font-size: 0.78rem;
+    padding: 0.25rem 0.6rem; border-radius: 999px; background: rgba(0,0,0,0.35); backdrop-filter: blur(8px);
+  }
+  #yearNav a.cur { color: #000; background: rgba(255,255,255,0.9); font-weight: 600; }
+  #empty { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; color: #6e6e73; z-index: 5; }
+  svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+</style>
+</head>
+<body>
+  <div id="stage"><img id="imgA" /><img id="imgB" /></div>
+  <div id="intro"><div class="t">Year in Review</div><div class="y" id="introYear"></div></div>
+  <div id="bar"><i id="barFill"></i></div>
+  <div id="caption"><div class="d" id="capDate"></div><div class="c" id="capText"></div></div>
+  <a class="btn" id="back" href="/" title="回到今天"><svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg></a>
+  <button class="btn" id="music" title="背景音乐"><svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></button>
+  <div id="yearNav"></div>
+  <div id="empty">这一年还没有打过分的照片</div>
+  <audio id="bgm" loop preload="none"><source src="https://image.cuijianzhuang.com/forest.mp3" type="audio/mpeg" /></audio>
+<script>
+  var params = new URLSearchParams(location.search);
+  var qs = params.get('year') ? '?year=' + encodeURIComponent(params.get('year')) : '';
+  var photos = [], idx = -1, timer = null, paused = false, useA = true;
+  var DURATION = 5000;
+  var imgA = document.getElementById('imgA'), imgB = document.getElementById('imgB');
+  var barFill = document.getElementById('barFill');
+
+  function thumbOf(p) { return p.url.replace('/img/', '/thumb/') + '?w=1600&q=85&fit=scale-down'; }
+
+  fetch('/api/recap' + qs).then(function (r) { return r.json(); }).then(function (data) {
+    document.getElementById('introYear').textContent = data.year;
+    var nav = document.getElementById('yearNav');
+    nav.innerHTML = (data.years || []).map(function (y) {
+      return '<a href="/recap?year=' + y + '"' + (y === data.year ? ' class="cur"' : '') + '>' + y + '</a>';
+    }).join('');
+    photos = data.photos || [];
+    if (!photos.length) {
+      document.getElementById('intro').classList.add('hide');
+      document.getElementById('empty').style.display = 'flex';
+      return;
+    }
+    setTimeout(function () {
+      document.getElementById('intro').classList.add('hide');
+      next();
+    }, 1800);
+  });
+
+  function show(i) {
+    idx = (i + photos.length) % photos.length;
+    var p = photos[idx];
+    var incoming = useA ? imgA : imgB;
+    var outgoing = useA ? imgB : imgA;
+    useA = !useA;
+    incoming.classList.remove('on', 'kb');
+    incoming.src = thumbOf(p);
+    var reveal = function () {
+      incoming.classList.add('on', 'kb');
+      outgoing.classList.remove('on');
+      document.getElementById('capDate').textContent = parseInt(p.month) + ' 月 ' + parseInt(p.day) + ' 日';
+      document.getElementById('capText').textContent = [p.caption, p.place].filter(Boolean).join(' · ');
+      barFill.style.width = ((idx + 1) / photos.length * 100) + '%';
+      // 预加载下一张
+      var nx = new Image(); nx.src = thumbOf(photos[(idx + 1) % photos.length]);
+      schedule();
+    };
+    if (incoming.complete && incoming.naturalWidth) reveal();
+    else { incoming.onload = reveal; incoming.onerror = function () { schedule(); }; }
+  }
+
+  function schedule() {
+    clearTimeout(timer);
+    if (!paused) timer = setTimeout(next, DURATION);
+  }
+  function next() { show(idx + 1); }
+  function prev() { show(idx - 1); }
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); clearTimeout(timer); next(); }
+    if (e.key === 'ArrowLeft') { clearTimeout(timer); prev(); }
+    if (e.key === 'Escape') location.href = '/';
+  });
+  // 点击：左 1/3 上一张，右 2/3 下一张；长按暂停由 pointerdown/up 控制
+  var pressTimer = null;
+  document.getElementById('stage').addEventListener('pointerdown', function () {
+    pressTimer = setTimeout(function () { paused = true; clearTimeout(timer); pressTimer = null; }, 350);
+  });
+  document.getElementById('stage').addEventListener('pointerup', function (e) {
+    if (pressTimer) {
+      clearTimeout(pressTimer); pressTimer = null;
+      clearTimeout(timer);
+      if (e.clientX < window.innerWidth / 3) prev(); else next();
+    } else if (paused) {
+      paused = false; schedule();
+    }
+  });
+
+  var bgm = document.getElementById('bgm'), musicOn = false;
+  document.getElementById('music').onclick = function () {
+    musicOn = !musicOn;
+    this.style.opacity = musicOn ? 1 : 0.55;
+    if (musicOn) { bgm.volume = 0.4; bgm.play().catch(function () {}); } else bgm.pause();
+  };
+</script>
+</body>
+</html>`;
+
+// ── 照片手记 ──────────────────────────────────────────────────────────────────
+// 家人给照片写的文字注解（谁拍的、当时发生了什么）。站点面向家庭成员公开，
+// 跟表态一样不做身份校验，只做长度和 key 存在性约束
+async function handleNote(request, env, url) {
+  await ensureAuxTables(env);
+
+  if (request.method === "GET") {
+    const key = url.searchParams.get("key") || "";
+    if (!key) return new Response("Bad Request", { status: 400 });
+    const row = await env.DB.prepare("SELECT note, updated_at FROM photo_notes WHERE key = ?")
+      .bind(key).first();
+    return new Response(JSON.stringify({ note: row?.note || "", updated_at: row?.updated_at || null }), {
+      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+    });
+  }
+
+  if (request.method === "POST") {
+    let body;
+    try { body = await request.json(); } catch { return new Response("Bad Request", { status: 400 }); }
+    const key = typeof body.key === "string" ? body.key : "";
+    const note = typeof body.note === "string" ? body.note.trim() : "";
+    if (!key || note.length > 500) return new Response("Bad Request", { status: 400 });
+    // key 必须是真实存在的照片，别让这张表变成任意写入的垃圾桶
+    const exists = await env.DB.prepare("SELECT 1 FROM photos_index WHERE key = ?").bind(key).first();
+    if (!exists) return new Response("Not Found", { status: 404 });
+
+    if (!note) {
+      await env.DB.prepare("DELETE FROM photo_notes WHERE key = ?").bind(key).run();
+    } else {
+      await env.DB.prepare(
+        "INSERT INTO photo_notes (key, note, updated_at) VALUES (?, ?, ?) " +
+        "ON CONFLICT(key) DO UPDATE SET note = excluded.note, updated_at = excluded.updated_at"
+      ).bind(key, note, new Date().toISOString()).run();
+    }
+    return new Response(JSON.stringify({ ok: true, note }), {
+      headers: { "content-type": "application/json; charset=utf-8" },
+    });
+  }
+
+  return new Response("Method Not Allowed", { status: 405 });
+}
+
+// ── 照片搜索 ──────────────────────────────────────────────────────────────────
+// 搜 AI 生成的中文说明（photo_scores.caption）和拍摄地名（photo_places.name）。
+// 用 LIKE 子串匹配而不是 FTS5——FTS5 默认分词器不吃中文（要 trigram 扩展），
+// 而 LIKE '%词%' 对中文天然就是正确的子串语义；一万多行的表扫一遍毫无压力
+async function handleSearch(request, env, url) {
+  const q = (url.searchParams.get("q") || "").trim();
+  if (q.length < 1 || q.length > 40) {
+    return new Response(JSON.stringify({ error: "q required, 1-40 chars" }), {
+      status: 400,
+      headers: { "content-type": "application/json; charset=utf-8" },
+    });
+  }
+  // 转义 LIKE 元字符，用户输入的 % _ 按字面匹配
+  const like = "%" + q.replace(/[\\%_]/g, (m) => "\\" + m) + "%";
+  const { results } = await env.DB.prepare(
+    `SELECT pi.key AS key, pi.year, pi.month, pi.day, ps.caption, pp.name AS place
+     FROM photos_index pi
+     LEFT JOIN photo_scores ps ON ps.key = pi.key
+     LEFT JOIN photo_places pp ON pp.key = pi.key
+     WHERE pi.type = 'image' AND (ps.caption LIKE ?1 ESCAPE '\\' OR pp.name LIKE ?1 ESCAPE '\\')
+     ORDER BY pi.year DESC, pi.month DESC, pi.day DESC
+     LIMIT 60`
+  ).bind(like).all();
+
+  const photos = results.map((r) => ({
+    key: r.key,
+    url: `/img/${encodeURIComponent(r.key)}`,
+    year: r.year,
+    month: r.month,
+    day: r.day,
+    caption: r.caption || "",
+    place: r.place || "",
+  }));
+  return new Response(JSON.stringify({ q, photos }), {
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "public, max-age=300",
+    },
+  });
+}
+
+const LOVED_HTML = `<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>全家最爱 · 那年今日</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #000; color: #f5f5f7; min-height: 100vh;
+    font-family: "SF Pro Display", -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    padding: 3.5rem 1.2rem 4rem;
+  }
+  .back {
+    position: fixed; top: max(1rem, env(safe-area-inset-top)); left: max(1rem, env(safe-area-inset-left));
+    width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,0.1); backdrop-filter: blur(10px); color: #fff; text-decoration: none; z-index: 5;
+  }
+  h1 { text-align: center; font-size: 1.5rem; margin: 1rem 0 0.3rem; letter-spacing: -0.01em; }
+  .sub { text-align: center; color: #8a8a8f; font-size: 0.82rem; margin-bottom: 2rem; }
+  .grid { max-width: 1000px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 14px; }
+  @media (max-width: 640px) { .grid { grid-template-columns: repeat(2, 1fr); gap: 10px; } }
+  .card {
+    position: relative; border-radius: 10px; overflow: hidden; display: block;
+    background: #1c1c1e; aspect-ratio: 1; text-decoration: none;
+  }
+  .card img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity 0.35s ease; }
+  .card img.loaded { opacity: 1; }
+  .badge {
+    position: absolute; left: 8px; bottom: 8px; display: flex; align-items: center; gap: 4px;
+    background: rgba(0,0,0,0.55); backdrop-filter: blur(8px); border-radius: 999px;
+    padding: 3px 9px; color: #fff; font-size: 0.72rem; font-weight: 600;
+  }
+  .date { position: absolute; right: 8px; bottom: 8px; color: rgba(255,255,255,0.85); font-size: 0.66rem;
+    background: rgba(0,0,0,0.45); backdrop-filter: blur(8px); border-radius: 999px; padding: 3px 8px; }
+  .empty { text-align: center; color: #6e6e73; padding: 5rem 1rem; line-height: 1.7; }
+</style>
+</head>
+<body>
+  <a class="back" href="/" title="回到今天">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+  </a>
+  <h1>❤️ 全家最爱</h1>
+  <div class="sub">被表态最多的照片</div>
+  <div class="grid" id="grid"></div>
+  <div class="empty" id="empty" style="display:none">还没有人表态过<br>去照片里点一个 ❤️ 吧</div>
+<script>
+  fetch('/api/top-loved').then(function (r) { return r.json(); }).then(function (data) {
+    var photos = data.photos || [];
+    if (!photos.length) { document.getElementById('empty').style.display = 'block'; return; }
+    document.getElementById('grid').innerHTML = photos.map(function (p) {
+      var thumb = p.url.replace('/img/', '/thumb/') + '?w=400&h=400&q=75&fit=cover';
+      var dateTxt = p.year + '/' + p.month + '/' + p.day;
+      var href = '/?month=' + p.month + '&day=' + p.day;
+      return '<a class="card" href="' + href + '">' +
+        '<img src="' + thumb.replace(/"/g, '&quot;') + '" loading="lazy" onload="this.classList.add(\\'loaded\\')" />' +
+        '<span class="badge">❤️ ' + p.total + '</span><span class="date">' + dateTxt + '</span></a>';
+    }).join('');
+  });
+</script>
+</body>
+</html>`;
+
+// ── PWA 应用图标 ──────────────────────────────────────────────────────────────
+// 用全库 AI 评分最高的照片裁成方形做安装图标（PWA manifest + apple-touch-icon），
+// 每个尺寸的成品缓存在 PREVIEWS，边缘缓存一天
+async function handleAppIcon(request, env, url) {
+  const allowed = [180, 192, 512];
+  const size = allowed.includes(Number(url.searchParams.get("size"))) ? Number(url.searchParams.get("size")) : 512;
+
+  const cache = caches.default;
+  const cacheKey = new Request(`${SITE_ORIGIN}/app-icon?size=${size}`);
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  const row = await env.DB.prepare(
+    `SELECT pi.key AS key FROM photos_index pi
+     JOIN photo_scores ps ON ps.key = pi.key
+     WHERE pi.type = 'image' AND ps.score IS NOT NULL
+     ORDER BY ps.score DESC LIMIT 1`
+  ).first();
+  if (!row) return new Response("Not Found", { status: 404 });
+
+  const iconKey = `icon/${size}/${row.key.replace(/\.[^.]+$/, "")}.jpg`;
+  let buf;
+  const existing = await env.PREVIEWS.get(iconKey);
+  if (existing) {
+    buf = await existing.arrayBuffer();
+  } else {
+    const object = await env.PHOTOS.get(row.key);
+    if (!object) return new Response("Not Found", { status: 404 });
+    try {
+      const transformed = await env.IMAGES.input(object.body)
+        .transform({ width: size, height: size, fit: "cover" })
+        .output({ format: "image/jpeg", quality: 85 });
+      buf = await transformed.response().arrayBuffer();
+    } catch {
+      return new Response("Unprocessable", { status: 422 });
+    }
+    await env.PREVIEWS.put(iconKey, buf, {
+      httpMetadata: { contentType: "image/jpeg", cacheControl: "public, max-age=31536000, immutable" },
+    });
+  }
+
+  const resp = new Response(buf, {
+    headers: { "content-type": "image/jpeg", "cache-control": "public, max-age=86400" },
+  });
+  await cache.put(cacheKey, resp.clone());
+  return resp;
+}
+
+// 首页 HTML 注入 og meta。month/day 都是校验过的两位数字，title 只含数字和汉字，
+// 不存在注入面
+function injectOgTags(assetResp, url) {
+  const today = bjToday();
+  const month = /^\d{2}$/.test(url.searchParams.get("month") || "") ? url.searchParams.get("month") : today.month;
+  const day = /^\d{2}$/.test(url.searchParams.get("day") || "") ? url.searchParams.get("day") : today.day;
+  const title = `${parseInt(month)}月${parseInt(day)}日，那些年的此刻`;
+  const tags =
+    `<meta property="og:type" content="website">` +
+    `<meta property="og:site_name" content="那年今日">` +
+    `<meta property="og:title" content="${title}">` +
+    `<meta property="og:description" content="横跨那些年头的家庭照片回忆">` +
+    `<meta property="og:url" content="${SITE_ORIGIN}/?month=${month}&day=${day}">` +
+    `<meta property="og:image" content="${SITE_ORIGIN}/og-image?month=${month}&day=${day}">` +
+    `<meta property="og:image:width" content="1200">` +
+    `<meta property="og:image:height" content="630">` +
+    `<meta name="twitter:card" content="summary_large_image">`;
+  return new HTMLRewriter()
+    .on("head", {
+      element(el) {
+        el.append(tags, { html: true });
+      },
+    })
+    .transform(assetResp);
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+// 把 Workflow 登记的"今天新照片"聚合成一条 Telegram 消息推送出去。
+// 每次 Cron（10 分钟）跑一趟：有多少发多少（图最多带 10 张，条数说总量），
+// 发送成功才把队列里对应的 key 删掉，失败留着下一趟重试
+async function flushPendingNotifications(env) {
+  if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) return;
+  const { results } = await env.DB.prepare(
+    "SELECT key FROM meta WHERE key LIKE 'notify:%' LIMIT 50"
+  ).all();
+  if (!results.length) return;
+  const metaKeys = results.map((r) => r.key);
+  const photoKeys = metaKeys.map((k) => k.slice("notify:".length));
+
+  // 生成直链，最多带 10 张；单张生成失败跳过（key 照删，坏图不卡队列）
+  const media = [];
+  for (const k of photoKeys) {
+    if (media.length >= 10) break;
+    const photoUrl = await tgPhotoUrl(env, k);
+    if (photoUrl) media.push({ type: "photo", media: photoUrl });
+  }
+
+  const { month, day } = bjToday();
+  const caption = `📸 今天新增 ${photoKeys.length} 张照片\n🔗 ${SITE_ORIGIN}/?month=${month}&day=${day}`;
+  const tgBase = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`;
+
+  let resp;
+  if (media.length === 0) {
+    // 全部生成失败——退化为纯文本，至少让人知道有新照片
+    resp = await fetch(`${tgBase}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: caption }),
+    });
+  } else if (media.length === 1) {
+    resp = await fetch(`${tgBase}/sendPhoto`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, photo: media[0].media, caption }),
+    });
+  } else {
+    media[0].caption = caption;
+    resp = await fetch(`${tgBase}/sendMediaGroup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, media }),
+    });
+  }
+
+  if (!resp.ok) {
+    console.error("flushPendingNotifications: Telegram API error", resp.status, await resp.text());
+    return; // 失败保留队列，下一趟 Cron 重试
+  }
+  const placeholders = metaKeys.map(() => "?").join(",");
+  await env.DB.prepare(`DELETE FROM meta WHERE key IN (${placeholders})`).bind(...metaKeys).run();
+  console.log(`flushPendingNotifications: notified ${photoKeys.length} new photos`);
+}
+
 async function runBackgroundMaintenance(env) {
   const BATCH_SIZE = 10;
+
+  // 今天新照片的聚合推送放在最前面——很轻（多数时候队列是空的，一条 SELECT 就返回），
+  // 不跟后面的回填/打分抢内存
+  try {
+    await flushPendingNotifications(env);
+  } catch (err) {
+    console.error("flushPendingNotifications failed", err);
+  }
 
   // 回填（listAll 扫全量 ~16000 张建一个大数组）跟 HEIC 解码（单张就能占几十 MB 原始像素）
   // 是这个函数里两个最吃内存的环节，干万不能凑到同一次调用里——上一次就是因为两个撞一起
@@ -443,6 +1092,153 @@ async function mapWithConcurrency(items, limit, fn) {
   return results;
 }
 
+// ── 农历转换（1900–2049）─────────────────────────────────────────────────────
+// 经典压缩表：每年一个整数，低 4 位 = 闰月月份（0 为无闰），bit4~bit15 = 十二个月大小月
+// （1 大月 30 天 / 0 小月 29 天），bit16 = 闰月大小。基准：1900-01-31 为庚子年正月初一
+const LUNAR_INFO = [
+  0x04bd8,0x04ae0,0x0a570,0x054d5,0x0d260,0x0d950,0x16554,0x056a0,0x09ad0,0x055d2,//1900-1909
+  0x04ae0,0x0a5b6,0x0a4d0,0x0d250,0x1d255,0x0b540,0x0d6a0,0x0ada2,0x095b0,0x14977,//1910-1919
+  0x04970,0x0a4b0,0x0b4b5,0x06a50,0x06d40,0x1ab54,0x02b60,0x09570,0x052f2,0x04970,//1920-1929
+  0x06566,0x0d4a0,0x0ea50,0x06e95,0x05ad0,0x02b60,0x186e3,0x092e0,0x1c8d7,0x0c950,//1930-1939
+  0x0d4a0,0x1d8a6,0x0b550,0x056a0,0x1a5b4,0x025d0,0x092d0,0x0d2b2,0x0a950,0x0b557,//1940-1949
+  0x06ca0,0x0b550,0x15355,0x04da0,0x0a5b0,0x14573,0x052b0,0x0a9a8,0x0e950,0x06aa0,//1950-1959
+  0x0aea6,0x0ab50,0x04b60,0x0aae4,0x0a570,0x05260,0x0f263,0x0d950,0x05b57,0x056a0,//1960-1969
+  0x096d0,0x04dd5,0x04ad0,0x0a4d0,0x0d4d4,0x0d250,0x0d558,0x0b540,0x0b5a0,0x195a6,//1970-1979
+  0x095b0,0x049b0,0x0a974,0x0a4b0,0x0b27a,0x06a50,0x06d40,0x0af46,0x0ab60,0x09570,//1980-1989
+  0x04af5,0x04970,0x064b0,0x074a3,0x0ea50,0x06b58,0x05ac0,0x0ab60,0x096d5,0x092e0,//1990-1999
+  0x0c960,0x0d954,0x0d4a0,0x0da50,0x07552,0x056a0,0x0abb7,0x025d0,0x092d0,0x0cab5,//2000-2009
+  0x0a950,0x0b4a0,0x0baa4,0x0ad50,0x055d9,0x04ba0,0x0a5b0,0x15176,0x052b0,0x0a930,//2010-2019
+  0x07954,0x06aa0,0x0ad50,0x05b52,0x04b60,0x0a6e6,0x0a4e0,0x0d260,0x0ea65,0x0d530,//2020-2029
+  0x05aa0,0x076a3,0x096d0,0x04afb,0x04ad0,0x0a4d0,0x1d0b6,0x0d250,0x0d520,0x0dd45,//2030-2039
+  0x0b5a0,0x056d0,0x055b2,0x049b0,0x0a577,0x0a4b0,0x0aa50,0x1b255,0x06d20,0x0ada0,//2040-2049
+];
+const LUNAR_EPOCH_UTC = Date.UTC(1900, 0, 31);
+function _leapMonth(y) { return LUNAR_INFO[y - 1900] & 0xf; }
+function _leapDays(y) { return _leapMonth(y) ? ((LUNAR_INFO[y - 1900] & 0x10000) ? 30 : 29) : 0; }
+function _monthDays(y, m) { return (LUNAR_INFO[y - 1900] & (0x10000 >> m)) ? 30 : 29; }
+function _lunarYearDays(y) {
+  let sum = 348; // 12 × 29
+  for (let i = 0x8000; i > 0x8; i >>= 1) sum += (LUNAR_INFO[y - 1900] & i) ? 1 : 0;
+  return sum + _leapDays(y);
+}
+
+// 公历 → 农历，超出表范围返回 null
+function solarToLunar(sy, sm, sd) {
+  let offset = Math.floor((Date.UTC(sy, sm - 1, sd) - LUNAR_EPOCH_UTC) / 86400000);
+  if (offset < 0) return null;
+  let ly = 1900;
+  for (; ly < 2050; ly++) {
+    const yd = _lunarYearDays(ly);
+    if (offset < yd) break;
+    offset -= yd;
+  }
+  if (ly >= 2050) return null;
+  const leap = _leapMonth(ly);
+  let isLeap = false;
+  let lm = 1;
+  while (lm <= 12) {
+    let days;
+    if (leap > 0 && lm === leap + 1 && !isLeap) {
+      // 闰月排在第 leap 个月之后，月份号不前进
+      isLeap = true;
+      days = _leapDays(ly);
+      lm--;
+    } else {
+      days = _monthDays(ly, lm);
+      isLeap = false;
+    }
+    if (offset < days) break;
+    offset -= days;
+    lm++;
+  }
+  return { year: ly, month: lm, day: offset + 1, isLeap };
+}
+
+// 农历 → 公历；该年没有这个闰月/这一天（如某年腊月没有三十）时返回 null
+function lunarToSolar(ly, lm, ld, isLeapMonth) {
+  if (ly < 1900 || ly >= 2050) return null;
+  const leap = _leapMonth(ly);
+  if (isLeapMonth && leap !== lm) isLeapMonth = false;
+  const dm = isLeapMonth ? _leapDays(ly) : _monthDays(ly, lm);
+  if (ld > dm) return null;
+  let offset = 0;
+  for (let y = 1900; y < ly; y++) offset += _lunarYearDays(y);
+  for (let m = 1; m < lm; m++) {
+    offset += _monthDays(ly, m);
+    if (leap === m) offset += _leapDays(ly);
+  }
+  if (isLeapMonth) offset += _monthDays(ly, lm);
+  offset += ld - 1;
+  const date = new Date(LUNAR_EPOCH_UTC + offset * 86400000);
+  return { year: date.getUTCFullYear(), month: date.getUTCMonth() + 1, day: date.getUTCDate() };
+}
+
+const LUNAR_MONTH_NAMES = ['正','二','三','四','五','六','七','八','九','十','冬','腊'];
+function lunarDayName(d) {
+  if (d === 10) return '初十';
+  if (d === 20) return '二十';
+  if (d === 30) return '三十';
+  const tens = ['初','十','廿','三'];
+  const ones = ['十','一','二','三','四','五','六','七','八','九'];
+  return tens[Math.floor(d / 10)] + ones[d % 10];
+}
+function lunarLabel(l) {
+  return `${l.isLeap ? '闰' : ''}${LUNAR_MONTH_NAMES[l.month - 1]}月${lunarDayName(l.day)}`;
+}
+
+// 农历同日匹配：算出"当前北京年份的这个公历日"对应的农历日，再把库里每个年份的
+// 同一农历日反推回公历，捞出那些天拍的照片（排除公历同日已经出现过的，避免重复）
+async function matchLunarPhotos(env, month, day, excludeKeys) {
+  const bjYear = new Date(Date.now() + 8 * 60 * 60 * 1000).getUTCFullYear();
+  const lunar = solarToLunar(bjYear, parseInt(month), parseInt(day));
+  if (!lunar) return null;
+
+  const { results: yearRows } = await env.DB.prepare(
+    "SELECT DISTINCT year FROM photos_index ORDER BY year DESC"
+  ).all();
+
+  // 公历年 Y 里的农历 (lm, ld)：多数落在农历年 Y，但农历冬月/腊月常落到公历 Y+1 年初，
+  // 所以先试农历年 Y，落不进公历 Y 再试农历年 Y-1
+  const triples = [];
+  for (const { year } of yearRows) {
+    const gy = Number(year);
+    if (!Number.isFinite(gy)) continue;
+    let solar = lunarToSolar(gy, lunar.month, lunar.day, lunar.isLeap);
+    if (!solar || solar.year !== gy) {
+      solar = lunarToSolar(gy - 1, lunar.month, lunar.day, lunar.isLeap);
+    }
+    if (solar && solar.year === gy) {
+      triples.push({ year, month: String(solar.month).padStart(2, "0"), day: String(solar.day).padStart(2, "0") });
+    }
+  }
+  if (!triples.length) return { label: lunarLabel(lunar), years: [] };
+
+  const conds = triples.map(() => "(year = ? AND month = ? AND day = ?)").join(" OR ");
+  const binds = triples.flatMap((t) => [t.year, t.month, t.day]);
+  const { results } = await env.DB.prepare(
+    `SELECT key, year, month, day, size, uploaded FROM photos_index WHERE ${conds}`
+  ).bind(...binds).all();
+
+  const byYearRows = new Map();
+  for (const row of results) {
+    if (!byYearRows.has(row.year)) byYearRows.set(row.year, []);
+    byYearRows.get(row.year).push(row);
+  }
+  const years = [...byYearRows.entries()]
+    .map(([year, rows]) => {
+      const solarDate = triples.find((t) => t.year === year);
+      const photos = pairLivePhotos(rows, year)
+        .filter((p) => !excludeKeys.has(p.key))
+        .sort((a, b) => a.key.localeCompare(b.key));
+      return photos.length > 0
+        ? { year, month: solarDate.month, day: solarDate.day, photos }
+        : null;
+    })
+    .filter(Boolean);
+  years.sort((a, b) => Number(b.year) - Number(a.year));
+  return { label: lunarLabel(lunar), years };
+}
+
 async function matchPhotosForDay(env, month, day) {
   // photos_index 在写入时就用跟这里完全相同的规则算好了拍摄日（文件名带日期直接解析，没带的
   // 走 EXIF/上传时间兜底，见 computePhotoMeta），所以这里直接按索引查，不用再现场 list() 扫 R2 +
@@ -493,20 +1289,33 @@ async function handleMemories(request, env, url, ctx) {
   // 只查这一天命中的那几十张照片，不用把整张 photo_scores/photo_places 表都读出来——
   // 这两张表是跟着整个库的年头一起涨的，按 key 过滤之后查询成本只跟"今天"的照片数挂钩
   const matchedKeys = matchedByYear.flatMap((y) => y.photos.map((p) => p.key));
-  // AI 离线打分的结果（没跑过 /admin/score-photos 或某张图还没轮到时，对应分数就是 undefined）
-  const scores = await loadScoresForKeys(env, matchedKeys);
-  // 拍摄地点（反向地理编码结果），同样是离线缓存，没查过的是 undefined，查过但没 GPS 信息的是空字符串
-  const places = await loadPlacesForKeys(env, matchedKeys);
 
-  const results = matchedByYear.map((y) => ({
+  // 农历同日：同一农历日在往年对应的公历日期，公历同日已出现的照片会被排除。
+  // 出错不影响主内容（label 照常返回，段落为空）
+  let lunar = null;
+  try {
+    lunar = await matchLunarPhotos(env, month, day, new Set(matchedKeys));
+  } catch (err) {
+    console.error("matchLunarPhotos failed", err);
+  }
+  const lunarKeys = lunar ? lunar.years.flatMap((y) => y.photos.map((p) => p.key)) : [];
+
+  // AI 离线打分的结果（没跑过 /admin/score-photos 或某张图还没轮到时，对应分数就是 undefined）
+  const scores = await loadScoresForKeys(env, [...matchedKeys, ...lunarKeys]);
+  // 拍摄地点（反向地理编码结果），同样是离线缓存，没查过的是 undefined，查过但没 GPS 信息的是空字符串
+  const places = await loadPlacesForKeys(env, [...matchedKeys, ...lunarKeys]);
+
+  const enrich = (y) => ({
     ...y,
     photos: y.photos.map((p) => {
       const { score, hasFace, caption } = scoreInfoOf(scores[p.key]);
       return { ...p, score, hasFace, caption, place: placeNameOf(places[p.key]) };
     }),
-  }));
+  });
+  const results = matchedByYear.map(enrich);
+  if (lunar) lunar = { ...lunar, years: lunar.years.map(enrich) };
 
-  const response = new Response(JSON.stringify({ month, day, years: results }), {
+  const response = new Response(JSON.stringify({ month, day, years: results, lunar }), {
     headers: {
       "content-type": "application/json; charset=utf-8",
       "cache-control": "public, max-age=1800",
@@ -2148,6 +2957,7 @@ const MAP_HTML = (mapboxPublicToken) => `<!doctype html>
 export class MemoryRoom {
   constructor(state, env) {
     this.state = state;
+    this.env = env;
   }
 
   async fetch(request) {
@@ -2232,6 +3042,15 @@ export class MemoryRoom {
           this.state.storage.put(rxKey, counts),
         ]);
         this._broadcast({ type: "react", key: msg.key, emoji, count: counts[emoji] });
+        // 计数镜像到 D1（"全家最爱"页面要跨所有日期房间聚合，DO 之间没法互相枚举，
+        // 只能在写入时同步一份出去）。写绝对值幂等，失败不影响实时体验
+        try {
+          await ensureAuxTables(this.env);
+          await this.env.DB.prepare(
+            "INSERT INTO photo_reactions (key, emoji, count) VALUES (?, ?, ?) " +
+            "ON CONFLICT(key, emoji) DO UPDATE SET count = excluded.count"
+          ).bind(msg.key, emoji, counts[emoji]).run();
+        } catch (_) {}
       }
     } catch (_) {}
   }
@@ -2332,6 +3151,19 @@ export class PhotoProcessingWorkflow extends WorkflowEntrypoint {
     // ── Step 5: 清边缘缓存 ───────────────────────────────────────────────────
     await step.do("purge-cache", async () => {
       await purgeDayCache(meta.month, meta.day);
+    });
+
+    // ── Step 6: 今天拍的照片登记进待推送队列 ─────────────────────────────────
+    // 不在这里直接发 Telegram：批量上传会一张一条刷屏。只把 key 登记进 D1
+    // （meta 表 notify: 前缀），由 */10 Cron 聚合成一条消息推送
+    // （见 flushPendingNotifications）
+    await step.do("queue-notify", async () => {
+      const today = bjToday();
+      if (meta.month === today.month && meta.day === today.day) {
+        await this.env.DB.prepare(
+          "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        ).bind(`notify:${key}`, new Date().toISOString()).run();
+      }
     });
   }
 }

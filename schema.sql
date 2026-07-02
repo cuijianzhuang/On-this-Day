@@ -33,3 +33,20 @@ CREATE TABLE IF NOT EXISTS photos_index (
   updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_photos_index_month_day ON photos_index(month, day);
+
+-- 表态计数镜像（权威数据在各日期房间的 DO storage 里，这里是跨房间聚合用的副本，
+-- 由 MemoryRoom 在每次 react/unreact 时同步写入；用于"全家最爱"页面）
+-- 运行时由 ensureAuxTables() 自动建表，这里只做文档记录
+CREATE TABLE IF NOT EXISTS photo_reactions (
+  key TEXT NOT NULL,
+  emoji TEXT NOT NULL,
+  count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (key, emoji)
+);
+
+-- 照片手记：家人给照片写的文字注解
+CREATE TABLE IF NOT EXISTS photo_notes (
+  key TEXT PRIMARY KEY,
+  note TEXT NOT NULL,
+  updated_at TEXT
+);

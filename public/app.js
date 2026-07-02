@@ -469,12 +469,66 @@
     yearMenu.classList.toggle('open');
   };
 
+  // 照片搜索：搜 AI 说明文字和拍摄地名，防抖 350ms，回车立即搜
+  const searchToggle = document.getElementById('searchToggle');
+  const searchPanel = document.getElementById('searchPanel');
+  const searchInput = document.getElementById('searchInput');
+  const searchResults = document.getElementById('searchResults');
+  let _searchTimer = null, _searchSeq = 0;
+
+  searchToggle.onclick = (e) => {
+    e.stopPropagation();
+    const opened = searchPanel.classList.toggle('open');
+    if (opened) setTimeout(() => searchInput.focus(), 60);
+  };
+
+  function runSearch() {
+    const q = searchInput.value.trim();
+    if (!q) { searchResults.innerHTML = ''; return; }
+    const seq = ++_searchSeq;
+    searchResults.innerHTML = '<div class="search-hint">搜索中…</div>';
+    fetch('/api/search?q=' + encodeURIComponent(q))
+      .then(r => r.ok ? r.json() : { photos: [] })
+      .then(data => {
+        if (seq !== _searchSeq) return; // 已被更新的输入顶替
+        const photos = data.photos || [];
+        if (!photos.length) {
+          searchResults.innerHTML = '<div class="search-hint">没有找到「' + escHtml(q) + '」相关的照片</div>';
+          return;
+        }
+        searchResults.innerHTML = photos.map(p => {
+          const thumb = p.url.replace('/img/', '/thumb/') + '?w=96&h=96&q=70&fit=cover';
+          const title = p.caption || p.key.split('/').pop();
+          const meta = [p.place, p.year + '/' + p.month + '/' + p.day].filter(Boolean).join(' · ');
+          return '<a class="search-row" href="/?month=' + p.month + '&day=' + p.day + '">' +
+            '<img src="' + escAttr(thumb) + '" loading="lazy" />' +
+            '<span class="sr-text"><span class="sr-title">' + escHtml(title) + '</span>' +
+            '<span class="sr-meta">' + escHtml(meta) + '</span></span></a>';
+        }).join('');
+      })
+      .catch(() => {
+        if (seq === _searchSeq) searchResults.innerHTML = '<div class="search-hint">搜索失败，请稍后再试</div>';
+      });
+  }
+
+  searchInput.addEventListener('input', () => {
+    clearTimeout(_searchTimer);
+    _searchTimer = setTimeout(runSearch, 350);
+  });
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { clearTimeout(_searchTimer); runSearch(); }
+    if (e.key === 'Escape') searchPanel.classList.remove('open');
+  });
+
   document.addEventListener('click', (e) => {
     if (datePicker.classList.contains('open') && !datePicker.contains(e.target) && e.target !== dateToggle && !dateToggle.contains(e.target)) {
       datePicker.classList.remove('open');
     }
     if (yearMenu.classList.contains('open') && !yearMenu.contains(e.target) && e.target !== yearToggle && !yearToggle.contains(e.target)) {
       yearMenu.classList.remove('open');
+    }
+    if (searchPanel.classList.contains('open') && !searchPanel.contains(e.target) && e.target !== searchToggle && !searchToggle.contains(e.target)) {
+      searchPanel.classList.remove('open');
     }
   });
 
@@ -646,7 +700,60 @@
     infoEl.innerHTML =
       '<div id="lpMapPlaceholder"></div>' +
       '<div class="lp-section-title">基本信息</div>' +
-      '<div class="lp-info-table" id="lpBasicTable">' + rows.join('') + '</div>';
+      '<div class="lp-info-table" id="lpBasicTable">' + rows.join('') + '</div>' +
+      '<div class="lp-section-title">手记</div>' +
+      '<div class="lp-note-wrap" id="lpNoteWrap"><div class="lp-note-empty">加载中…</div></div>';
+    _loadNote(p.key);
+  }
+
+  // ── 照片手记：家人写的文字注解，存服务端，全家可见 ─────────────────────────
+  let _noteSeq = 0;
+  function _loadNote(key) {
+    const seq = ++_noteSeq;
+    fetch('/api/note?key=' + encodeURIComponent(key))
+      .then(r => r.ok ? r.json() : { note: '' })
+      .then(d => { if (seq === _noteSeq) _renderNote(key, d.note || ''); })
+      .catch(() => { if (seq === _noteSeq) _renderNote(key, ''); });
+  }
+
+  function _renderNote(key, note) {
+    const wrap = document.getElementById('lpNoteWrap');
+    if (wrap) {
+      wrap.innerHTML =
+        (note
+          ? '<div class="lp-note-text">' + escHtml(note) + '</div>'
+          : '<div class="lp-note-empty">还没有手记</div>') +
+        '<button class="lp-note-edit" type="button">' + (note ? '编辑' : '写点什么…') + '</button>';
+      wrap.querySelector('.lp-note-edit').onclick = () => _editNote(key, note);
+    }
+    // 移动端信息面板是隐藏的，手记显示在底部提示区
+    const hint = document.getElementById('lbZoomHint');
+    if (hint && window.innerWidth <= 640 && note) hint.textContent = '📝 ' + note;
+  }
+
+  function _editNote(key, current) {
+    const wrap = document.getElementById('lpNoteWrap');
+    if (!wrap) return;
+    wrap.innerHTML =
+      '<textarea class="lp-note-input" maxlength="500" rows="4" placeholder="谁拍的、当时发生了什么…"></textarea>' +
+      '<div class="lp-note-btns">' +
+      '<button class="lp-note-save" type="button">保存</button>' +
+      '<button class="lp-note-cancel" type="button">取消</button></div>';
+    const ta = wrap.querySelector('textarea');
+    ta.value = current;
+    ta.focus();
+    wrap.querySelector('.lp-note-cancel').onclick = () => _renderNote(key, current);
+    wrap.querySelector('.lp-note-save').onclick = () => {
+      const note = ta.value.trim();
+      fetch('/api/note', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, note }),
+      })
+        .then(r => { if (!r.ok) throw new Error('save failed'); return r.json(); })
+        .then(() => { _renderNote(key, note); showToast(note ? '手记已保存' : '手记已删除'); })
+        .catch(() => showToast('保存失败，请重试'));
+    };
   }
 
   function _renderLightboxExif(exif, p) {
@@ -1460,7 +1567,10 @@
         document.getElementById('title').innerHTML = '<span class="date">' + data.month + '月' + data.day + '日</span>，那些年的此刻';
         _joinRoom(data.month + '-' + data.day);
 
-        if (!data.years.length) {
+        // 农历同日段落（后端算好：同一农历日在往年对应的公历日期的照片，公历同日重复的已排除）
+        const lunarYears = (data.lunar && data.lunar.years) || [];
+
+        if (!data.years.length && !lunarYears.length) {
           subtitle.textContent = '这一天，还没有故事';
           content.innerHTML = '<div class="empty">去拍一张，留给未来的自己</div>';
           fadeIn();
@@ -1468,7 +1578,9 @@
         }
 
         const totalPhotos = data.years.reduce((s, y) => s + y.photos.length, 0);
-        subtitle.textContent = '横跨 ' + data.years.length + ' 个年头，' + totalPhotos + ' 个瞬间';
+        subtitle.textContent = data.years.length
+          ? '横跨 ' + data.years.length + ' 个年头，' + totalPhotos + ' 个瞬间'
+          : '公历的这天还没有故事，但农历的这天有';
 
         // 切日期会把整面墙的照片换掉，旧的 cell 元素马上就从 DOM 里消失了——
         // 不清的话 visibleCells/cellCenters 里攒着的是已经被扔掉的旧元素引用，越点几次日期切换越积越多
@@ -1477,7 +1589,10 @@
           cellCenters.clear();
           allPhotos = [];
         }
+        // 注意顺序：先公历后农历，必须跟下面 content.innerHTML 的渲染顺序一致，
+        // flatIndex（openLightbox 的下标）才对得上
         data.years.forEach(y => y.photos.forEach(p => allPhotos.push({ ...p, year: y.year })));
+        lunarYears.forEach(y => y.photos.forEach(p => allPhotos.push({ ...p, year: y.year })));
 
         // 给每张图随机一个尺寸档位、轻微倾斜角度，再配一个随机的晃动周期和延迟，做出挂在墙上被风吹的参差感
         const SIZES = [150, 190, 230, 170, 210];
@@ -1541,7 +1656,7 @@
         // 照片不是一次性全部弹出来，按页面上的出场顺序错开一点时间依次淡入；
         // 延迟封顶（0.9s），照片特别多的时候后面那些不用傻等，很快就一起跟上
         let globalCellIndex = 0;
-        content.innerHTML = data.years.map(y => {
+        const renderYearBlock = (y, idPrefix) => {
           const featured = pickFeatured(y.photos, FEATURED_LIMIT);
           const extraCount = featured ? y.photos.length - featured.size : 0;
           const cells = y.photos.map((p, pi) => {
@@ -1578,13 +1693,18 @@
             ? `<button class="show-more-btn" data-total="${y.photos.length}" onclick="toggleShowMore(this)">展开查看全部 ${y.photos.length} 张 ›</button>`
             : '';
           return `
-      <div class="year-block" id="year-${y.year}">
+      <div class="year-block" id="${idPrefix}${y.year}">
         <div class="year-title">${y.year} 年 <span class="count">（${y.photos.length} 份）</span></div>
         <div class="grid">${cells}</div>
         ${showMoreBtn}
       </div>
     `;
-        }).join('');
+        };
+        const lunarHtml = lunarYears.length
+          ? '<div class="lunar-divider"><span class="lunar-moon">🌙</span>农历' + escHtml(data.lunar.label) + ' · 那些年</div>'
+            + lunarYears.map(y => renderYearBlock(y, 'lunar-year-')).join('')
+          : '';
+        content.innerHTML = data.years.map(y => renderYearBlock(y, 'year-')).join('') + lunarHtml;
         content.querySelectorAll('.cell').forEach((cell) => cellObserver.observe(cell));
         content.querySelectorAll('.cell video[data-src]').forEach((v) => videoLazyObserver.observe(v));
 
