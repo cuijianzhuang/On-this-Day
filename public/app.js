@@ -352,6 +352,22 @@
   let month = params.get('month') || String(now.getMonth() + 1).padStart(2, '0');
   let day = params.get('day') || String(now.getDate()).padStart(2, '0');
 
+  const lensDateEl = document.getElementById('lensDate');
+  const lensYearsEl = document.getElementById('lensYears');
+  const lensMomentsEl = document.getElementById('lensMoments');
+  const lensStateEl = document.getElementById('lensState');
+
+  function setLensSummary(m, d, years, moments, state) {
+    if (lensDateEl) lensDateEl.textContent = String(m).padStart(2, '0') + '.' + String(d).padStart(2, '0');
+    if (lensYearsEl) lensYearsEl.textContent = years == null ? '--' : String(years);
+    if (lensMomentsEl) lensMomentsEl.textContent = moments == null ? '--' : String(moments);
+    if (lensStateEl) {
+      lensStateEl.textContent = state || 'READY';
+      lensStateEl.dataset.state = (state || 'READY').toLowerCase();
+    }
+  }
+  setLensSummary(month, day, null, null, 'LOADING');
+
   // 地图图标带上当前正在看的日期，这样从某个历史日期点进地图，看到的也是那一天的照片
   document.getElementById('mapLink').href = '/map?month=' + month + '&day=' + day;
 
@@ -408,6 +424,7 @@
     history.pushState(null, '', location.pathname + '?month=' + m + '&day=' + d);
     document.getElementById('mapLink').href = '/map?month=' + m + '&day=' + d;
     renderCalendar();
+    setLensSummary(m, d, null, null, 'LOADING');
     loadMemories(m, d);
   }
   // 浏览器前进/后退也要认这个 URL，不然退回去地址栏变了但页面内容没跟着变
@@ -419,6 +436,7 @@
     currentMonth = Number(month); currentDay = Number(day);
     document.getElementById('mapLink').href = '/map?month=' + month + '&day=' + day;
     renderCalendar();
+    setLensSummary(month, day, null, null, 'LOADING');
     loadMemories(month, day);
   });
 
@@ -1284,6 +1302,7 @@
         if (!fetchSettled) {
           showedSkeleton = true;
           content.innerHTML = SKELETON_HTML;
+          setLensSummary(month, day, null, null, 'LOADING');
           fadeIn();
         }
       });
@@ -1304,6 +1323,7 @@
         _joinRoom(data.month + '-' + data.day);
 
         if (!data.years.length) {
+          setLensSummary(data.month, data.day, 0, 0, 'EMPTY');
           subtitle.textContent = '这一天，还没有故事';
           content.innerHTML = '<div class="empty">去拍一张，留给未来的自己</div>';
           fadeIn();
@@ -1311,6 +1331,7 @@
         }
 
         const totalPhotos = data.years.reduce((s, y) => s + y.photos.length, 0);
+        setLensSummary(data.month, data.day, data.years.length, totalPhotos, 'READY');
         subtitle.textContent = '横跨 ' + data.years.length + ' 个年头，' + totalPhotos + ' 个瞬间';
 
         // 切日期会把整面墙的照片换掉，旧的 cell 元素马上就从 DOM 里消失了——
@@ -1461,6 +1482,7 @@
       if (seq !== _memSeq) return; // 已经被新的切换顶替，不用管这次失败
       console.error('loadMemories failed', err);
       const showError = () => {
+        setLensSummary(month, day, null, null, 'ERROR');
         subtitle.textContent = '加载失败，请稍后重试';
         content.innerHTML = '<div class="empty">这天的回忆没能加载出来，请检查网络后重试</div>';
         fadeIn();

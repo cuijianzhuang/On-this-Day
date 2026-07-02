@@ -7,7 +7,10 @@
   html::-webkit-scrollbar, body::-webkit-scrollbar { display: none; }
   body {
     font-family: "SF Pro Display", -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
-    background: #000;
+    background:
+      radial-gradient(circle at 15% 8%, rgba(82,106,255,0.18), transparent 28rem),
+      radial-gradient(circle at 85% 0%, rgba(255,143,126,0.14), transparent 24rem),
+      linear-gradient(180deg, #050507 0%, #0b0b10 42%, #050505 100%);
     color: #f5f5f7;
     margin: 0;
     padding: 0 0 6rem;
@@ -222,12 +225,45 @@
   }
   .daily-poem.show { opacity: 1; }
   .daily-poem .poem-source { color: #5a5a5e; font-style: normal; margin-left: 0.4rem; }
+  .lens-summary {
+    display: inline-flex; align-items: center; justify-content: center; flex-wrap: wrap;
+    gap: 0.5rem; margin-top: 1.1rem; padding: 0.35rem;
+    border: 1px solid rgba(255,255,255,0.08); border-radius: 999px;
+    background: rgba(12,12,16,0.44); backdrop-filter: blur(24px) saturate(1.55);
+    box-shadow: 0 18px 60px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.06);
+  }
+  .lens-chip {
+    min-height: 34px; display: inline-flex; align-items: center; gap: 0.42rem;
+    padding: 0.38rem 0.72rem; border-radius: 999px;
+    background: rgba(255,255,255,0.055); color: #d8d8de;
+    font-family: 'Space Grotesk', sans-serif; letter-spacing: 0.02em;
+  }
+  .lens-chip-label { font-size: 0.58rem; color: #73737a; letter-spacing: 0.16em; }
+  .lens-chip-value { font-size: 0.86rem; font-weight: 600; color: #f5f5f7; }
+  .lens-chip-state {
+    background: linear-gradient(135deg, rgba(255,143,126,0.22), rgba(224,166,78,0.16));
+    border: 1px solid rgba(255,190,120,0.16); color: #ffd8a8;
+    font-size: 0.64rem; font-weight: 700; letter-spacing: 0.16em;
+  }
+  .lens-chip-state[data-state="ready"] { color: #a7f3d0; background: rgba(34,197,94,0.14); border-color: rgba(74,222,128,0.18); }
+  .lens-chip-state[data-state="empty"] { color: #c7c7cc; background: rgba(255,255,255,0.08); }
+  .lens-chip-state[data-state="error"] { color: #fecaca; background: rgba(239,68,68,0.16); border-color: rgba(248,113,113,0.22); }
   /* text-shadow 会从 .daily-poem 继承下来，这里只用补一下浅色模式下的字色，对比度才够 */
   body.sun-on .daily-poem .poem-source { color: #44444a; }
-  .year-block { max-width: 1100px; margin: 0 auto 3.4rem; padding: 0 1.6rem; }
+  body.sun-on .lens-summary { background: rgba(255,255,255,0.62); border-color: rgba(0,0,0,0.08); box-shadow: 0 16px 44px rgba(0,0,0,0.12); }
+  body.sun-on .lens-chip { background: rgba(255,255,255,0.58); color: #1c1c1e; }
+  body.sun-on .lens-chip-value { color: #1c1c1e; }
+  body.sun-on .lens-chip-label { color: #6e6e73; }
+  .year-block {
+    max-width: 1120px; margin: 0 auto 3.4rem; padding: 1.1rem 1.1rem 1.35rem;
+    border: 1px solid rgba(255,255,255,0.055); border-radius: 28px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.015));
+    box-shadow: 0 20px 70px rgba(0,0,0,0.22);
+  }
   .year-title {
     font-size: 1.3rem; font-weight: 600; color: #f5f5f7; margin-bottom: 1.1rem;
     display: flex; align-items: baseline; gap: 0.55rem; letter-spacing: -0.01em;
+    padding: 0 0.25rem;
   }
   .year-title .count { color: #6e6e73; font-size: 0.78rem; font-weight: 400; font-family: 'Space Grotesk', sans-serif; }
   /* 首次加载/缓存没命中时 /api/memories 可能要等几秒（库跨年头多，R2 扫描+读 EXIF 需要时间），
@@ -549,6 +585,7 @@
   body.sun-on .lp-label { color: #8a8a90; }
   body.sun-on .lp-value { color: #3a3a3c; }
   body.sun-on .lp-mini-map { border-color: rgba(0,0,0,0.07); }
+  body.sun-on .year-block { background: rgba(255,255,255,0.42); border-color: rgba(0,0,0,0.06); box-shadow: 0 16px 48px rgba(0,0,0,0.10); }
   body.sun-on .lp-histogram-wrap { background: rgba(0,0,0,0.08); }
 
   /* 缩放状态游标 */
@@ -762,47 +799,182 @@
   }
   @media (max-width: 640px) {
     #fingertip, #cursorDot { display: none !important; }
-    body { padding: 0 0 3rem; }
-    header { padding: 3.2rem 1rem 2.2rem; }
-    .subtitle { font-size: 0.85rem; }
-    .year-block { padding: 0 1rem; }
+    body { padding: 0 0 max(3.5rem, calc(env(safe-area-inset-bottom) + 2.5rem)); }
+    header {
+      padding: max(4.4rem, calc(env(safe-area-inset-top) + 3.2rem)) 1rem 2rem;
+      overflow: visible;
+    }
+    .eyebrow { font-size: 0.62rem; letter-spacing: 0.28em; margin-bottom: 0.45rem; }
+    h1 { font-size: clamp(2rem, 12vw, 2.7rem); line-height: 1.05; }
+    .subtitle { font-size: 0.9rem; margin-top: 0.7rem; line-height: 1.45; }
+    .daily-poem {
+      max-width: min(30rem, calc(100vw - 2rem));
+      margin: 0.65rem auto 0;
+      padding: 0 0.15rem;
+      font-size: 0.78rem;
+      line-height: 1.55;
+    }
+    .daily-poem .poem-source { display: block; margin: 0.2rem 0 0; }
+    .lens-summary {
+      width: min(100%, 23rem);
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      border-radius: 22px;
+      gap: 0.35rem;
+      margin-top: 0.9rem;
+    }
+    .lens-chip {
+      min-width: 0; min-height: 42px; justify-content: center; flex-direction: column; gap: 0.1rem;
+      padding: 0.45rem 0.35rem;
+    }
+    .lens-chip-label { font-size: 0.52rem; }
+    .lens-chip-value { font-size: 0.82rem; }
+    .lens-chip-state { grid-column: 1 / -1; min-height: 32px; flex-direction: row; letter-spacing: 0.14em; }
+    .header-controls {
+      position: fixed;
+      top: max(0.65rem, env(safe-area-inset-top));
+      right: max(0.7rem, env(safe-area-inset-right));
+      gap: 0.45rem;
+      z-index: 80;
+      padding: 0.32rem;
+      border-radius: 999px;
+      background: rgba(18,18,22,0.58);
+      border: 1px solid rgba(255,255,255,0.08);
+      backdrop-filter: blur(22px) saturate(1.5);
+      box-shadow: 0 8px 28px rgba(0,0,0,0.28);
+    }
+    body.sun-on .header-controls { background: rgba(255,255,255,0.62); border-color: rgba(0,0,0,0.08); }
+    .date-toggle {
+      width: 36px; height: 36px;
+      background: rgba(255,255,255,0.10);
+    }
+    .date-toggle svg { width: 16px; height: 16px; }
+    .sunlight-switch { gap: 0; }
+    .sunlight-switch span { display: none; }
+    .switch { width: 42px; height: 24px; }
+    .switch .track::before { width: 18px; height: 18px; }
+    .switch input:checked + .track::before { transform: translateX(18px); }
+    .date-picker, .year-menu {
+      position: fixed;
+      top: max(3.7rem, calc(env(safe-area-inset-top) + 3rem));
+      right: max(0.7rem, env(safe-area-inset-right));
+      left: max(0.7rem, env(safe-area-inset-left));
+      width: auto;
+      max-height: min(72dvh, 520px);
+      overflow: auto;
+      transform-origin: top right;
+      border-radius: 20px;
+      z-index: 90;
+    }
+    .date-picker { padding: 1rem; }
+    .date-picker::before { right: 28px; }
+    .year-menu { padding: 0.55rem; }
+    .year-menu button { padding: 0.72rem 0.9rem; border-radius: 14px; }
+    .cal-nav-btn { width: 32px; height: 32px; font-size: 1rem; }
+    .cal-grid button { min-height: 36px; font-size: 0.86rem; }
+    .date-picker .action-btn { min-height: 40px; }
+    .year-block { padding: 0.85rem; margin: 0 0.65rem 2.2rem; border-radius: 24px; }
+    .year-title { margin-bottom: 0.85rem; font-size: 1.1rem; }
     /* 移动端完全交给 CSS Grid 算列宽：repeat(2,1fr) 不依赖任何 vw/calc/padding 计算，
        浏览器自动等分，任何屏宽都正确；.grid padding 清零，由父元素 .year-block 统一留白 */
     .grid {
       display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 14px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
       padding: 0;
       perspective: none;
-      align-items: unset;
+      align-items: start;
       justify-content: unset;
     }
     /* 骨架屏容器同理，它不在 .year-block 里，自己保留水平 padding */
     .skeleton-grid {
       display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 14px;
-      padding: 1rem 1rem 1.5rem;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      padding: 1rem 0.85rem 1.5rem;
     }
     /* 卡片宽度交给 grid track，去掉行内 width；倾斜在窄屏会让视觉宽度失衡，一并去掉 */
-    .cell { width: 100% !important; height: auto !important; transform: none !important; }
+    .cell {
+      width: 100% !important;
+      height: auto !important;
+      transform: none !important;
+      padding: 10px 7px 22px;
+      border-radius: 6px;
+      box-shadow: 0 6px 16px rgba(0,0,0,0.42);
+    }
+    .cell::before { width: 10px; height: 10px; margin-left: -5px; }
+    .cell .frame-year { bottom: 5px; font-size: 0.58rem; }
+    .react-btn { right: 5px; bottom: 22px; opacity: 0.88; }
     .lightbox-panel { display: none; }
-    .lightbox-stage { padding: 1rem 2.8rem; }
-    .lightbox-stage img, .lightbox-stage video { max-width: calc(100vw - 5.6rem); max-height: calc(100dvh - 58px - 2.5rem); }
-    .lightbox-filmstrip { height: 58px; }
-    .lfs-item { height: 42px; width: 42px; }
-    .lightbox-nav { font-size: 1.8rem; padding: 0.5rem; }
-    .lightbox-nav.prev { left: 0.1rem; }
-    .lightbox-nav.next { right: 0.1rem; }
-    .lightbox-actions { top: max(0.6rem, env(safe-area-inset-top)); right: max(0.8rem, env(safe-area-inset-right)); }
-    .lightbox-btn { width: 36px; height: 36px; }
-    .header-controls { top: max(0.9rem, env(safe-area-inset-top)); right: max(0.8rem, env(safe-area-inset-right)); gap: 0.6rem; }
-    .date-toggle, .sunlight-switch .switch { transform: scale(1.05); }
-    .sunlight-switch span { display: none; }
-    .date-picker { top: 3.4rem; right: 0.8rem; left: 0.8rem; width: auto; }
+    .lightbox-inner { height: 100dvh; }
+    .lightbox-stage {
+      padding: max(4.4rem, calc(env(safe-area-inset-top) + 3.5rem)) 0.75rem calc(76px + env(safe-area-inset-bottom));
+    }
+    .lightbox-stage img, .lightbox-stage video {
+      max-width: calc(100vw - 1.5rem);
+      max-height: calc(100dvh - 150px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+      border-radius: 12px;
+    }
+    .live-photo-wrap { max-width: calc(100vw - 1.5rem); }
+    .lightbox-filmstrip {
+      height: calc(62px + env(safe-area-inset-bottom));
+      padding: 0.5rem 0.75rem max(0.5rem, env(safe-area-inset-bottom));
+      align-items: flex-start;
+    }
+    .lfs-item { height: 44px; width: 44px; border-radius: 8px; }
+    .lightbox-nav {
+      top: auto;
+      bottom: calc(76px + env(safe-area-inset-bottom));
+      transform: none;
+      width: 42px; height: 42px;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 50%;
+      background: rgba(0,0,0,0.32);
+      backdrop-filter: blur(14px);
+      font-size: 1.65rem;
+      padding: 0;
+      opacity: 0.85;
+      z-index: 6;
+    }
+    .lightbox-nav.prev { left: 0.75rem; }
+    .lightbox-nav.next { right: 0.75rem; }
+    .lightbox-actions {
+      top: max(0.75rem, env(safe-area-inset-top));
+      right: max(0.75rem, env(safe-area-inset-right));
+      gap: 0.45rem;
+      padding: 0.3rem;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.28);
+      backdrop-filter: blur(18px);
+    }
+    .lightbox-btn { width: 38px; height: 38px; }
+    .lb-react-wrap {
+      right: max(0.75rem, env(safe-area-inset-right));
+      bottom: calc(76px + env(safe-area-inset-bottom));
+      z-index: 7;
+    }
+    .lb-react-label { display: none; }
+    .lb-react-btn { min-height: 42px; padding: 0.38rem 0.7rem; }
+    .lb-emoji-popup {
+      max-width: calc(100vw - 1.5rem);
+      padding: 0.55rem;
+      border-radius: 16px;
+    }
+    .lb-emoji-popup .lp-emoji-grid { gap: 0.32rem; }
+    .lp-emoji-btn { min-width: 44px; min-height: 48px; padding: 0.45rem 0.25rem; }
+    .lb-zoom-hint { bottom: calc(64px + env(safe-area-inset-bottom)); font-size: 0.62rem; }
+    .lb-scale-badge { bottom: calc(76px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); }
     .back-to-top { bottom: max(1.2rem, env(safe-area-inset-bottom)); right: max(1rem, env(safe-area-inset-right)); }
-    .online-badge { top: max(0.9rem, env(safe-area-inset-top)); left: max(0.8rem, env(safe-area-inset-left)); }
-    .cell, .date-toggle, .lightbox-btn, .lightbox-nav, .sunlight-switch .track {
+    .online-badge { top: max(0.75rem, env(safe-area-inset-top)); left: max(0.7rem, env(safe-area-inset-left)); z-index: 80; }
+    .online-avatar { width: 30px; height: 30px; }
+    .cell, .date-toggle, .lightbox-btn, .lightbox-nav, .sunlight-switch .track, .lb-react-btn, .lp-emoji-btn {
       -webkit-tap-highlight-color: transparent;
     }
+  }
+  @media (max-width: 380px) {
+    .year-block { padding: 0.7rem; margin-left: 0.5rem; margin-right: 0.5rem; }
+    .grid, .skeleton-grid { gap: 10px; }
+    .cell { padding: 8px 6px 20px; }
+    .header-controls { transform: scale(0.94); transform-origin: top right; }
+    .online-badge { transform: scale(0.92); transform-origin: top left; }
   }
