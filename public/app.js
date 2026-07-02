@@ -396,7 +396,7 @@
       localStorage.setItem('showLunarMemories', calendarMode === 'lunar' ? '1' : '0');
       syncLunarToggle();
       // 关闭时先把已经渲染出来的农历段落立即移除，避免等待接口期间看起来像开关没生效。
-      if (!showLunar) removeLunarMemoriesFromDom();
+      if (calendarMode !== 'lunar') removeLunarMemoriesFromDom();
       loadMemories(month, day);
     };
   }
@@ -1623,7 +1623,7 @@
       });
     }
 
-    const includeLunarForRequest = showLunar;
+    const includeLunarForRequest = calendarMode === 'lunar';
     const fetchPromise = fetch('/api/memories?month=' + month + '&day=' + day + (includeLunarForRequest ? '&lunar=1' : '&lunar=0')).then(r => {
       if (!r.ok) throw new Error('memories fetch failed: ' + r.status);
       return r.json();
@@ -1639,7 +1639,7 @@
         _joinRoom(data.month + '-' + data.day);
 
         // 农历同日段落（后端算好：同一农历日在往年对应的公历日期的照片，公历同日重复的已排除）
-        const lunarYears = includeLunarForRequest && showLunar && data.lunar ? (data.lunar.years || []) : [];
+        const lunarYears = includeLunarForRequest && data.lunar ? (data.lunar.years || []) : [];
 
         if (!data.years.length && !lunarYears.length) {
           subtitle.textContent = '这一天，还没有故事';
