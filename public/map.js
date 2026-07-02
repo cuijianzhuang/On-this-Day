@@ -41,7 +41,10 @@
     if (_exifAbort) { _exifAbort.abort(); _exifAbort = null; }
   }
 
-  function fmtDate(p) { return p.year + '年' + parseInt(p.month) + '月' + parseInt(p.day) + '日'; }
+  // 单天模式的旧缓存响应里可能没有 month/day 字段，用页面参数兜底（本来就是那一天）
+  function photoMonth(p) { return p.month || mapMonth; }
+  function photoDay(p) { return p.day || mapDay; }
+  function fmtDate(p) { return p.year + '年' + parseInt(photoMonth(p)) + '月' + parseInt(photoDay(p)) + '日'; }
 
   // ── 单张照片详情卡：锚定在标记上（图 + 名称 + 地点·日期 + 设备/坐标/海拔）──────
   function showPhotoPopup(p) {
@@ -51,7 +54,7 @@
     const sub = [p.name, fmtDate(p)].filter(Boolean).join(' · ');
     const coordStr = (lat >= 0 ? '北纬 ' : '南纬 ') + Math.abs(lat).toFixed(4) + '°，'
       + (lon >= 0 ? '东经 ' : '西经 ') + Math.abs(lon).toFixed(4) + '°';
-    const dayHref = '/?month=' + p.month + '&day=' + p.day;
+    const dayHref = '/?month=' + photoMonth(p) + '&day=' + photoDay(p);
     const thumb = p.url.replace('/img/', '/thumb/') + '?w=480&h=340&q=80&fit=cover';
     const media = p.type === 'video'
       ? '<video src="' + escAttr(p.url) + '#t=0.5" muted preload="metadata" class="loaded"></video>'
@@ -99,9 +102,10 @@
   function showClusterPopup(coords, total, items) {
     closePopup();
     const place = (items.find(p => p.name) || {}).name || '';
-    const sorted = items.slice().sort((a, b) => (a.year + a.month + a.day).localeCompare(b.year + b.month + b.day));
+    const sorted = items.slice().sort((a, b) =>
+      (a.year + photoMonth(a) + photoDay(a)).localeCompare(b.year + photoMonth(b) + photoDay(b)));
     const first = sorted[0], last = sorted[sorted.length - 1];
-    const fmt = (p) => p.year + '/' + parseInt(p.month || mapMonth) + '/' + parseInt(p.day || mapDay);
+    const fmt = (p) => p.year + '/' + parseInt(photoMonth(p)) + '/' + parseInt(photoDay(p));
     const range = fmt(first) + (sorted.length > 1 && fmt(last) !== fmt(first) ? ' – ' + fmt(last) : '');
 
     const thumbs = items.slice(0, 6).map((p, i) => {

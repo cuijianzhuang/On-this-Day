@@ -2976,6 +2976,9 @@ async function handleMapPhotos(request, env, url) {
         lon: entry.lon,
         name: entry.name || "",
         year: p.year,
+        // 跟全量模式对齐：详情卡的日期展示和"去看这一天"链接都要用到
+        month,
+        day,
       };
     })
     .filter(Boolean);
