@@ -1250,6 +1250,7 @@
   const CURSOR_HOVER_SELECTOR = 'a, button, .cell, input, label, [onclick]';
 
   document.addEventListener('mousemove', (e) => {
+    if (_isTouchDevice) return; // 触屏合成的 mousemove 直接丢弃
     pointerX = e.clientX; pointerY = e.clientY; pointerActive = true;
     document.body.classList.add('custom-cursor-active');
     if (cursorDot) {
@@ -1325,6 +1326,11 @@
     }
   }, { rootMargin: '300px' });
 
+  // 触屏设备：tap 会合成 mousemove，若让 rAF 对卡片施加 scale/rotateX，
+  // 会与 grid 布局和 transform-origin:top center 叠加，滚动时产生比例错乱；
+  // 触屏完全不需要 3D 倾斜效果，直接跳过整个 tilt 循环。
+  const _isTouchDevice = window.matchMedia('(pointer: coarse)').matches;
+
   function wallTick() {
     requestAnimationFrame(wallTick);
 
@@ -1335,6 +1341,9 @@
       fingertip.style.opacity = pointerActive ? '1' : '0';
       fingertip.style.transform = 'translate(' + fingerX + 'px,' + fingerY + 'px) translate(-50%,-50%)';
     }
+
+    // 触屏设备跳过鼠标 3D 倾斜（tap 会合成 mousemove 导致 scale 被写入）
+    if (_isTouchDevice) return;
 
     // 鼠标没在页面上动的时候，没必要每帧都去算每张照片的距离；
     // 鼠标离开时已经在 mouseleave 里把 touching 状态一次性清过了
