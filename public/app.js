@@ -145,18 +145,28 @@
   window.doReactEmoji = function(key, emoji, btnEl) {
     if (!key || !emoji) return;
     if (!_myReactions[key]) _myReactions[key] = new Set();
-    if (_myReactions[key].has(emoji)) return; // 同一人只能点一次
-    _myReactions[key].add(emoji);
-    if (_room && _room.readyState === WebSocket.OPEN) {
-      _room.send(JSON.stringify({ type: 'react', key, emoji }));
+    if (_myReactions[key].has(emoji)) {
+      // 已点过 → 取消
+      _myReactions[key].delete(emoji);
+      if (_room && _room.readyState === WebSocket.OPEN) {
+        _room.send(JSON.stringify({ type: 'unreact', key, emoji }));
+      }
+      if (_roomReactions[key]) {
+        _roomReactions[key][emoji] = Math.max(0, (_roomReactions[key][emoji] || 0) - 1);
+      }
+    } else {
+      // 未点过 → 添加
+      _myReactions[key].add(emoji);
+      if (_room && _room.readyState === WebSocket.OPEN) {
+        _room.send(JSON.stringify({ type: 'react', key, emoji }));
+      }
+      if (!_roomReactions[key]) _roomReactions[key] = {};
+      _roomReactions[key][emoji] = (_roomReactions[key][emoji] || 0) + 1;
+      const el = btnEl || document.querySelector(`#lbEmojiPopup .lp-emoji-btn[data-emoji="${CSS.escape(emoji)}"]`);
+      if (el) { el.classList.remove('pop'); requestAnimationFrame(() => el.classList.add('pop')); }
     }
-    if (!_roomReactions[key]) _roomReactions[key] = {};
-    _roomReactions[key][emoji] = (_roomReactions[key][emoji] || 0) + 1;
     _syncCount(key, _totalReactions(key), false);
     _renderLightboxReactions(key);
-    // 触发弹跳动画（传入 btn 的 data-emoji 匹配找到 DOM 元素重新触发）
-    const el = btnEl || document.querySelector(`#lbEmojiPopup .lp-emoji-btn[data-emoji="${CSS.escape(emoji)}"]`);
-    if (el) { el.classList.remove('pop'); requestAnimationFrame(() => el.classList.add('pop')); }
   };
   // ────────────────────────────────────────────────────────────────────────────────
 
