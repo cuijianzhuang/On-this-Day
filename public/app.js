@@ -1237,10 +1237,15 @@
     _lbApplyTransform();
   }, { passive: false });
 
+  // 浏览器对 <img> 有原生拖拽行为（拖出半透明幻影），会把 pointermove/up 序列
+  // 直接打断（触发 pointercancel），放大后的平移根本走不起来——必须整体禁掉
+  lightboxBody.addEventListener('dragstart', (e) => e.preventDefault());
+
   // 放大时拖拽平移；未放大时水平拖动整体 lightboxBody 切换图片
   lightboxBody.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
     if (_lbScale > 1) {
+      e.preventDefault(); // 拦截原生图片拖拽/文字选择，把手势留给平移
       e.stopPropagation();
       _lbPanning = true;
       lightboxBody.setPointerCapture(e.pointerId);
