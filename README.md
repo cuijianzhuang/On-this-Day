@@ -6,75 +6,89 @@
 
 ### 核心逻辑
 - 自动按"今天的月/日"匹配历年照片，跨年份展示
+- **农历"那年今日"**：顶栏"公/农"滑块切换历法——农历模式下按同一农历日反推历年对应的公历日期来匹配照片（内置 1900–2049 农历压缩表，支持闰月），公历同日已出现过的照片自动去重
 - 支持文件名带日期（`IMG_20260627_141422.PNG`）和纯序号命名（`IMG_1017.JPG`）两种素材：
   - 带日期的直接按文件名匹配
   - 不带日期的，JPEG/HEIC 读 EXIF `DateTimeOriginal`，其他格式回退用 R2 上传时间近似
-- 用 Workers Cache API 缓存无日期文件名的拍摄日期推算结果，避免重复计算
 - 同一年的照片按文件名排序，不再是 R2 返回的随机顺序
 - 图片/视频代理接口隐藏真实 R2 链接，支持 inline 预览和 `?dl=1` 下载两种模式
-- **Live Photo 配对**：同目录下文件名（去掉扩展名）完全相同的一张 HEIC/JPEG + 一段 MOV，自动识别成一条 `type: 'live'` 记录，不会在时间线里重复出现两次；网格缩略图悬浮（桌面）/长按（移动端）播放配对的短视频预览，灯箱大图同样悬浮播放，参考 Apple Photos 的"Live Photo"交互
+- **Live Photo 配对**：同目录下文件名（去掉扩展名）完全相同的一张 HEIC/JPEG + 一段 MOV，自动识别成一条 `type: 'live'` 记录；网格缩略图悬浮（桌面）/长按（移动端）播放配对的短视频预览，灯箱大图同样悬浮播放
+
+### 实时共享（Durable Objects）
+- 每个日期（"MM-DD"）对应一个 DO 房间实例，家人同时打开同一天时顶部显示"👥 N 人在看"（按唯一用户去重；启用 Cloudflare Access 时用邮箱识别身份并显示 Gravatar 头像）
+- **表态**：每张照片可发 emoji 表态（👍❤️😍😂😮😢🔥✨），全员实时看到计数变化；一个人对同一照片同一 emoji 只能点一次，再点一次取消
+- 表态存储按照片拆分为 `rx:<photoKey>` 独立 key（避免单 key 128KB 上限），旧格式自动懒迁移
+- 计数同步镜像到 D1 `photo_reactions` 表：房间首次有人进入时全量回填历史计数，之后每次写入镜像该照片的全部 emoji——"全家最爱"页靠它跨日期聚合
+
+### 围绕照片的小功能
+- **全家最爱 `/loved`**：跨所有日期聚合表态最多的照片排行
+- **照片搜索**：顶栏 🔍 按钮，搜 AI 生成的中文文案和拍摄地名（350ms 防抖 + 过期请求丢弃）
+- **照片手记**：灯箱详情面板里给任意照片写一句文字注解，存 D1 `photo_notes`
+- **年度回忆放映 `/recap`**：取某一年 AI 评分最高的 40 张按时间顺序全屏 Ken Burns 幻灯放映
+- **OG 分享卡片**：链接分享到微信/Telegram/Twitter 时，预览卡片自动带上当天最高分照片和日期标题（HTMLRewriter 注入 + `/og-image` 动态生成）
+- **PWA 可安装**：manifest + 动态应用图标（`/app-icon` 用全库最高分照片裁方形生成），`<link rel="manifest">` 带 `crossorigin="use-credentials"` 以兼容 Cloudflare Access
+- **Telegram 推送**：北京时间每天零点把当天历史照片按 AI 评分挑最高的几张推送到 Telegram 群（配文案 + 跳转链接）；新照片上传即时推送（10 分钟聚合窗口防刷屏）
 
 ### 数据索引（photos_index）
-- R2 里的照片/视频不再靠每次访问现场 `list()` 扫描——新增了一张 D1 索引表 `photos_index`（key, type, year, month, day, size, uploaded），按 month/day 建了索引，查询比扫全量 R2 便宜得多
-- **R2 Event Notification → Queue → Workflow** 增量维护这张表：新文件一上传（`PutObject`/`CompleteMultipartUpload`/`CopyObject`），`queue()` consumer 只负责触发 `PhotoProcessingWorkflow`，真正的索引、HEIC 转预览、AI 打分、查地点、清缓存分散到 Workflow 的独立步骤里；文件被删除（`DeleteObject`/`LifecycleDeletion`）则在队列消费者里同步清掉索引、打分、查地点、配套 HEIC 预览图和对应日期缓存，避免页面继续展示已经不存在的照片
-- 队列消费者 `max_batch_size` 仍保留为 1：上传事件会立即 ack 并交给 Workflow 持久化重试，内存压力不再堆在 Queue consumer 里；删除事件轻量内联处理，避免为了删除再跑一整条流水线
-- 首次部署或者存量库很大时，需要先跑一次性回填：`GET /admin/backfill-photos-index?token=xxx&limit=200`（见下方 API），Cron 也会自动按节拍慢慢补，不用一直手动点
+- R2 里的照片/视频不再靠每次访问现场 `list()` 扫描——D1 索引表 `photos_index`（key, type, year, month, day, size, uploaded），按 month/day 建了索引
+- **R2 Event Notification → Queue → Workflow** 增量维护：新文件一上传，`queue()` consumer 只负责触发 `PhotoProcessingWorkflow`，索引、HEIC 转预览、AI 打分、查地点、清缓存分散到 Workflow 的独立步骤里（每步持久化、独立重试）；删除事件轻量内联处理，同步清掉索引/打分/地点/预览图/日期缓存
+- 首次部署或存量库很大时跑一次性回填：`GET /admin/backfill-photos-index?token=xxx&limit=200`；Cron 也会自动补，**全部补完后写 `backfill_done_at` 标记，降频为每天核对一次**，不再空转扫桶
 
 ### 成本控制（边缘缓存）
-- `/api/memories`、`/api/map-photos` 的结果都用 Workers Cache API 缓存，避免每次访问都重新扫一遍 R2（List 是 A 类操作，比 Get 贵很多）；新文件上传/删除时队列消费者会自动清掉对应那天的缓存，不用等 30 分钟自然过期
-- `/img/` 图片字节本身也显式缓存在边缘节点，同一张照片被反复请求不会重复打 R2；206 Range 响应（视频拖动/取封面帧）不缓存——Cache API 不支持缓存 Partial Content
-- `/thumb/` 缩略图统一由 Cloudflare Images binding 转成 WebP 后写入 `PREVIEWS` 桶，再用 302 跳到公开预览 URL；302 和缩略图对象都可缓存，后续同尺寸请求不再重复走图片转换
-- 页面 CSS/JS 拆成 `public/app.css`、`public/app.js`、`public/map.css`、`public/map.js`，由 Cloudflare Static Assets 托管；Worker 只处理 API、图片代理、缩略图、地图 HTML 等动态路由，其余静态资源回落到 `env.ASSETS.fetch()`
-- AI 打分、查地点、HEIC 转码、索引回填等批量后台处理改用 **Cron 定时任务**（每 10 分钟跑一次，见下方"后台任务"），跟用户访问页面完全分开，不会因为叠加子请求把 `/api/memories` 撞到 Workers 单次调用的子请求上限
+- `/api/memories`、`/api/map-photos` 结果用 Workers Cache API 缓存；新文件上传/删除时自动清对应日期的缓存
+- `/img/` 图片字节显式缓存在边缘节点；206 Range 响应（视频拖动）不缓存
+- `/thumb/` 缩略图由 Cloudflare Images binding 转成 WebP 后写入 `PREVIEWS` 桶，302 跳公开预览 URL，后续同尺寸请求不再重复转换；转码失败时 HEIC 回退到预转 JPEG 预览（而不是浏览器显示不了的原图）
+- 页面 CSS/JS 由 Cloudflare Static Assets 托管，Worker 只处理动态路由
+- **零境外 CDN 依赖**：Space Grotesk 字体自托管（可变字体单个 latin 子集 woff2，22KB 覆盖 400-600 字重）；heic2any（1.3MB）也在 `public/vendor/` 自托管且**懒加载**——只在"服务端转码缺失 + 缩略图加载失败"的兜底路径第一次被走到时才动态注入
+- AI 打分、查地点、HEIC 转码、索引回填等批量后台处理走 **Cron 定时任务**，跟用户访问完全分开
 
 ### AI 选片 + 文案
-- 接入 Workers AI（`@cf/llava-hf/llava-1.5-7b-hf`），给每张照片打三件事：1-10 的"值不值得展示"分、是否检测到人脸、一句中文文案（像相册里手写的一句话），文案展示在灯箱大图下方
-- llava-1.5 经常不老实听话用英文回文案，检测到没有中文字符就再过一遍 `@cf/meta/m2m100-1.2b` 翻译模型转成中文
-- **HEIC 喂给视觉模型前必须先转成 JPEG**——直接传 HEIC 原始字节会报 `Unsupported image data`，错误会被默默吃掉退化成默认分；优先用已经生成好的 HEIC 预览图（省一次解码），没有的话现场解码一次。没有预览图的 HEIC 不会在新照片上传时立刻打分（避免在同一次队列/Cron 调用里堆叠多次解码撞内存上限），会等预览图转出来后由 Cron 自然补上
-- 原始模型返回文本、最后更新时间也存进 D1（`raw_response`、`updated_at`），方便排查模型有没有好好按格式回复、以后改 prompt/换模型时对比效果
-- 某一年照片超过 10 张时，自动挑选一部分展示，优先级：视频/Live Photo → 同时带 GPS 坐标 + 检测到人脸的"真实拍摄"照片（按分数从高到低）→ 其他已打分照片 → 还没打分的按时间均匀抽样补位，没被选中的折进"展开查看全部"
-- 存量照片库可以用管理接口手动批量打分：`GET /admin/score-photos?token=xxx&limit=5`，需要先配置 `ADMIN_TOKEN`
+- 接入 Workers AI（`@cf/llava-hf/llava-1.5-7b-hf`），给每张照片打：1-10 分、是否有人脸、一句中文文案（展示在灯箱大图下方）
+- 文案没有中文字符时自动过一遍 `@cf/meta/m2m100-1.2b` 翻译成中文
+- HEIC 喂给视觉模型前必须先转 JPEG——优先复用已生成的预览图，没有的话现场解码一次
+- 某一年照片超过 10 张时自动精选：视频/Live Photo → 带 GPS + 人脸的"真实拍摄"照片（按分数）→ 其他已打分照片 → 未打分的按时间均匀抽样，其余折进"展开查看全部"
 
-### 拍摄地点 + 地图
-- 从 EXIF 解析 GPS 坐标（JPEG 和 HEIC 都支持，HEIC 走的是 ISOBMFF box 解析），用 Mapbox Geocoding API 反向地理编码成地名
-- `/map` 页面用 Mapbox GL JS 把**当天**匹配到的、带坐标的照片打点在地图上（不是整个照片库），鼠标移到红点上直接展示缩略图
-- 存量照片库可以用管理接口手动批量查地点：`GET /admin/locate-photos?token=xxx&limit=10`
+### 拍摄地点 + 足迹地图
+- 从 EXIF 解析 GPS 坐标（JPEG/HEIC 都支持），Mapbox Geocoding 反向地理编码成地名
+- `/map` 页面是 **3D 地球**（Mapbox GL globe 投影 + 星空大气层）：
+  - 不带参数 = 全量足迹模式，整个照片库的带坐标照片打点
+  - 带 `?month=&day=` = 单天模式（从"那年今日"跳过来）
+  - 原生 GeoJSON 聚合（cluster），聚合圈点击弹"附近有 N 张照片"缩略图九宫格，单点点击弹照片详情卡（图 + 地点·日期 + 设备/坐标/海拔），点图跳回那一天
 
-### 后台任务（Cron，每 10 分钟）
-- 优先级：**服务器真实的"今天"** + "最近有人在看的那一天"（记录在 D1 的 `meta` 表里，可能是某个历史日期）取并集——刚拍完传上来的照片不会因为有人在翻旧日期就一直排不上号
-- 候选池查的是 `photos_index` 表，不再现场扫 R2（之前在库变大之后稳定触发 `exceededMemory`，整个 Cron 直接被杀掉）
-- 每批最多处理 10 张打分/查地点；HEIC 转码批量给得更小（1 张/次，解码一张全尺寸 HEIC 到原始像素的内存开销比打分/查地点都重得多）
-- **索引回填**跟**HEIC 转码**是这个函数里最吃内存的两步，按当前分钟单双轮流跑（每 20 分钟一半时间回填、一半时间转码），保证它俩永远不会出现在同一次调用里
+### 后台任务（Cron）
+- `*/10 * * * *`：维护任务——新照片聚合推送、索引回填（完成后降频）、AI 打分、查地点、HEIC 转码
+- `0 16 * * *`：北京时间零点，当天精选推送 Telegram
+- 打分/查地点候选**在 SQL 侧用 LEFT JOIN 直接筛选**（`findUnscoredKeys` / `findUnlocatedKeys`），不再把整张表读进内存过滤；优先处理"服务器真实的今天" + "最近有人在看的那一天"
+- 索引回填跟 HEIC 转码按分钟单双错峰跑，保证两个吃内存大户永远不同时出现
 
 ### 前端体验
-- 宝丽来风格错落"回忆墙"：随机尺寸 + 轻微倾斜 + 挂绳图钉效果，悬停时指尖联动倾斜
-- 点击照片弹出灯箱预览，支持左右切换、键盘方向键、ESC 关闭、移动端左右滑动手势
-- "播放回忆"按钮：自动全屏幻灯片播放，多种随机转场效果（淡入淡出 / 缩放 / 左右滑动）
-- "唤醒林间"开关：一个开关同时控制暖色光斑视觉效果（铺满整页）和林间环境音播放，切换时有阳光扫过的过渡动画；开启后文字自动转深色保证可读性
-- 自制日历选择器（不依赖浏览器原生 `<input type="date">`），点哪天直接跳转，"回到今天"是真正的链接而不是 JS 按钮（更稳，不依赖 JS 执行成功）
-- 自定义鼠标指针：相机对焦取景框样式，悬停可点击元素时角括号收紧、中心点变亮
-- Space Grotesk 字体用在标签/数字类文字上，正文仍是系统字体
-- 支持 URL 参数 `?month=06&day=27` 查看指定日期，不传则用浏览器本地日期
-- 移动端做了响应式适配：缩略图分辨率按视口宽度 × 设备像素比算（不再照搬桌面端的随机尺寸，省流量/更清晰）；灯箱用 `touch-action: pinch-zoom` 既能双指缩放看细节又不会被单指滑动手势带着背后整页一起滚动；顶部悬浮控件用 `env(safe-area-inset-*)` 适配刘海屏/灵动岛
-- 缩略图加载失败会按 5s/15s/45s 退避自动重试（破缓存重新请求 `/thumb/`），很多裂图只是服务端转码还没追上，不用手动刷新整页；重试用完才退回到 HEIC 现场解码/原图兜底
-- 非 Live Photo 的独立视频 cell 用 `IntersectionObserver` 懒加载（`<video>` 不支持原生 `loading="lazy"`），滚到视口才赋值 `src`，避免一进页面所有视频同时抢带宽；`preload="metadata"` 既保证没进视口前零请求，又能在赋值 `src` 后立刻取到首帧，不会卡住加载动画
-- 切换日期时用骨架屏过渡（错峰扫光 + GPU 加速的 `transform` 动画），而不是直接黑屏/白屏跳变；同时处理了快网络下骨架屏还没来得及淡入、真实内容就已经返回的竞态，避免画面闪烁
-- 副标题下方有一行"今日诗词"（接的 [jinrishici.com](https://www.jinrishici.com/doc/) 的 API），按"今天"的真实日期缓存一份，跟翻看哪个历史日期无关；第三方接口挂了不影响主页面
+- 宝丽来风格错落"回忆墙"：随机尺寸 + 轻微倾斜 + 挂绳图钉效果，悬停指尖联动倾斜（触屏设备自动禁用 3D 倾斜，避免 tap 合成事件导致比例错乱）
+- 灯箱预览：左右切换、键盘方向键、ESC 关闭、移动端滑动手势、双指缩放 + 拖动平移看细节（桌面端鼠标拖动同样支持）
+- **灯箱详情面板**：EXIF（设备/参数/海拔）、拍摄地点迷你地图（点击跳足迹地图）、直方图、照片手记，顶栏 ⓘ 开关——**触屏设备默认收起**（iPad 上 390px 侧栏会把照片挤小），手机上以全屏浮层展开
+- "播放回忆"自动全屏幻灯片，多种随机转场
+- "唤醒林间"开关：暖色光斑 + 林间环境音，切换有阳光扫过的过渡动画
+- 自制日历选择器 + 公/农历法滑块（迷你分段滑块：公历白片、农历金片，浅色模式深色轨道）
+- 骨架屏过渡、缩略图退避重试（5s/15s/45s）、视频 IntersectionObserver 懒加载
+- 副标题下"今日诗词"（jinrishici.com），按北京时间日期存 D1，第三方接口挂了不影响主页面
+- 移动端：缩略图分辨率按视口 × DPR 计算、`env(safe-area-inset-*)` 适配刘海屏、iOS 缩放横向偏移自动恢复
 
 ## 目录结构
 
 ```
-worker.js          # Worker 全部逻辑（API + 图片代理 + AI 打分 + 地图页 HTML + Durable Object + Workflow，单文件）
-public/index.html  # 主页面静态 HTML
-public/app.css     # 主页面样式
-public/app.js      # 主页面交互（日期切换、灯箱、Live Photo、实时表态等）
-public/map.css     # 地图页样式
-public/map.js      # 地图页交互（Mapbox GL 打点、缩略图弹窗）
-public/favicon.svg # 站点图标
-schema.sql         # D1 数据库表结构
-wrangler.toml      # Cloudflare 部署配置（Static Assets、R2、AI、Images、D1、Queue、Workflow、DO、Cron）
-node-shims.js      # 本地/打包环境需要时的 Node 兼容占位
-package.json       # 项目元数据（当前没有 npm scripts）
+worker.js               # Worker 全部逻辑（API + 图片代理 + AI 打分 + 地图/最爱/放映页 HTML + DO + Workflow，单文件）
+public/index.html       # 主页面静态 HTML
+public/app.css          # 主页面样式
+public/app.js           # 主页面交互（日期切换、灯箱、Live Photo、实时表态、搜索、手记等）
+public/map.css          # 足迹地图页样式
+public/map.js           # 足迹地图页交互（3D 地球、聚合、照片卡）
+public/manifest.json    # PWA manifest
+public/vendor/          # 自托管第三方资源（Space Grotesk 字体、heic2any）
+public/favicon.svg      # 站点图标
+schema.sql              # D1 数据库表结构
+wrangler.toml           # Cloudflare 部署配置（Static Assets、R2、AI、Images、D1、Queue、Workflow、DO、Cron）
+.github/workflows/deploy.yml  # GitHub Actions 自动部署（push master 触发）
+node-shims.js           # 本地/打包环境需要时的 Node 兼容占位
+package.json            # 锁定 wrangler 版本（devDependencies）
 ```
 
 ## 数据约定
@@ -87,163 +101,136 @@ Photos/MobileBackup/iPhone/{年}/{月}/{文件名}
 
 月份目录下不需要再按天分文件夹，靠文件名或 EXIF 判断具体日期。
 
-AI 打分、拍摄地点、照片索引、"最近查看的日期"这几类元数据存在 **D1**（`memories-db`），不再是 R2 里的 JSON 文件：
+元数据都存在 **D1**（`memories-db`）：
 
-- `photos_index (key, type, year, month, day, size, uploaded, updated_at)` —— 照片/视频索引，靠 R2 Event Notification 增量维护，按 month/day 建了索引
-- `photo_scores (key, score, has_face, caption, raw_response, updated_at)` —— AI 打分/文案结果，`raw_response` 是模型原始返回文本
+- `photos_index (key, type, year, month, day, size, uploaded, updated_at)` —— 照片/视频索引，R2 Event Notification 增量维护
+- `photo_scores (key, score, has_face, caption, raw_response, updated_at)` —— AI 打分/文案结果
 - `photo_places (key, lat, lon, name)` —— 反向地理编码结果
-- `meta (key, value)` —— 目前只有一行 `last_viewed_day`，记录最近一次访问的 month/day
+- `photo_reactions (key, emoji, count)` —— 表态计数镜像（权威数据在 DO Storage，这张表供"全家最爱"跨日期聚合）
+- `photo_notes (key, note, updated_at)` —— 照片手记
+- `meta (key, value)` —— 杂项：`last_viewed_day`（最近浏览的日期）、`poem:*`（每日诗词）、`notify:*`（待聚合的新照片推送队列）、`backfill_done_at`（回填完成标记）
 
 ## 部署
+
+### 自动部署（推荐）
+
+push 到 `master` 即触发 GitHub Actions（`.github/workflows/deploy.yml`）：语法检查 → `wrangler deploy` → 同步 secrets。需要在仓库 Settings → Secrets 配置：
+
+- `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`
+- `ADMIN_TOKEN` / `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`（部署后自动注入为 Worker Secret）
+
+三个踩过的坑，改 workflow 前务必知道：
+
+1. **wrangler 版本必须锁 4.x**（`wranglerVersion` + package.json 双处锁定）——wrangler-action 自带的 3.90 不认识 `[images]` 配置段，只警告不报错，部署出来的 Worker 会**静默丢掉 IMAGES 绑定**，缩略图全挂
+2. **Node ≥ 24**——wrangler 4.107 在 Node 20 上直接退出
+3. **不要同时启用 Cloudflare Build（Git 连接）和 GitHub Actions**——两边都监听 master 会互相竞态：构建慢的一方后完成会用旧版本覆盖新部署；Cloudflare Build 的"非生产分支构建"还会上传未部署版本，导致 Actions 的 secrets 同步被 10215 拒绝。二选一，只留一条部署路径
+
+### 手动部署（首次初始化）
 
 1. 安装并登录 wrangler：
 
    ```bash
-   npm install -g wrangler
-   wrangler login
+   npm install
+   npx wrangler login
    ```
 
-2. 创建 D1 数据库并应用表结构（首次部署才需要）：
+2. 创建 D1 数据库并应用表结构：
 
    ```bash
-   wrangler d1 create memories-db
-   # 把命令输出里的 database_id 填进 wrangler.toml 的 [[d1_databases]]
-   wrangler d1 execute memories-db --remote --file ./schema.sql
+   npx wrangler d1 create memories-db
+   # 把输出的 database_id 填进 wrangler.toml 的 [[d1_databases]]
+   npx wrangler d1 execute memories-db --remote --file ./schema.sql
    ```
 
-3. 创建队列、配好 R2 事件通知（首次部署才需要）：
+3. 创建队列、配好 R2 事件通知：
 
    ```bash
-   wrangler queues create photo-index-queue
-   # 新增/修改和删除各配一条通知规则，都指向同一个队列
-   wrangler r2 bucket notification create <你的照片桶名> --event-type object-create --queue photo-index-queue --prefix "Photos/MobileBackup/iPhone/"
-   wrangler r2 bucket notification create <你的照片桶名> --event-type object-delete --queue photo-index-queue --prefix "Photos/MobileBackup/iPhone/"
+   npx wrangler queues create photo-index-queue
+   npx wrangler r2 bucket notification create <你的照片桶名> --event-type object-create --queue photo-index-queue --prefix "Photos/MobileBackup/iPhone/"
+   npx wrangler r2 bucket notification create <你的照片桶名> --event-type object-delete --queue photo-index-queue --prefix "Photos/MobileBackup/iPhone/"
    ```
 
 4. 编辑 `wrangler.toml`：
-   - `PHOTOS` 绑定的 `bucket_name` 改成你存原图的 R2 桶名；`PREVIEWS` 绑定指向另一个单独的桶，专门存 HEIC 转出来的 JPEG 预览图（两个桶都要先用 `wrangler r2 bucket create <桶名>` 建好）；`PREVIEWS` 桶建议配一条 7 天的生命周期规则自动清理（`wrangler r2 bucket lifecycle add <桶名> <规则名> --expire-days 7`）
-   - `routes` 里的 `pattern` / `zone_name` 改成你要绑定的自定义域名（该域名需已托管在 Cloudflare）
-   - `[ai]` 绑定不需要额外创建资源，是账号自带的平台功能
-   - `[[d1_databases]]` 里的 `database_id` 换成上一步创建出来的 ID
-   - `[[queues.consumers]]` 里的 `queue` 名字要跟第 3 步创建的队列名一致
-   - `[vars]` 里的 `ADMIN_TOKEN` 建议换成你自己生成的随机字符串；如果仓库会推到公开/共享的地方，更安全的做法是改用 `wrangler secret put ADMIN_TOKEN`（加密存储，不会出现在任何文件里），再把 `[vars]` 里这行删掉
-   - `[vars]` 里的 `MAPBOX_PUBLIC_TOKEN` 必须是 Mapbox 的 **public token**（`pk.` 开头），会原样发给浏览器跑地图。反向地理编码用的是另一个 **secret token**，要用 `wrangler secret put MAPBOX_TOKEN` 单独存（千万不要把 secret token 写进 `wrangler.toml`），创建这个 token 时记得勾上 **Geocoding** 权限范围，没勾会一直 403
+   - `PHOTOS` 绑定的 `bucket_name` 改成你存原图的 R2 桶名；`PREVIEWS` 指向另一个单独的桶（存 HEIC 预览和 WebP 缩略图），建议配 7 天生命周期规则
+   - `routes` 改成你的自定义域名；`PREVIEWS_PUBLIC_URL` 改成预览桶的公开访问域名
+   - `[[d1_databases]]` 的 `database_id` 换成第 2 步创建出来的 ID
+   - `MAPBOX_PUBLIC_TOKEN` 必须是 public token（`pk.` 开头）；反向地理编码用的 secret token 用 `npx wrangler secret put MAPBOX_TOKEN` 单独存，创建时勾上 **Geocoding** 权限
+   - `ADMIN_TOKEN` 等敏感值一律 `npx wrangler secret put`，**不要写进 wrangler.toml**
 
-5. 部署：
+5. 部署并回填存量：
 
    ```bash
-   wrangler deploy
-   ```
-
-6. 首次部署、存量库较大时，跑一次性回填把已有文件补进 `photos_index`（Cron 也会自动慢慢补，手动跑能更快补齐）：
-
-   ```bash
-   curl "https://你的域名/admin/backfill-photos-index?token=xxx&limit=200"
-   # 反复跑，直到返回里的 remaining 降到 0
+   npx wrangler deploy
+   curl "https://你的域名/admin/backfill-photos-index?token=xxx&limit=200"   # 反复跑到 remaining=0
    ```
 
 ## 鉴权
 
 本项目本身不做登录鉴权，建议用 **Cloudflare Zero Trust Access** 在边缘层拦截：
 
-1. Cloudflare Dashboard → Zero Trust → Access → Applications → Add an application → Self-hosted
+1. Zero Trust → Access → Applications → Add an application → Self-hosted
 2. 域名填 Worker 绑定的自定义域名
-3. 配置访问策略，比如只允许自己的邮箱；如果要分享给家人，可以用 "One-time PIN" 身份提供程序——对方不需要注册任何账号，靠邮箱收验证码登录即可
+3. 策略比如只允许自己的邮箱；分享给家人可以用 "One-time PIN"——邮箱收验证码登录即可
+4. 启用 Access 后实时房间会用 `Cf-Access-Authenticated-User-Email` 识别身份（在线列表显示 Gravatar 头像）；PWA 的 manifest 请求已带 `use-credentials` 兼容 Access，无需额外放行
 
 ## API
 
-### `GET /api/memories?month=MM&day=DD`
+### 页面
 
-返回指定月日在各年份下匹配到的照片/视频列表，按年份从新到旧排序，每张照片附带 AI 打分、人脸检测结果、拍摄地点。
+| 路径 | 说明 |
+|------|------|
+| `/` | 回忆墙主页，支持 `?month=06&day=27` 指定日期 |
+| `/map` | 足迹地图（3D 地球）：不带参数=全库足迹，带 `?month=&day=`=单天 |
+| `/loved` | 全家最爱——表态最多的照片排行 |
+| `/recap` | 年度回忆放映，支持 `?year=2023` |
 
-```json
-{
-  "month": "06",
-  "day": "27",
-  "years": [
-    {
-      "year": "2023",
-      "photos": [
-        { "key": "...", "url": "/img/...", "type": "image", "size": 123, "uploaded": "...", "score": 8, "hasFace": true, "place": "杭州" }
-      ]
-    }
-  ]
-}
-```
+### 数据接口
 
-### `GET /img/{key}?dl=1`
+| 路径 | 说明 |
+|------|------|
+| `GET /api/memories?month=MM&day=DD&lunar=1` | 历年同日照片列表；`lunar=1` 时附带农历同日段落（`data.lunar.years`） |
+| `GET /api/map-photos?month=MM&day=DD` | 带坐标照片列表；不带参数返回全库 |
+| `GET /api/exif?key=...` | 单张照片 EXIF（设备、参数、GPS、海拔） |
+| `GET /api/search?q=...` | 搜 AI 文案和拍摄地名 |
+| `GET /api/note?key=...` / `POST /api/note` | 读/写照片手记 |
+| `GET /api/top-loved` | 表态聚合排行（5 分钟边缘缓存） |
+| `GET /api/recap?year=YYYY` | 某年评分最高的 40 张（放映数据源） |
+| `GET /api/poem` | 今日诗词（jinrishici.com，D1 按北京日期缓存，挂了返回 204） |
+| `GET /api/static-map?lat=&lng=` | 拍摄地点迷你地图（Mapbox Static） |
+| `WS /api/room/{MM-DD}` | 实时房间 WebSocket（在线人数 + 表态） |
+| `GET /img/{key}?dl=1` | 图片/视频代理；`dl=1` 触发下载 |
+| `GET /thumb/{key}?w=&h=&fit=` | WebP 缩略图（Images binding 转换 + PREVIEWS 桶缓存 + 302） |
+| `GET /og-image?month=&day=` | OG 分享卡片图 |
+| `GET /app-icon?size=180` | PWA 应用图标（全库最高分照片裁方形） |
+| `POST /api/upload-heic-preview?key=...` | 浏览器端 heic2any 解码结果回传（校验 magic bytes，≤10MB） |
 
-图片/视频代理。不带 `dl` 参数时强制 `inline` 展示；带 `dl=1` 时返回 `Content-Disposition: attachment` 触发下载。
+### 管理端点（需 `?token=` 匹配 `ADMIN_TOKEN`）
 
-### `GET /map?month=MM&day=DD`
-
-地图页面，默认今天。
-
-### `GET /api/map-photos?month=MM&day=DD`
-
-返回指定月日匹配到的、带坐标的照片列表，给地图页打点用。
-
-### `GET /admin/score-photos?token=xxx&limit=5`
-
-管理端点，需要 `token` 匹配 `ADMIN_TOKEN` 才能调用。每次只处理一小批未打分的照片（默认 5 张，最多 20 张），避免单次请求超时。多次调用直到返回的 `remaining` 降到 0，存量照片就都打完分了。
-
-```json
-{ "scoredThisBatch": 5, "remaining": 37, "totalPhotos": 42 }
-```
-
-### `GET /admin/locate-photos?token=xxx&limit=10`
-
-同上，但处理的是拍摄地点（每次最多 20 张）。
-
-### `GET /admin/convert-heic-photos?token=xxx&limit=3`
-
-批量给 HEIC 照片生成 JPEG 预览版（服务端解码，需要 Workers Paid 套餐）。之前失败过的会按重试次数自动重试（上限 5 次，见下方"HEIC 照片"）。
-
-### `GET /admin/backfill-photos-index?token=xxx&limit=200`
-
-一次性回填脚本，把上线 R2 Event Notification 之前已经存在的旧文件补进 `photos_index`（最多 300 张/次）。新上传的文件由 Workflow 增量维护，这个端点只用来补历史存量，跑到 `remaining` 降到 0 就完事了。
-
-```json
-{ "indexedThisBatch": 200, "remaining": 7800, "totalCandidates": 8000, "alreadyIndexed": 200, "errors": [] }
-```
-
-### `GET /admin/purge-cache?token=xxx&month=MM&day=DD`
-
-手动清掉某个 month/day 的 `/api/memories`、`/api/map-photos` 边缘缓存。新文件上传/删除时队列消费者会自动清，这个端点主要用于手动验证效果或者排查问题。
-
-
-### `GET /admin/backfill-workflows?token=xxx&limit=20`
-
-给历史积压图片批量触发 `PhotoProcessingWorkflow`。它适合两个场景：普通 JPEG 已进索引但还没 AI 打分，或者历史 HEIC 还没有预览图、需要先走 Workflow 的转码步骤再打分。
-
-### `GET /api/poem`
-
-返回"今日诗词"（接的 jinrishici.com），按真实日期缓存一份，跟历史日期浏览无关。第三方接口挂了返回 204。
-
-### `POST /api/upload-heic-preview?key={原图key}`
-
-浏览器端 heic2any 现场解码兜底成功后，前端会把结果回传到这个接口存进 `PREVIEWS` 桶，下次同一张照片就不用别的访问者再解码一遍。Body 是 JPEG 字节，会校验 magic bytes 和大小（≤10MB）。整站本来就建议配 Cloudflare Access，这个接口没有再加 `ADMIN_TOKEN`。
+| 路径 | 说明 |
+|------|------|
+| `GET /admin/score-photos?limit=5` | 批量 AI 打分，反复调到 `remaining=0` |
+| `GET /admin/locate-photos?limit=10` | 批量查拍摄地点 |
+| `GET /admin/convert-heic-photos?limit=3` | 批量 HEIC 转 JPEG 预览 |
+| `GET /admin/backfill-photos-index?limit=200` | 存量文件回填进 photos_index |
+| `GET /admin/backfill-workflows?limit=20` | 历史积压照片批量触发 Workflow（转码+打分一条龙） |
+| `GET /admin/purge-cache?month=MM&day=DD` | 手动清某天的边缘缓存 |
+| `GET /admin/test-telegram` | 手动触发一次 Telegram 每日推送 |
 
 ## HEIC 照片
 
-浏览器原生大多解不开 HEIC，所以项目同时准备了服务端和浏览器端两条兜底链路：
+浏览器原生大多解不开 HEIC，项目准备了服务端 + 浏览器端多条兜底链路：
 
-- `/thumb/` 接口优先用 Cloudflare Images binding 从原图生成 WebP 缩略图，并把结果写进 `PREVIEWS` 桶的 `thumbs/{尺寸}/{原始路径}.webp`；后续请求直接 302 到 `PREVIEWS_PUBLIC_URL` 下的静态缩略图，Worker 不再搬运图片体
-- AI 打分前如果遇到 HEIC，会优先复用 `PREVIEWS` 桶里的 `{年}/{月}/{日}/{文件名}.heic-preview.jpg` 或旧路径预览图；没有预览图时再通过 Images binding 临时转成 JPEG 喂给视觉模型
-- 前端仍加载 [heic2any](https://github.com/alexcorvi/heic2any) 做最后兜底：缩略图/大图多次加载失败时，在浏览器里现场把 HEIC 解成 JPEG，并通过 `/api/upload-heic-preview` 回传到 `PREVIEWS` 桶，后续访问者就不用再解码一次
-- 历史 HEIC 如果没有预览图，可以用 `GET /admin/backfill-workflows?token=xxx&limit=20` 批量触发 Workflow；Workflow 会先跑 HEIC 转预览，再继续 AI 打分和地点补全
-
-- Cron 任务（`scheduled()`）也会自动跑这个转码，但**只转服务器真实"今天"拍的**（不像打分/查地点那样还顺带覆盖"最近浏览日期"或者存量库），每次最多 1 张（解码一张全尺寸 HEIC 到原始像素的内存开销很重，调太大容易撞上 Workers 的内存限制），且跟索引回填错峰跑（同一次 Cron 调用不会同时出现）
-- 转码失败的会写一个 4 字节的占位 JPEG 标记"试过了"，并记一个重试次数（R2 自定义元数据）。**服务端**重试次数没到 **5 次**上限之前还会继续重试，到了上限就放弃自动重试（避免对一张真解不开的坏文件反复浪费 CPU）；**浏览器端**（`heic2any`）解码不占用这个重试名额——哪怕服务端 5 次都失败放弃了，用户自己在浏览器里解码成功并回传上来，照样会被接受存进去
-- HEIC 服务端解码用的是 `libheif-js` 的 wasm 构建，必须用 `new WebAssembly.Instance()`（同步 API）而不是 `WebAssembly.instantiate()`（异步 API）创建实例——用异步 API 会在 libheif 的 embind 类注册跑到一半时被打断，报 `Cannot read properties of undefined (reading 'overloadTable')`，这是库本身的问题，跟 Workers 无关，在纯 Node 环境下用同样的异步加载方式也能复现
-- AI 打分喂图片给视觉模型前，HEIC 必须先转成 JPEG（直接传原始字节会报 `Unsupported image data`）——优先用已经生成好的预览图，没有的话现场解码一次；为了不在同一次调用里堆叠多次解码撞内存上限，没有预览图的 HEIC 不会在"新照片上传"这个时机立刻打分，会等 Cron 转出预览图后自然补上
-- 浏览器端 `heic2any` 解码成功后会通过 `/api/upload-heic-preview` 把结果回传存进 `PREVIEWS` 桶，下次别的访问者就不用再解码一遍
-- `PREVIEWS` 桶配了 7 天的生命周期规则，预览图过期自动删除，省存储空间——下次再被访问到时会重新生成
+- `/thumb/` 优先用 Cloudflare Images binding（原生支持 HEIC 输入）转 WebP 写入 `PREVIEWS` 桶；转换失败（如 Transformations 额度用完）时回退到预转的 JPEG 预览，再不行才回原图，且失败原因会打进日志
+- AI 打分前优先复用预览图，没有再现场解码一次
+- 前端 heic2any 做最后兜底（懒加载，只在需要时注入）：解码成功后回传 `/api/upload-heic-preview` 存进 `PREVIEWS` 桶，后续访问者不用再解码
+- 服务端解码用 `libheif-js` wasm 构建，必须用 `new WebAssembly.Instance()`（同步 API）——异步 API 会打断 embind 类注册报 `overloadTable` 错误
+- 转码失败按重试次数（R2 自定义元数据）最多自动重试 5 次；浏览器端解码成功不占这个名额
+- 历史 HEIC 批量补：`GET /admin/backfill-workflows?token=xxx&limit=20`
 
 ## 已知限制
 
-- HEIC 的 EXIF 解析是按 ISOBMFF 容器结构手写的 box 解析（meta/iinf/iloc），对非典型编码方式的 HEIC 文件可能解析失败，失败会静默回退到 R2 上传时间近似，不会报错
-- 未做存储层的访问控制，必须配合 Cloudflare Access 或同等方案保护隐私
-- AI 打分、反向地理编码都会产生外部调用费用（超出免费额度部分），自动处理只在 Cron 里小批量跑，不会扫全量库，但仍建议关注 Cloudflare / Mapbox 账单
-- Mapbox 的 secret token 创建时要勾上 **Geocoding** 权限范围，没勾会一直 403（跟 token 过期/拼错无关，是权限范围没给对）
-- `ADMIN_TOKEN` 如果写在 `wrangler.toml` 的 `[vars]` 里，会以明文形式出现在该文件中，注意不要把它推到公开仓库
+- HEIC 的 EXIF 解析是手写的 ISOBMFF box 解析，非典型编码的文件可能解析失败，会静默回退到 R2 上传时间近似
+- 未做存储层访问控制，必须配合 Cloudflare Access 或同等方案保护隐私
+- AI 打分、反向地理编码、Images 转换都可能产生超出免费额度的费用；Images 免费额度是每月 5000 次**独立**变换（同图同尺寸只算一次，结果永久缓存在 PREVIEWS 桶），首次填充大库时容易超
+- Mapbox secret token 创建时要勾 **Geocoding** 权限，没勾会一直 403
+- 表态的 D1 镜像从房间首次被访问时才回填——完全没人再打开过的日期，其照片的历史表态暂时不会出现在"全家最爱"里
