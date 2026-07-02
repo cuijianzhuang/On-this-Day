@@ -377,12 +377,13 @@
   document.getElementById('mapLink').href = '/map?month=' + month + '&day=' + day;
 
   const lunarToggle = document.getElementById('lunarToggle');
-  let showLunar = localStorage.getItem('showLunarMemories') === '1';
+  let calendarMode = localStorage.getItem('calendarMode') || (localStorage.getItem('showLunarMemories') === '1' ? 'lunar' : 'solar');
   function syncLunarToggle() {
     if (!lunarToggle) return;
-    lunarToggle.classList.toggle('active', showLunar);
-    lunarToggle.setAttribute('aria-pressed', showLunar ? 'true' : 'false');
-    lunarToggle.title = showLunar ? '隐藏农历同日' : '显示农历同日';
+    const isLunarMode = calendarMode === 'lunar';
+    lunarToggle.classList.toggle('active', isLunarMode);
+    lunarToggle.setAttribute('aria-pressed', isLunarMode ? 'true' : 'false');
+    lunarToggle.title = isLunarMode ? '当前农历，点击切到公历' : '当前公历，点击切到农历';
   }
   function removeLunarMemoriesFromDom() {
     document.querySelectorAll('.lunar-divider, .year-block.lunar-year-block').forEach((el) => el.remove());
@@ -390,8 +391,9 @@
   syncLunarToggle();
   if (lunarToggle) {
     lunarToggle.onclick = () => {
-      showLunar = !showLunar;
-      localStorage.setItem('showLunarMemories', showLunar ? '1' : '0');
+      calendarMode = calendarMode === 'lunar' ? 'solar' : 'lunar';
+      localStorage.setItem('calendarMode', calendarMode);
+      localStorage.setItem('showLunarMemories', calendarMode === 'lunar' ? '1' : '0');
       syncLunarToggle();
       // 关闭时先把已经渲染出来的农历段落立即移除，避免等待接口期间看起来像开关没生效。
       if (!showLunar) removeLunarMemoriesFromDom();
@@ -1646,10 +1648,9 @@
           return;
         }
 
-        const totalPhotos = data.years.reduce((s, y) => s + y.photos.length, 0);
-        subtitle.textContent = data.years.length
-          ? '横跨 ' + data.years.length + ' 个年头，' + totalPhotos + ' 个瞬间'
-          : '公历的这天还没有故事，但农历的这天有';
+        const totalPhotos = visibleYears.reduce((s, y) => s + y.photos.length, 0);
+        subtitle.textContent = (includeLunarForRequest ? '农历同日' : '公历同日')
+          + '横跨 ' + visibleYears.length + ' 个年头，' + totalPhotos + ' 个瞬间';
 
         // 切日期会把整面墙的照片换掉，旧的 cell 元素马上就从 DOM 里消失了——
         // 不清的话 visibleCells/cellCenters 里攒着的是已经被扔掉的旧元素引用，越点几次日期切换越积越多
@@ -1658,10 +1659,8 @@
           cellCenters.clear();
           allPhotos = [];
         }
-        // 注意顺序：先公历后农历，必须跟下面 content.innerHTML 的渲染顺序一致，
-        // flatIndex（openLightbox 的下标）才对得上
-        data.years.forEach(y => y.photos.forEach(p => allPhotos.push({ ...p, year: y.year })));
-        lunarYears.forEach(y => y.photos.forEach(p => allPhotos.push({ ...p, year: y.year })));
+        // allPhotos 必须只包含当前模式正在展示的照片，灯箱下标才不会串到另一套历法。
+        visibleYears.forEach(y => y.photos.forEach(p => allPhotos.push({ ...p, year: y.year })));
 
         // 给每张图随机一个尺寸档位、轻微倾斜角度，再配一个随机的晃动周期和延迟，做出挂在墙上被风吹的参差感
         const SIZES = [150, 190, 230, 170, 210];
@@ -1769,15 +1768,8 @@
       </div>
     `;
         };
-        // 先渲染公历块、再渲染农历块；renderYearBlock 会递增 globalCellIndex，
-        // 这个求值顺序必须和 allPhotos（公历在前、农历在后）的填充顺序完全一致，
-        // 否则卡片上的 openLightbox(flatIndex) 会整体错位。
-        const solarHtml = data.years.map(y => renderYearBlock(y, 'year-')).join('');
-        const lunarHtml = lunarYears.length
-          ? '<div class="lunar-divider"><span class="lunar-moon">🌙</span>农历' + escHtml(data.lunar.label) + ' · 那些年</div>'
-            + lunarYears.map(y => renderYearBlock(y, 'lunar-year-')).join('')
-          : '';
-        content.innerHTML = solarHtml + lunarHtml;
+        const yearPrefix = includeLunarForRequest ? 'lunar-year-' : 'year-';
+        content.innerHTML = visibleYears.map(y => renderYearBlock(y, yearPrefix)).join('');
         content.querySelectorAll('.cell').forEach((cell) => cellObserver.observe(cell));
         content.querySelectorAll('.cell video[data-src]').forEach((v) => videoLazyObserver.observe(v));
 
