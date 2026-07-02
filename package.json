@@ -1,5 +1,8 @@
 {
   "name": "memories-today",
   "version": "1.0.0",
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "wrangler": "^4.107.0"
+  }
 }
