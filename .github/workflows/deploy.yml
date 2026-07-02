@@ -18,6 +18,13 @@ jobs:
 
       - run: npm ci
 
+      # 部署前先做语法检查，拦住"引用了不存在的函数/列"这类低级错误里能静态发现的部分
+      - name: Syntax check
+        run: |
+          node --check worker.js
+          node --check public/app.js
+          node --check public/map.js
+
       # wrangler-action v3 支持通过 secrets 列表把 GitHub Secret 注入为 Cloudflare Worker Secret，
       # 每次部署自动同步，不再需要手动 wrangler secret put。
       # command: deploy 强制用 wrangler deploy（非 versions upload），DO migrations 必须走这条路（error 10211）
