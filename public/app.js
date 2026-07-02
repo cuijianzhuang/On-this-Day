@@ -469,12 +469,66 @@
     yearMenu.classList.toggle('open');
   };
 
+  // 照片搜索：搜 AI 说明文字和拍摄地名，防抖 350ms，回车立即搜
+  const searchToggle = document.getElementById('searchToggle');
+  const searchPanel = document.getElementById('searchPanel');
+  const searchInput = document.getElementById('searchInput');
+  const searchResults = document.getElementById('searchResults');
+  let _searchTimer = null, _searchSeq = 0;
+
+  searchToggle.onclick = (e) => {
+    e.stopPropagation();
+    const opened = searchPanel.classList.toggle('open');
+    if (opened) setTimeout(() => searchInput.focus(), 60);
+  };
+
+  function runSearch() {
+    const q = searchInput.value.trim();
+    if (!q) { searchResults.innerHTML = ''; return; }
+    const seq = ++_searchSeq;
+    searchResults.innerHTML = '<div class="search-hint">搜索中…</div>';
+    fetch('/api/search?q=' + encodeURIComponent(q))
+      .then(r => r.ok ? r.json() : { photos: [] })
+      .then(data => {
+        if (seq !== _searchSeq) return; // 已被更新的输入顶替
+        const photos = data.photos || [];
+        if (!photos.length) {
+          searchResults.innerHTML = '<div class="search-hint">没有找到「' + escHtml(q) + '」相关的照片</div>';
+          return;
+        }
+        searchResults.innerHTML = photos.map(p => {
+          const thumb = p.url.replace('/img/', '/thumb/') + '?w=96&h=96&q=70&fit=cover';
+          const title = p.caption || p.key.split('/').pop();
+          const meta = [p.place, p.year + '/' + p.month + '/' + p.day].filter(Boolean).join(' · ');
+          return '<a class="search-row" href="/?month=' + p.month + '&day=' + p.day + '">' +
+            '<img src="' + escAttr(thumb) + '" loading="lazy" />' +
+            '<span class="sr-text"><span class="sr-title">' + escHtml(title) + '</span>' +
+            '<span class="sr-meta">' + escHtml(meta) + '</span></span></a>';
+        }).join('');
+      })
+      .catch(() => {
+        if (seq === _searchSeq) searchResults.innerHTML = '<div class="search-hint">搜索失败，请稍后再试</div>';
+      });
+  }
+
+  searchInput.addEventListener('input', () => {
+    clearTimeout(_searchTimer);
+    _searchTimer = setTimeout(runSearch, 350);
+  });
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { clearTimeout(_searchTimer); runSearch(); }
+    if (e.key === 'Escape') searchPanel.classList.remove('open');
+  });
+
   document.addEventListener('click', (e) => {
     if (datePicker.classList.contains('open') && !datePicker.contains(e.target) && e.target !== dateToggle && !dateToggle.contains(e.target)) {
       datePicker.classList.remove('open');
     }
     if (yearMenu.classList.contains('open') && !yearMenu.contains(e.target) && e.target !== yearToggle && !yearToggle.contains(e.target)) {
       yearMenu.classList.remove('open');
+    }
+    if (searchPanel.classList.contains('open') && !searchPanel.contains(e.target) && e.target !== searchToggle && !searchToggle.contains(e.target)) {
+      searchPanel.classList.remove('open');
     }
   });
 

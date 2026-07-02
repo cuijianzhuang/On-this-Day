@@ -109,6 +109,10 @@ export default {
       return handleTopLoved(request, env, url);
     }
 
+    if (url.pathname === "/api/search") {
+      return handleSearch(request, env, url);
+    }
+
     if (url.pathname === "/loved") {
       return new Response(LOVED_HTML, {
         headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
@@ -434,6 +438,47 @@ async function handleTopLoved(request, env, url) {
   });
   await cache.put(cacheKey, response.clone());
   return response;
+}
+
+// ── 照片搜索 ──────────────────────────────────────────────────────────────────
+// 搜 AI 生成的中文说明（photo_scores.caption）和拍摄地名（photo_places.name）。
+// 用 LIKE 子串匹配而不是 FTS5——FTS5 默认分词器不吃中文（要 trigram 扩展），
+// 而 LIKE '%词%' 对中文天然就是正确的子串语义；一万多行的表扫一遍毫无压力
+async function handleSearch(request, env, url) {
+  const q = (url.searchParams.get("q") || "").trim();
+  if (q.length < 1 || q.length > 40) {
+    return new Response(JSON.stringify({ error: "q required, 1-40 chars" }), {
+      status: 400,
+      headers: { "content-type": "application/json; charset=utf-8" },
+    });
+  }
+  // 转义 LIKE 元字符，用户输入的 % _ 按字面匹配
+  const like = "%" + q.replace(/[\\%_]/g, (m) => "\\" + m) + "%";
+  const { results } = await env.DB.prepare(
+    `SELECT pi.key AS key, pi.year, pi.month, pi.day, ps.caption, pp.name AS place
+     FROM photos_index pi
+     LEFT JOIN photo_scores ps ON ps.key = pi.key
+     LEFT JOIN photo_places pp ON pp.key = pi.key
+     WHERE pi.type = 'image' AND (ps.caption LIKE ?1 ESCAPE '\\' OR pp.name LIKE ?1 ESCAPE '\\')
+     ORDER BY pi.year DESC, pi.month DESC, pi.day DESC
+     LIMIT 60`
+  ).bind(like).all();
+
+  const photos = results.map((r) => ({
+    key: r.key,
+    url: `/img/${encodeURIComponent(r.key)}`,
+    year: r.year,
+    month: r.month,
+    day: r.day,
+    caption: r.caption || "",
+    place: r.place || "",
+  }));
+  return new Response(JSON.stringify({ q, photos }), {
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "public, max-age=300",
+    },
+  });
 }
 
 const LOVED_HTML = `<!doctype html>
