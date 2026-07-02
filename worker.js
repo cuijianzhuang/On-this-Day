@@ -2319,7 +2319,19 @@ async function handleThumb(request, env, url) {
     const resp = thumbRedirect(publicUrl);
     await caches.default.put(cacheKey, resp.clone());
     return resp;
-  } catch {
+  } catch (err) {
+    // 一定要把原因打出来——这里静默过一次，Transformations 免费额度（每月 5000 次独立变换）
+    // 用完后 HEIC 缩略图全裂，却查不到任何线索
+    console.error("thumb transform failed for", origKey, err);
+
+    // HEIC 原图浏览器显示不了，退回 /img/ 等于必裂。优先找 convertHeicBatch 预转的
+    // JPEG 预览顶上（302 不写进正式缩略图的缓存位，额度恢复后下次请求还会重新走 transform）
+    if (/\.heic$/i.test(origKey)) {
+      const previewKey = await findHeicPreviewKey(env, origKey);
+      if (previewKey) {
+        return thumbRedirect(`${env.PREVIEWS_PUBLIC_URL}/${previewKey.split("/").map(encodeURIComponent).join("/")}`);
+      }
+    }
     return handleImage(request, env, new URL(url.toString().replace("/thumb/", "/img/")));
   }
 }
