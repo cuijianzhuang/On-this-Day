@@ -31,24 +31,29 @@ jobs:
           node --check public/app.js
           node --check public/map.js
 
-      # wrangler-action v3 支持通过 secrets 列表把 GitHub Secret 注入为 Cloudflare Worker Secret，
-      # 每次部署自动同步，不再需要手动 wrangler secret put。
-      # command: deploy 强制用 wrangler deploy（非 versions upload），DO migrations 必须走这条路（error 10211）
+      # command: deploy 强制用 wrangler deploy（非 versions upload），DO migrations 必须走这条路（error 10211）。
+      # 必须锁 wrangler 4：action 自带的 3.90.0 不认识 [images] 配置段，只警告不报错，
+      # 部署出来的 Worker 直接丢掉 IMAGES 绑定（env.IMAGES undefined，缩略图转 WebP 全挂）。
+      # 版本跟 package.json devDependencies 保持一致。
+      # 注意：secrets 同步放在 deploy 之后的独立步骤——wrangler-action 的 secrets 输入会在
+      # deploy 前执行 secret bulk，一旦别的来源（比如 Cloudflare Build 的 versions upload）
+      # 传过未部署的版本，Cloudflare 会用 10215 拒绝改 secret，整个 workflow 直接失败。
+      # 先 deploy 保证"最新版本=已部署"，再 bulk 就不会撞上这个限制
       - name: Deploy Worker + Static Assets
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # 必须锁 wrangler 4：action 自带的 3.90.0 不认识 [images] 配置段，
-          # 只警告不报错，部署出来的 Worker 直接丢掉 IMAGES 绑定（env.IMAGES undefined，
-          # 缩略图转 WebP 全挂）。版本跟 package.json devDependencies 保持一致
           wranglerVersion: "4.107.0"
           command: deploy
-          secrets: |
-            ADMIN_TOKEN
-            TELEGRAM_BOT_TOKEN
-            TELEGRAM_CHAT_ID
+
+      - name: Sync secrets
+        run: |
+          jq -n '{ADMIN_TOKEN: env.ADMIN_TOKEN, TELEGRAM_BOT_TOKEN: env.TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID: env.TELEGRAM_CHAT_ID}' \
+            | npx wrangler secret bulk
         env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
