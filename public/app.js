@@ -791,6 +791,8 @@
     const showWhenReady = (target) => requestAnimationFrame(() => requestAnimationFrame(() => target.classList.add('show')));
 
     _lbIsLivePhoto = false;
+    const _lbLiveBar = document.getElementById('lbLiveBar');
+    if (_lbLiveBar) _lbLiveBar.innerHTML = '';
     if (p.type === 'video') {
       const el = document.createElement('video');
       el.className = pickEffect();
@@ -814,6 +816,7 @@
 
       const badge = document.createElement('div');
       badge.className = 'live-photo-badge';
+      badge.style.opacity = '0';
       badge.innerHTML = '<span class="lp-live-icon"></span>实况';
 
       const wrap = document.createElement('div');
@@ -837,6 +840,7 @@
       _loadImgWithProgress(liveSrc, img,
         () => {
           showWhenReady(img);
+          badge.style.opacity = '';
           setTimeout(() => {
             if (!document.body.contains(wrap)) return;
             video.loop = false;
@@ -864,6 +868,9 @@
       // 移动端：按住播放，松开停止
       wrap.addEventListener('touchstart', (e) => { e.preventDefault(); playLive(); }, { passive: false });
       wrap.addEventListener('touchend', () => { if (!stickyPlay) stopLive(); });
+
+      // 顶部实况指示（移动端）
+      if (_lbLiveBar) _lbLiveBar.innerHTML = '<span class="lp-live-icon"></span><span>实况</span>';
 
       // 提示文字
       _lbIsLivePhoto = true;

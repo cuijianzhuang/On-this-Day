@@ -86,6 +86,7 @@
       <span class="lightbox-nav next" id="navNext">›</span>
       <div class="lightbox-stage">
         <div class="lightbox-actions">
+          <div class="lb-live-bar" id="lbLiveBar"></div>
           <a class="lightbox-btn" id="lightboxShare" title="分享">
             <svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"/><line x1="15.4" y1="6.5" x2="8.6" y2="10.5"/></svg>
           </a>
@@ -96,17 +97,19 @@
             <svg viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
           </span>
         </div>
-        <div class="lb-zoom-hint" id="lbZoomHint"></div>
         <div class="lb-scale-badge" id="lbScaleBadge"></div>
         <div class="lb-load-progress" id="lbLoadProgress"></div>
         <div id="lightboxBody"></div>
-        <div class="lb-react-wrap" id="lbReactWrap">
-          <div class="lb-emoji-popup" id="lbEmojiPopup"></div>
-          <button class="lb-react-btn" id="lbReactBtn">
-            <span class="lb-react-icon">😊</span>
-            <span class="lb-react-label">表态</span>
-            <span class="lb-react-count" id="lbReactCount"></span>
-          </button>
+        <div class="lb-bottom-bar" id="lbBottomBar">
+          <div class="lb-zoom-hint" id="lbZoomHint"></div>
+          <div class="lb-react-wrap" id="lbReactWrap">
+            <div class="lb-emoji-popup" id="lbEmojiPopup"></div>
+            <button class="lb-react-btn" id="lbReactBtn">
+              <span class="lb-react-icon">😊</span>
+              <span class="lb-react-label">表态</span>
+              <span class="lb-react-count" id="lbReactCount"></span>
+            </button>
+          </div>
         </div>
       </div>
       <aside class="lightbox-panel" id="lightboxPanel">
