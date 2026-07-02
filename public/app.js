@@ -377,7 +377,7 @@
   document.getElementById('mapLink').href = '/map?month=' + month + '&day=' + day;
 
   const lunarToggle = document.getElementById('lunarToggle');
-  let showLunar = false;
+  let showLunar = localStorage.getItem('showLunarMemories') === '1';
   function syncLunarToggle() {
     if (!lunarToggle) return;
     lunarToggle.classList.toggle('active', showLunar);
@@ -388,6 +388,7 @@
   if (lunarToggle) {
     lunarToggle.onclick = () => {
       showLunar = !showLunar;
+      localStorage.setItem('showLunarMemories', showLunar ? '1' : '0');
       syncLunarToggle();
       loadMemories(month, day);
     };
