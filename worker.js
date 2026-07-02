@@ -1942,6 +1942,16 @@ const MAP_HTML = (mapboxPublicToken) => `<!doctype html>
   <div id="map"></div>
   <div class="map-empty" id="mapEmpty">这一天还没有带定位信息的照片<br />去 /admin/locate-photos 跑一下批量查询，或者等 Cron 任务慢慢处理</div>
 
+  <div class="map-overlay" id="mapOverlay"></div>
+  <div class="map-card" id="mapCard">
+    <div class="card-drag-handle"></div>
+    <button class="card-close" id="cardClose">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+    </button>
+    <div class="card-media" id="cardMedia"></div>
+    <div class="card-info" id="cardInfo"></div>
+  </div>
+
 <script>window.MAPBOX_TOKEN = ${JSON.stringify(mapboxPublicToken)};</script>
 <script src="/map.js" defer></script>
 </body>
