@@ -2017,6 +2017,24 @@ export class MemoryRoom {
         ]);
         const count = reactions_v2[msg.key][emoji];
         this._broadcast({ type: "react", key: msg.key, emoji, count });
+      } else if (msg.type === "unreact" && typeof msg.key === "string" && msg.key.length < 300) {
+        const VALID_EMOJIS = new Set(['👍','❤️','😍','😂','😮','😢','🔥','✨']);
+        const emoji = VALID_EMOJIS.has(msg.emoji) ? msg.emoji : '❤️';
+        const [userId] = this.state.getTags(ws);
+        const mrKey = `mr:${userId}`;
+        const myR = (await this.state.storage.get(mrKey)) || {};
+        const idx = (myR[msg.key] || []).indexOf(emoji);
+        if (idx === -1) return;
+        myR[msg.key].splice(idx, 1);
+        const reactions_v2 = (await this.state.storage.get("reactions_v2")) || {};
+        if (!reactions_v2[msg.key]) reactions_v2[msg.key] = {};
+        reactions_v2[msg.key][emoji] = Math.max(0, (reactions_v2[msg.key][emoji] || 0) - 1);
+        await Promise.all([
+          this.state.storage.put(mrKey, myR),
+          this.state.storage.put("reactions_v2", reactions_v2),
+        ]);
+        const count = reactions_v2[msg.key][emoji];
+        this._broadcast({ type: "react", key: msg.key, emoji, count });
       }
     } catch (_) {}
   }

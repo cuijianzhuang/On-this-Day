@@ -742,7 +742,8 @@
   }
   .lightbox-nav:hover { opacity: 1; }
   .lightbox-nav.prev { left: 0.5rem; }
-  .lightbox-nav.next { right: 0.5rem; }
+  /* 右箭头要在信息面板左侧，避免渲染在面板上 */
+  .lightbox-nav.next { right: calc(360px + 0.5rem); }
 
   #fingertip {
     position: fixed; top: 0; left: 0; width: 70px; height: 70px;
@@ -852,8 +853,8 @@
 
     /* 底部条：提示文字 + 表态按钮，固定在胶片卷上方 */
     .lb-bottom-bar {
+      inset: auto; /* reset desktop inset:0（必须先写，否则会覆盖后面的 bottom/left/right） */
       position: fixed; bottom: 64px; left: 0; right: 0;
-      inset: auto; /* override desktop inset:0 */
       display: flex; align-items: center; justify-content: space-between;
       padding: 0.65rem max(1rem, env(safe-area-inset-right)) 0.65rem max(1rem, env(safe-area-inset-left));
       gap: 0.75rem;
