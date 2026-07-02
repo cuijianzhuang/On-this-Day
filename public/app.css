@@ -802,7 +802,7 @@
       gap: 14px;
       padding: 0;
       perspective: none;
-      align-items: unset;
+      align-items: start;
       justify-content: unset;
     }
     /* 骨架屏容器同理，它不在 .year-block 里，自己保留水平 padding */
