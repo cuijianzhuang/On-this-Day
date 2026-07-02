@@ -1705,11 +1705,15 @@
       </div>
     `;
         };
+        // 先渲染公历块、再渲染农历块；renderYearBlock 会递增 globalCellIndex，
+        // 这个求值顺序必须和 allPhotos（公历在前、农历在后）的填充顺序完全一致，
+        // 否则卡片上的 openLightbox(flatIndex) 会整体错位。
+        const solarHtml = data.years.map(y => renderYearBlock(y, 'year-')).join('');
         const lunarHtml = lunarYears.length
           ? '<div class="lunar-divider"><span class="lunar-moon">🌙</span>农历' + escHtml(data.lunar.label) + ' · 那些年</div>'
             + lunarYears.map(y => renderYearBlock(y, 'lunar-year-')).join('')
           : '';
-        content.innerHTML = data.years.map(y => renderYearBlock(y, 'year-')).join('') + lunarHtml;
+        content.innerHTML = solarHtml + lunarHtml;
         content.querySelectorAll('.cell').forEach((cell) => cellObserver.observe(cell));
         content.querySelectorAll('.cell video[data-src]').forEach((v) => videoLazyObserver.observe(v));
 
