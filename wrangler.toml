@@ -3,6 +3,7 @@ main = "worker.js"
 compatibility_date = "2026-06-27"
 # node:crypto（createHash）需要此 flag
 compatibility_flags = ["nodejs_compat"]
+# Deployment trigger: 2026-07-02
 
 routes = [
   { pattern = "memories.cuijianzhuang.com/*", zone_name = "cuijianzhuang.com" }
