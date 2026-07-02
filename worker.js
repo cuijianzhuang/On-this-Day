@@ -123,6 +123,16 @@ export default {
       });
     }
 
+    if (url.pathname === "/api/recap") {
+      return handleRecap(request, env, url);
+    }
+
+    if (url.pathname === "/recap") {
+      return new Response(RECAP_HTML, {
+        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+      });
+    }
+
     if (url.pathname === "/api/poem") {
       return handlePoem(request, env, url);
     }
@@ -443,6 +453,211 @@ async function handleTopLoved(request, env, url) {
   await cache.put(cacheKey, response.clone());
   return response;
 }
+
+// ── 年度回忆放映 ──────────────────────────────────────────────────────────────
+// 取某一年 AI 评分最高的 40 张，按时间顺序放映。没传 year 就用最近一个有打分照片的年份
+async function handleRecap(request, env, url) {
+  const cache = caches.default;
+  const cacheKey = new Request(url.toString());
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  const { results: yearRows } = await env.DB.prepare(
+    `SELECT DISTINCT pi.year AS year FROM photos_index pi
+     JOIN photo_scores ps ON ps.key = pi.key
+     WHERE pi.type = 'image' AND ps.score IS NOT NULL
+     ORDER BY pi.year DESC`
+  ).all();
+  const years = yearRows.map((r) => r.year);
+
+  let year = url.searchParams.get("year");
+  if (!/^\d{4}$/.test(year || "")) year = years[0] || String(new Date().getUTCFullYear());
+
+  const { results } = await env.DB.prepare(
+    `SELECT pi.key AS key, pi.month, pi.day, ps.caption, pp.name AS place
+     FROM photos_index pi
+     JOIN photo_scores ps ON ps.key = pi.key
+     LEFT JOIN photo_places pp ON pp.key = pi.key
+     WHERE pi.year = ? AND pi.type = 'image' AND ps.score IS NOT NULL
+     ORDER BY ps.score DESC LIMIT 40`
+  ).bind(year).all();
+  // 精选完按拍摄时间排回去，放映是"一年走过来"的叙事顺序
+  results.sort((a, b) => (a.month + a.day).localeCompare(b.month + b.day));
+
+  const photos = results.map((r) => ({
+    key: r.key,
+    url: `/img/${encodeURIComponent(r.key)}`,
+    month: r.month,
+    day: r.day,
+    caption: r.caption || "",
+    place: r.place || "",
+  }));
+
+  const response = new Response(JSON.stringify({ year, years, photos }), {
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "public, max-age=3600",
+    },
+  });
+  await cache.put(cacheKey, response.clone());
+  return response;
+}
+
+const RECAP_HTML = `<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>年度回忆 · 那年今日</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+  body {
+    margin: 0; background: #000; color: #fff; overflow: hidden;
+    height: 100dvh; font-family: "SF Pro Display", -apple-system, "PingFang SC", sans-serif;
+  }
+  #stage { position: fixed; inset: 0; }
+  #stage img {
+    position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+    opacity: 0; transition: opacity 1.1s ease;
+  }
+  #stage img.on { opacity: 1; }
+  #stage img.kb { animation: kenburns 6s ease-out forwards; }
+  @keyframes kenburns { from { transform: scale(1); } to { transform: scale(1.07); } }
+  #intro {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 0.6rem;
+    background: #000; z-index: 5; transition: opacity 1s ease;
+  }
+  #intro.hide { opacity: 0; pointer-events: none; }
+  #intro .y { font-size: clamp(3rem, 12vw, 6rem); font-weight: 700; letter-spacing: 0.02em; }
+  #intro .t { color: #8a8a8f; font-size: 0.95rem; letter-spacing: 0.35em; text-transform: uppercase; }
+  #caption {
+    position: fixed; left: max(1.4rem, env(safe-area-inset-left)); bottom: max(1.6rem, env(safe-area-inset-bottom));
+    z-index: 3; max-width: 72vw; text-shadow: 0 1px 10px rgba(0,0,0,0.8);
+  }
+  #caption .d { font-size: 1.25rem; font-weight: 700; margin-bottom: 0.25rem; }
+  #caption .c { font-size: 0.8rem; color: rgba(255,255,255,0.75); line-height: 1.5; }
+  #bar { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 4; background: rgba(255,255,255,0.14); }
+  #bar i { display: block; height: 100%; width: 0; background: #fff; transition: width 0.2s linear; }
+  .btn {
+    position: fixed; z-index: 6; width: 38px; height: 38px; border-radius: 50%;
+    border: none; display: flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,0.12); backdrop-filter: blur(12px); color: #fff;
+    cursor: pointer; text-decoration: none; font-size: 0.9rem;
+  }
+  #back { top: max(1rem, env(safe-area-inset-top)); left: max(1rem, env(safe-area-inset-left)); }
+  #music { top: max(1rem, env(safe-area-inset-top)); right: max(1rem, env(safe-area-inset-right)); }
+  #yearNav {
+    position: fixed; bottom: max(1.5rem, env(safe-area-inset-bottom)); right: max(1.2rem, env(safe-area-inset-right));
+    z-index: 6; display: flex; gap: 0.4rem;
+  }
+  #yearNav a {
+    color: rgba(255,255,255,0.55); text-decoration: none; font-size: 0.78rem;
+    padding: 0.25rem 0.6rem; border-radius: 999px; background: rgba(0,0,0,0.35); backdrop-filter: blur(8px);
+  }
+  #yearNav a.cur { color: #000; background: rgba(255,255,255,0.9); font-weight: 600; }
+  #empty { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; color: #6e6e73; z-index: 5; }
+  svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+</style>
+</head>
+<body>
+  <div id="stage"><img id="imgA" /><img id="imgB" /></div>
+  <div id="intro"><div class="t">Year in Review</div><div class="y" id="introYear"></div></div>
+  <div id="bar"><i id="barFill"></i></div>
+  <div id="caption"><div class="d" id="capDate"></div><div class="c" id="capText"></div></div>
+  <a class="btn" id="back" href="/" title="回到今天"><svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg></a>
+  <button class="btn" id="music" title="背景音乐"><svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></button>
+  <div id="yearNav"></div>
+  <div id="empty">这一年还没有打过分的照片</div>
+  <audio id="bgm" loop preload="none"><source src="https://image.cuijianzhuang.com/forest.mp3" type="audio/mpeg" /></audio>
+<script>
+  var params = new URLSearchParams(location.search);
+  var qs = params.get('year') ? '?year=' + encodeURIComponent(params.get('year')) : '';
+  var photos = [], idx = -1, timer = null, paused = false, useA = true;
+  var DURATION = 5000;
+  var imgA = document.getElementById('imgA'), imgB = document.getElementById('imgB');
+  var barFill = document.getElementById('barFill');
+
+  function thumbOf(p) { return p.url.replace('/img/', '/thumb/') + '?w=1600&q=85&fit=scale-down'; }
+
+  fetch('/api/recap' + qs).then(function (r) { return r.json(); }).then(function (data) {
+    document.getElementById('introYear').textContent = data.year;
+    var nav = document.getElementById('yearNav');
+    nav.innerHTML = (data.years || []).map(function (y) {
+      return '<a href="/recap?year=' + y + '"' + (y === data.year ? ' class="cur"' : '') + '>' + y + '</a>';
+    }).join('');
+    photos = data.photos || [];
+    if (!photos.length) {
+      document.getElementById('intro').classList.add('hide');
+      document.getElementById('empty').style.display = 'flex';
+      return;
+    }
+    setTimeout(function () {
+      document.getElementById('intro').classList.add('hide');
+      next();
+    }, 1800);
+  });
+
+  function show(i) {
+    idx = (i + photos.length) % photos.length;
+    var p = photos[idx];
+    var incoming = useA ? imgA : imgB;
+    var outgoing = useA ? imgB : imgA;
+    useA = !useA;
+    incoming.classList.remove('on', 'kb');
+    incoming.src = thumbOf(p);
+    var reveal = function () {
+      incoming.classList.add('on', 'kb');
+      outgoing.classList.remove('on');
+      document.getElementById('capDate').textContent = parseInt(p.month) + ' 月 ' + parseInt(p.day) + ' 日';
+      document.getElementById('capText').textContent = [p.caption, p.place].filter(Boolean).join(' · ');
+      barFill.style.width = ((idx + 1) / photos.length * 100) + '%';
+      // 预加载下一张
+      var nx = new Image(); nx.src = thumbOf(photos[(idx + 1) % photos.length]);
+      schedule();
+    };
+    if (incoming.complete && incoming.naturalWidth) reveal();
+    else { incoming.onload = reveal; incoming.onerror = function () { schedule(); }; }
+  }
+
+  function schedule() {
+    clearTimeout(timer);
+    if (!paused) timer = setTimeout(next, DURATION);
+  }
+  function next() { show(idx + 1); }
+  function prev() { show(idx - 1); }
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); clearTimeout(timer); next(); }
+    if (e.key === 'ArrowLeft') { clearTimeout(timer); prev(); }
+    if (e.key === 'Escape') location.href = '/';
+  });
+  // 点击：左 1/3 上一张，右 2/3 下一张；长按暂停由 pointerdown/up 控制
+  var pressTimer = null;
+  document.getElementById('stage').addEventListener('pointerdown', function () {
+    pressTimer = setTimeout(function () { paused = true; clearTimeout(timer); pressTimer = null; }, 350);
+  });
+  document.getElementById('stage').addEventListener('pointerup', function (e) {
+    if (pressTimer) {
+      clearTimeout(pressTimer); pressTimer = null;
+      clearTimeout(timer);
+      if (e.clientX < window.innerWidth / 3) prev(); else next();
+    } else if (paused) {
+      paused = false; schedule();
+    }
+  });
+
+  var bgm = document.getElementById('bgm'), musicOn = false;
+  document.getElementById('music').onclick = function () {
+    musicOn = !musicOn;
+    this.style.opacity = musicOn ? 1 : 0.55;
+    if (musicOn) { bgm.volume = 0.4; bgm.play().catch(function () {}); } else bgm.pause();
+  };
+</script>
+</body>
+</html>`;
 
 // ── 照片手记 ──────────────────────────────────────────────────────────────────
 // 家人给照片写的文字注解（谁拍的、当时发生了什么）。站点面向家庭成员公开，
