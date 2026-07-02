@@ -2867,6 +2867,41 @@ async function handlePoem(request, env, url) {
 async function handleMapPhotos(request, env, url) {
   const month = url.searchParams.get("month");
   const day = url.searchParams.get("day");
+
+  // 不带 month/day = 全量模式：地球视角一次拿到所有带定位的照片（聚合渲染交给前端）
+  if (!month && !day) {
+    const cache = caches.default;
+    const cacheKey = new Request(url.toString());
+    const cachedResp = await cache.match(cacheKey);
+    if (cachedResp) return cachedResp;
+
+    const { results } = await env.DB.prepare(
+      `SELECT pp.key AS key, pp.lat, pp.lon, pp.name, pi.year, pi.month, pi.day, pi.type
+       FROM photo_places pp
+       JOIN photos_index pi ON pi.key = pp.key
+       WHERE pp.lat IS NOT NULL`
+    ).all();
+    const photos = results.map((r) => ({
+      key: r.key,
+      url: `/img/${encodeURIComponent(r.key)}`,
+      type: r.type,
+      lat: r.lat,
+      lon: r.lon,
+      name: r.name || "",
+      year: r.year,
+      month: r.month,
+      day: r.day,
+    }));
+    const response = new Response(JSON.stringify({ photos }), {
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "public, max-age=1800",
+      },
+    });
+    await cache.put(cacheKey, response.clone());
+    return response;
+  }
+
   if (!/^\d{2}$/.test(month || "") || !/^\d{2}$/.test(day || "")) {
     return new Response(JSON.stringify({ error: "month/day required, format MM/DD" }), {
       status: 400,
@@ -2922,7 +2957,6 @@ const MAP_HTML = (mapboxPublicToken) => `<!doctype html>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <link href="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.css" rel="stylesheet" />
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/heic2any/dist/heic2any.min.js" defer></script>
 <link rel="stylesheet" href="/map.css" />
 </head>
 <body>
@@ -2930,17 +2964,7 @@ const MAP_HTML = (mapboxPublicToken) => `<!doctype html>
     <svg viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
   </a>
   <div id="map"></div>
-  <div class="map-empty" id="mapEmpty">这一天还没有带定位信息的照片<br />去 /admin/locate-photos 跑一下批量查询，或者等 Cron 任务慢慢处理</div>
-
-  <div class="map-overlay" id="mapOverlay"></div>
-  <div class="map-card" id="mapCard">
-    <div class="card-drag-handle"></div>
-    <button class="card-close" id="cardClose">
-      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
-    </button>
-    <div class="card-media" id="cardMedia"></div>
-    <div class="card-info" id="cardInfo"></div>
-  </div>
+  <div class="map-empty" id="mapEmpty">还没有带定位信息的照片<br />等后台任务慢慢解析，或跑一次 /admin/locate-photos</div>
 
 <script>window.MAPBOX_TOKEN = ${JSON.stringify(mapboxPublicToken).replace(/<\//g, '<\\/')};</script>
 <script src="/map.js" defer></script>

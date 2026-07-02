@@ -1,12 +1,12 @@
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   body {
-    margin: 0; background: #000; color: #f5f5f7;
+    margin: 0; background: #04040c; color: #f5f5f7;
     font-family: "SF Pro Display", -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
   }
   #map { position: fixed; inset: 0; }
   .back-btn {
-    position: absolute; top: 1.3rem; left: 1.4rem; z-index: 5;
+    position: absolute; top: max(1.3rem, env(safe-area-inset-top)); left: max(1.4rem, env(safe-area-inset-left)); z-index: 5;
     width: 36px; height: 36px; border-radius: 50%; border: none;
     background: rgba(20,20,22,0.82); backdrop-filter: blur(12px); color: #f5f5f7;
     display: flex; align-items: center; justify-content: center; cursor: pointer;
@@ -22,98 +22,64 @@
     padding: 1.2rem 1.8rem; border-radius: 14px;
   }
 
-  /* ── 标记点 ─────────────────────────────────────────────────────────────── */
-  .map-marker {
-    width: 38px; height: 38px; border-radius: 50%;
-    background: #e8607a;
-    display: flex; align-items: center; justify-content: center;
-    cursor: pointer;
-    box-shadow: 0 0 0 3px rgba(232,96,122,0.28), 0 4px 14px rgba(0,0,0,0.55);
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  /* ── 弹窗公共：深色毛玻璃卡片 ─────────────────────────────────────────────── */
+  .photo-popup .mapboxgl-popup-content,
+  .cluster-popup .mapboxgl-popup-content {
+    background: rgba(16,16,20,0.92); backdrop-filter: blur(20px) saturate(1.4);
+    border: 1px solid rgba(255,255,255,0.1); border-radius: 14px;
+    box-shadow: 0 14px 48px rgba(0,0,0,0.65);
+    padding: 0; overflow: hidden;
   }
-  .map-marker svg { width: 17px; height: 17px; fill: white; }
-  .map-marker:hover { transform: scale(1.12); box-shadow: 0 0 0 4px rgba(232,96,122,0.4), 0 6px 20px rgba(0,0,0,0.65); }
-  .map-marker.active { transform: scale(1.18); box-shadow: 0 0 0 5px rgba(232,96,122,0.5), 0 8px 24px rgba(0,0,0,0.7); }
+  .photo-popup .mapboxgl-popup-tip,
+  .cluster-popup .mapboxgl-popup-tip {
+    border-top-color: rgba(16,16,20,0.92);
+    border-bottom-color: rgba(16,16,20,0.92);
+  }
+  .photo-popup .mapboxgl-popup-close-button,
+  .cluster-popup .mapboxgl-popup-close-button {
+    width: 24px; height: 24px; border-radius: 50%;
+    top: 6px; right: 6px; z-index: 3;
+    color: rgba(255,255,255,0.85); font-size: 1rem; line-height: 1;
+    background: rgba(0,0,0,0.45); backdrop-filter: blur(8px);
+  }
+  .photo-popup .mapboxgl-popup-close-button:hover,
+  .cluster-popup .mapboxgl-popup-close-button:hover { background: rgba(0,0,0,0.65); }
 
-  /* ── 半透明遮罩 ───────────────────────────────────────────────────────────── */
-  .map-overlay { position: fixed; inset: 0; z-index: 9; display: none; }
-  .map-overlay.visible { display: block; }
-
-  /* ── 底部卡片 ─────────────────────────────────────────────────────────────── */
-  .map-card {
-    position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
-    background: #1c1c1e; border-radius: 20px 20px 0 0;
-    transform: translateY(100%);
-    transition: transform 0.32s cubic-bezier(0.32,0.72,0,1);
-    box-shadow: 0 -8px 48px rgba(0,0,0,0.65);
-    max-height: 82dvh; display: flex; flex-direction: column;
-  }
-  .map-card.open { transform: translateY(0); }
-
-  .card-drag-handle {
-    width: 36px; height: 4px; border-radius: 2px;
-    background: rgba(255,255,255,0.18); margin: 10px auto 0; flex-shrink: 0;
-  }
-  .card-close {
-    position: absolute; top: 0.55rem; right: 0.7rem; z-index: 2;
-    width: 28px; height: 28px; border-radius: 50%; border: none;
-    background: rgba(255,255,255,0.14); color: rgba(255,255,255,0.85); cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    backdrop-filter: blur(8px); transition: background 0.15s ease;
-  }
-  .card-close:hover { background: rgba(255,255,255,0.26); }
-
-  /* ── 照片区 ───────────────────────────────────────────────────────────────── */
-  .card-media {
-    width: 100%; height: 260px; overflow: hidden; position: relative;
-    background: #0a0a0a; flex-shrink: 0;
-    border-radius: 12px 12px 0 0;
-    cursor: default;
-  }
-  .card-media.zoomed { cursor: grab; }
-  .card-media.zoomed.panning { cursor: grabbing !important; }
-  .card-media img,
-  .card-media video {
+  /* ── 单张照片详情卡（参考 lens：图 + 名称 + 地点·日期 + EXIF 行）───────────── */
+  .photo-popup .mapboxgl-popup-content { width: 250px; }
+  .pp-media { display: block; width: 100%; height: 165px; background: #0a0a0e; }
+  .pp-media img, .pp-media video {
     width: 100%; height: 100%; object-fit: cover; display: block;
-    opacity: 0; transition: opacity 0.35s ease;
-    transform-origin: center center; will-change: transform;
+    opacity: 0; transition: opacity 0.3s ease;
   }
-  .card-media img.loaded,
-  .card-media video.loaded { opacity: 1; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .card-media::after {
-    content: ''; position: absolute; top: 50%; left: 50%;
-    width: 24px; height: 24px; margin: -12px 0 0 -12px; border-radius: 50%;
-    border: 3px solid rgba(232,96,122,0.22); border-top-color: #e8607a;
-    animation: spin 0.8s linear infinite;
-    opacity: 1; transition: opacity 0.25s ease; pointer-events: none;
-  }
-  .card-media:has(.loaded)::after { opacity: 0; }
+  .pp-media img.loaded, .pp-media video.loaded { opacity: 1; }
+  .pp-body { padding: 0.75rem 0.9rem 0.85rem; }
+  .pp-title { font-size: 0.98rem; font-weight: 700; color: #f5f5f7; line-height: 1.25; margin-bottom: 0.15rem; }
+  .pp-sub { font-size: 0.7rem; color: #8a8a8f; margin-bottom: 0.6rem; }
+  .pp-rows { display: flex; flex-direction: column; gap: 0.3rem; }
+  .pp-row { display: flex; align-items: flex-start; gap: 0.45rem; font-size: 0.68rem; color: #c7c7cc; line-height: 1.45; font-family: 'Space Grotesk', "SF Pro Display", sans-serif; }
+  .pp-row svg { width: 12px; height: 12px; flex-shrink: 0; margin-top: 1px; fill: none; stroke: #8a8a8f; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
-  /* ── 信息区 ───────────────────────────────────────────────────────────────── */
-  .card-info {
-    padding: 1rem 1.2rem max(1.4rem, env(safe-area-inset-bottom, 0px));
-    overflow-y: auto; flex: 1; min-height: 0;
+  /* ── 聚合弹窗（附近有 N 张照片）──────────────────────────────────────────── */
+  .cluster-popup .mapboxgl-popup-content { width: 252px; padding: 0.8rem 0.9rem; }
+  .cp-head {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem;
+    margin-bottom: 0.6rem; padding-right: 1.2rem;
+    color: #f5f5f7; font-weight: 600; font-size: 0.82rem;
   }
-  .card-title {
-    font-size: 1.3rem; font-weight: 700; color: #f5f5f7;
-    line-height: 1.2; margin-bottom: 0.18rem;
+  .cp-hint { color: #8a8a8f; font-weight: 400; font-size: 0.6rem; white-space: nowrap; }
+  .cp-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; margin-bottom: 0.6rem; }
+  .cp-thumb {
+    position: relative; aspect-ratio: 1; border-radius: 8px; overflow: hidden;
+    cursor: pointer; background: #101014;
   }
-  .card-subtitle { font-size: 0.8rem; color: #8a8a8f; margin-bottom: 0.9rem; }
-  .card-rows { display: flex; flex-direction: column; gap: 0.38rem; }
-  .card-row { display: flex; align-items: flex-start; gap: 0.6rem; }
-  .card-row-icon {
-    width: 14px; height: 14px; flex-shrink: 0; margin-top: 1px;
-    opacity: 0.46;
+  .cp-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.15s ease; }
+  .cp-thumb:hover img { transform: scale(1.07); }
+  .cp-more {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.55); color: #fff; font-size: 0.8rem; font-weight: 600;
   }
-  .card-row-icon svg { width: 100%; height: 100%; fill: none; stroke: #c7c7cc; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  .card-row-text { font-size: 0.78rem; color: #c7c7cc; line-height: 1.45; }
-
-  /* desktop: cap width, center */
-  @media (min-width: 720px) {
-    .map-card { left: 50%; right: auto; width: 420px; transform: translateX(-50%) translateY(100%); border-radius: 20px 20px 0 0; }
-    .map-card.open { transform: translateX(-50%) translateY(0); }
-    .card-media { height: 300px; }
-  }
+  .cp-meta { display: flex; align-items: center; gap: 0.4rem; color: #a8a8ad; font-size: 0.68rem; line-height: 1.6; }
+  .cp-meta svg { width: 11px; height: 11px; flex-shrink: 0; fill: none; stroke: #8a8a8f; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
   .mapboxgl-ctrl-attrib { font-size: 0.62rem; }
