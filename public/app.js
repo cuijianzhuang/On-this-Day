@@ -700,7 +700,60 @@
     infoEl.innerHTML =
       '<div id="lpMapPlaceholder"></div>' +
       '<div class="lp-section-title">基本信息</div>' +
-      '<div class="lp-info-table" id="lpBasicTable">' + rows.join('') + '</div>';
+      '<div class="lp-info-table" id="lpBasicTable">' + rows.join('') + '</div>' +
+      '<div class="lp-section-title">手记</div>' +
+      '<div class="lp-note-wrap" id="lpNoteWrap"><div class="lp-note-empty">加载中…</div></div>';
+    _loadNote(p.key);
+  }
+
+  // ── 照片手记：家人写的文字注解，存服务端，全家可见 ─────────────────────────
+  let _noteSeq = 0;
+  function _loadNote(key) {
+    const seq = ++_noteSeq;
+    fetch('/api/note?key=' + encodeURIComponent(key))
+      .then(r => r.ok ? r.json() : { note: '' })
+      .then(d => { if (seq === _noteSeq) _renderNote(key, d.note || ''); })
+      .catch(() => { if (seq === _noteSeq) _renderNote(key, ''); });
+  }
+
+  function _renderNote(key, note) {
+    const wrap = document.getElementById('lpNoteWrap');
+    if (wrap) {
+      wrap.innerHTML =
+        (note
+          ? '<div class="lp-note-text">' + escHtml(note) + '</div>'
+          : '<div class="lp-note-empty">还没有手记</div>') +
+        '<button class="lp-note-edit" type="button">' + (note ? '编辑' : '写点什么…') + '</button>';
+      wrap.querySelector('.lp-note-edit').onclick = () => _editNote(key, note);
+    }
+    // 移动端信息面板是隐藏的，手记显示在底部提示区
+    const hint = document.getElementById('lbZoomHint');
+    if (hint && window.innerWidth <= 640 && note) hint.textContent = '📝 ' + note;
+  }
+
+  function _editNote(key, current) {
+    const wrap = document.getElementById('lpNoteWrap');
+    if (!wrap) return;
+    wrap.innerHTML =
+      '<textarea class="lp-note-input" maxlength="500" rows="4" placeholder="谁拍的、当时发生了什么…"></textarea>' +
+      '<div class="lp-note-btns">' +
+      '<button class="lp-note-save" type="button">保存</button>' +
+      '<button class="lp-note-cancel" type="button">取消</button></div>';
+    const ta = wrap.querySelector('textarea');
+    ta.value = current;
+    ta.focus();
+    wrap.querySelector('.lp-note-cancel').onclick = () => _renderNote(key, current);
+    wrap.querySelector('.lp-note-save').onclick = () => {
+      const note = ta.value.trim();
+      fetch('/api/note', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, note }),
+      })
+        .then(r => { if (!r.ok) throw new Error('save failed'); return r.json(); })
+        .then(() => { _renderNote(key, note); showToast(note ? '手记已保存' : '手记已删除'); })
+        .catch(() => showToast('保存失败，请重试'));
+    };
   }
 
   function _renderLightboxExif(exif, p) {

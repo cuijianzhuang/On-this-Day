@@ -113,6 +113,10 @@ export default {
       return handleSearch(request, env, url);
     }
 
+    if (url.pathname === "/api/note") {
+      return handleNote(request, env, url);
+    }
+
     if (url.pathname === "/loved") {
       return new Response(LOVED_HTML, {
         headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
@@ -438,6 +442,48 @@ async function handleTopLoved(request, env, url) {
   });
   await cache.put(cacheKey, response.clone());
   return response;
+}
+
+// ── 照片手记 ──────────────────────────────────────────────────────────────────
+// 家人给照片写的文字注解（谁拍的、当时发生了什么）。站点面向家庭成员公开，
+// 跟表态一样不做身份校验，只做长度和 key 存在性约束
+async function handleNote(request, env, url) {
+  await ensureAuxTables(env);
+
+  if (request.method === "GET") {
+    const key = url.searchParams.get("key") || "";
+    if (!key) return new Response("Bad Request", { status: 400 });
+    const row = await env.DB.prepare("SELECT note, updated_at FROM photo_notes WHERE key = ?")
+      .bind(key).first();
+    return new Response(JSON.stringify({ note: row?.note || "", updated_at: row?.updated_at || null }), {
+      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+    });
+  }
+
+  if (request.method === "POST") {
+    let body;
+    try { body = await request.json(); } catch { return new Response("Bad Request", { status: 400 }); }
+    const key = typeof body.key === "string" ? body.key : "";
+    const note = typeof body.note === "string" ? body.note.trim() : "";
+    if (!key || note.length > 500) return new Response("Bad Request", { status: 400 });
+    // key 必须是真实存在的照片，别让这张表变成任意写入的垃圾桶
+    const exists = await env.DB.prepare("SELECT 1 FROM photos_index WHERE key = ?").bind(key).first();
+    if (!exists) return new Response("Not Found", { status: 404 });
+
+    if (!note) {
+      await env.DB.prepare("DELETE FROM photo_notes WHERE key = ?").bind(key).run();
+    } else {
+      await env.DB.prepare(
+        "INSERT INTO photo_notes (key, note, updated_at) VALUES (?, ?, ?) " +
+        "ON CONFLICT(key) DO UPDATE SET note = excluded.note, updated_at = excluded.updated_at"
+      ).bind(key, note, new Date().toISOString()).run();
+    }
+    return new Response(JSON.stringify({ ok: true, note }), {
+      headers: { "content-type": "application/json; charset=utf-8" },
+    });
+  }
+
+  return new Response("Method Not Allowed", { status: 405 });
 }
 
 // ── 照片搜索 ──────────────────────────────────────────────────────────────────
