@@ -170,6 +170,30 @@ export default {
 };
 
 // ── 每日零点精选推送 Telegram ───────────────────────────────────────────────────
+
+// 给 Telegram 推送预生成 JPEG 缩略图，返回 PREVIEWS 桶的公开直链。
+// 不发 /thumb/ 的 302——Telegram 抓 URL 图片时对重定向和 WebP 的支持都不可靠，
+// JPEG 直链（无跳转、格式明确）是最稳的形态。已生成过的直接复用。
+async function tgPhotoUrl(env, key) {
+  const thumbKey = `tg/${key.replace(/\.[^.]+$/, "")}.jpg`;
+  if (!(await env.PREVIEWS.head(thumbKey))) {
+    const object = await env.PHOTOS.get(key);
+    if (!object) return null;
+    try {
+      const transformed = await env.IMAGES.input(object.body)
+        .transform({ width: 1280, fit: "scale-down" })
+        .output({ format: "image/jpeg", quality: 85 });
+      const buf = await transformed.response().arrayBuffer();
+      await env.PREVIEWS.put(thumbKey, buf, {
+        httpMetadata: { contentType: "image/jpeg", cacheControl: "public, max-age=31536000, immutable" },
+      });
+    } catch {
+      return null; // 解码失败（损坏文件等）就跳过这张，别让一张坏图拖垮整次推送
+    }
+  }
+  return `${env.PREVIEWS_PUBLIC_URL}/${thumbKey.split("/").map(encodeURIComponent).join("/")}`;
+}
+
 async function sendDailyMemories(env) {
   if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) {
     console.log("sendDailyMemories: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set, skipping");
@@ -183,18 +207,30 @@ async function sendDailyMemories(env) {
   const day = String(bjNow.getUTCDate()).padStart(2, "0");
 
   // 查当天历史上评分最高的图片，最多取 5 张。
-  // 分数在 photo_scores 表（photos_index 里没有 score 列），JOIN 起来查；
-  // 没打过分的照片（ps.score IS NULL）不参与精选
-  const { results: photos } = await env.DB.prepare(
-    `SELECT pi.key AS key, pi.year AS year, ps.score AS score
+  // LEFT JOIN：还没打完分的新照片（比如当天刚上传、Workflow 还在排队）按上传时间兜底补位，
+  // 不然"今天刚拍的"反而永远缺席零点推送。SQLite 把 NULL 当最小值，DESC 排序自然垫底，
+  // 正好实现"有分的按分数优先，没分的按上传时间补位"
+  const { results: candidates } = await env.DB.prepare(
+    `SELECT pi.key AS key, pi.year AS year
      FROM photos_index pi
-     JOIN photo_scores ps ON pi.key = ps.key
-     WHERE pi.month = ? AND pi.day = ? AND pi.type = 'image' AND ps.score IS NOT NULL
-     ORDER BY ps.score DESC LIMIT 5`
+     LEFT JOIN photo_scores ps ON pi.key = ps.key
+     WHERE pi.month = ? AND pi.day = ? AND pi.type = 'image'
+     ORDER BY ps.score DESC, pi.uploaded DESC LIMIT 5`
   ).bind(month, day).all();
 
+  if (!candidates.length) {
+    console.log(`sendDailyMemories: no photos for ${month}-${day}`);
+    return;
+  }
+
+  // 逐张预生成 JPEG 直链，生成失败的跳过
+  const photos = [];
+  for (const p of candidates) {
+    const photoUrl = await tgPhotoUrl(env, p.key);
+    if (photoUrl) photos.push({ ...p, photoUrl });
+  }
   if (!photos.length) {
-    console.log(`sendDailyMemories: no scored photos for ${month}-${day}`);
+    console.log(`sendDailyMemories: all thumbnail generations failed for ${month}-${day}`);
     return;
   }
 
@@ -232,11 +268,6 @@ async function sendDailyMemories(env) {
 
   const tgBase = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`;
 
-  // 构建缩略图 URL——必须是绝对地址，Telegram 服务器要从公网拉这张图
-  function thumbUrl(p) {
-    return `${SITE_ORIGIN}/thumb/${encodeURIComponent(p.key)}?w=1200&h=900&q=85&fit=scale-down`;
-  }
-
   let resp;
   if (photos.length === 1) {
     resp = await fetch(`${tgBase}/sendPhoto`, {
@@ -244,14 +275,14 @@ async function sendDailyMemories(env) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: env.TELEGRAM_CHAT_ID,
-        photo: thumbUrl(photos[0]),
+        photo: photos[0].photoUrl,
         caption,
       }),
     });
   } else {
     const media = photos.map((p, i) => ({
       type: "photo",
-      media: thumbUrl(p),
+      media: p.photoUrl,
       ...(i === 0 ? { caption } : {}),
     }));
     resp = await fetch(`${tgBase}/sendMediaGroup`, {
