@@ -76,6 +76,16 @@ export default {
       return handleBackfillWorkflows(request, env, url);
     }
 
+    if (url.pathname === "/admin/test-telegram") {
+      if (!checkAdminToken(request, env)) return new Response("Unauthorized", { status: 401 });
+      try {
+        await sendDailyMemories(env);
+        return new Response("OK", { status: 200 });
+      } catch (err) {
+        return new Response("Error: " + err.message, { status: 500 });
+      }
+    }
+
     if (url.pathname === "/api/map-photos") {
       return handleMapPhotos(request, env, url);
     }
@@ -115,10 +125,15 @@ export default {
     return env.ASSETS.fetch(request);
   },
 
-  // Cron 定时任务：每次只处理一小批未打分/未查地点的照片，跑在用户访问之外，
-  // 不会跟页面请求共享同一次调用的子请求预算，自然就不会撞到 Workers 的子请求上限
+  // Cron 定时任务：按 cron 表达式区分任务
+  // */10 * * * *  → 维护任务（打分/地点/回填）
+  // 0 16 * * *    → 北京时间零点，把当天历史精选推送到 Telegram
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runBackgroundMaintenance(env));
+    if (event.cron === "0 16 * * *") {
+      ctx.waitUntil(sendDailyMemories(env));
+    } else {
+      ctx.waitUntil(runBackgroundMaintenance(env));
+    }
   },
 
   // R2 Event Notification → Queue → 此处仅触发 PhotoProcessingWorkflow。
@@ -150,6 +165,103 @@ export default {
     }
   },
 };
+
+// ── 每日零点精选推送 Telegram ───────────────────────────────────────────────────
+async function sendDailyMemories(env) {
+  if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) {
+    console.log("sendDailyMemories: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set, skipping");
+    return;
+  }
+
+  // 北京时间当前日期（UTC+8）
+  const now = new Date();
+  const bjNow = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  const month = String(bjNow.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(bjNow.getUTCDate()).padStart(2, "0");
+
+  // 查当天历史上评分最高的图片，最多取 5 张
+  const { results: photos } = await env.DB.prepare(
+    `SELECT key, url, year, name, lat, lon FROM photos_index
+     WHERE month = ? AND day = ? AND type = 'image' AND score IS NOT NULL
+     ORDER BY score DESC LIMIT 5`
+  ).bind(month, day).all();
+
+  if (!photos.length) {
+    console.log(`sendDailyMemories: no scored photos for ${month}-${day}`);
+    return;
+  }
+
+  const years = [...new Set(photos.map((p) => p.year))].sort();
+  const monthInt = parseInt(month);
+  const dayInt = parseInt(day);
+
+  // 今日诗词（复用现有缓存逻辑）
+  let poemLine = "";
+  try {
+    const poem = await getDailyPoem();
+    if (poem?.content) {
+      poemLine = `「${poem.content}」`;
+      if (poem.dynasty || poem.author) {
+        poemLine += ` —— ${[poem.dynasty, poem.author].filter(Boolean).join("·")}`;
+        if (poem.title) poemLine += `《${poem.title}》`;
+      }
+    }
+  } catch { /* 诗词接口挂了不影响推送 */ }
+
+  const yearDesc = years.length > 1
+    ? `${years[0]}–${years[years.length - 1]} 年`
+    : `${years[0]} 年`;
+
+  const caption = [
+    `📅 ${monthInt} 月 ${dayInt} 日，那年今日`,
+    ``,
+    `横跨 ${years.length} 个年头 · ${photos.length} 张精选`,
+    `来自 ${yearDesc}`,
+    poemLine ? `` : null,
+    poemLine || null,
+    ``,
+    `🔗 memories.cuijianzhuang.com/${month}${day}`,
+  ].filter((l) => l !== null).join("\n");
+
+  const tgBase = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`;
+
+  // 构建缩略图 URL（Worker 图片变换接口）
+  function thumbUrl(p) {
+    return p.url.replace("/img/", "/thumb/") + "?w=1200&h=900&q=85&fit=scale-down";
+  }
+
+  let resp;
+  if (photos.length === 1) {
+    resp = await fetch(`${tgBase}/sendPhoto`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: env.TELEGRAM_CHAT_ID,
+        photo: thumbUrl(photos[0]),
+        caption,
+      }),
+    });
+  } else {
+    const media = photos.map((p, i) => ({
+      type: "photo",
+      media: thumbUrl(p),
+      ...(i === 0 ? { caption } : {}),
+    }));
+    resp = await fetch(`${tgBase}/sendMediaGroup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, media }),
+    });
+  }
+
+  if (!resp.ok) {
+    const body = await resp.text();
+    console.error("sendDailyMemories: Telegram API error", resp.status, body);
+  } else {
+    console.log(`sendDailyMemories: sent ${photos.length} photos for ${month}-${day}`);
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function runBackgroundMaintenance(env) {
   const BATCH_SIZE = 10;
