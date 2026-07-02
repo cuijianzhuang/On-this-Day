@@ -3091,6 +3091,10 @@ export class MemoryRoom {
 
     await this._migrateReactions();
     const reactions_v2 = await this._allReactions();
+    // 首次有人进这个房间时，把整个房间的历史计数一次性回填进 D1 镜像（之后靠写入路径维护）。
+    // 镜像表是功能上线后才开始积累的，不回填的话，老表态所在的日期只要没人再点一下，
+    // 那些照片就永远进不了"全家最爱"的跨日期聚合——这就是之前统计偏少/漏照片的原因
+    this._syncReactionsToD1(reactions_v2).catch(() => {});
     const my_reactions = (await this.state.storage.get(`mr:${userId}`)) || {};
     const { count, list } = this._usersInfo();
     server.send(JSON.stringify({ type: "init", count, reactions_v2, my_reactions, you: userId, list }));
@@ -3125,6 +3129,35 @@ export class MemoryRoom {
     return out;
   }
 
+  // 把本房间所有历史计数全量镜像进 D1（每个房间只做一次，之后由写入路径增量维护）。
+  // 不放在 _migrateReactions 里是因为迁移在这个功能上线前就已经跑完的房间同样需要回填
+  async _syncReactionsToD1(all) {
+    try {
+      if (await this.state.storage.get("d1_synced")) return;
+      await ensureAuxTables(this.env);
+      const stmts = [];
+      for (const [key, counts] of Object.entries(all)) {
+        for (const [emoji, count] of Object.entries(counts)) {
+          if (count > 0) {
+            stmts.push(
+              this.env.DB.prepare(
+                "INSERT INTO photo_reactions (key, emoji, count) VALUES (?, ?, ?) " +
+                  "ON CONFLICT(key, emoji) DO UPDATE SET count = excluded.count"
+              ).bind(key, emoji, count)
+            );
+          }
+        }
+      }
+      // D1 batch 单次别塞太多语句，50 条一批
+      for (let i = 0; i < stmts.length; i += 50) {
+        await this.env.DB.batch(stmts.slice(i, i + 50));
+      }
+      await this.state.storage.put("d1_synced", 1);
+    } catch (_) {
+      // 回填失败不影响实时体验，下次有人进房间再试
+    }
+  }
+
   async webSocketMessage(ws, raw) {
     try {
       const msg = JSON.parse(typeof raw === "string" ? raw : new TextDecoder().decode(raw));
@@ -3155,13 +3188,19 @@ export class MemoryRoom {
         ]);
         this._broadcast({ type: "react", key: msg.key, emoji, count: counts[emoji] });
         // 计数镜像到 D1（"全家最爱"页面要跨所有日期房间聚合，DO 之间没法互相枚举，
-        // 只能在写入时同步一份出去）。写绝对值幂等，失败不影响实时体验
+        // 只能在写入时同步一份出去）。写绝对值幂等，失败不影响实时体验。
+        // 镜像这张照片的全部 emoji 而不只这次点的那一个——否则照片有历史遗留的
+        // 未镜像计数时（比如 ❤️×5 只在 DO 里），新点一个 👍 会让 D1 只有 👍:1，
+        // "全家最爱"里这张照片的总数从 6 变成 1
         try {
           await ensureAuxTables(this.env);
-          await this.env.DB.prepare(
-            "INSERT INTO photo_reactions (key, emoji, count) VALUES (?, ?, ?) " +
-            "ON CONFLICT(key, emoji) DO UPDATE SET count = excluded.count"
-          ).bind(msg.key, emoji, counts[emoji]).run();
+          const stmts = Object.entries(counts).map(([em, c]) =>
+            this.env.DB.prepare(
+              "INSERT INTO photo_reactions (key, emoji, count) VALUES (?, ?, ?) " +
+                "ON CONFLICT(key, emoji) DO UPDATE SET count = excluded.count"
+            ).bind(msg.key, em, c)
+          );
+          if (stmts.length) await this.env.DB.batch(stmts);
         } catch (_) {}
       }
     } catch (_) {}
