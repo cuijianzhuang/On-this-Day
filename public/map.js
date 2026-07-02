@@ -35,6 +35,7 @@
   const overlayEl  = document.getElementById('mapOverlay');
 
   let activeMarkerEl = null;
+  let _mapExifAbort = null;
 
   // ── 卡片照片缩放 + 平移 ──────────────────────────────────────────────────────
   let _cs = 1, _ctx = 0, _cty = 0;
@@ -175,6 +176,7 @@
     cardEl.classList.remove('open');
     overlayEl.classList.remove('visible');
     if (activeMarkerEl) { activeMarkerEl.classList.remove('active'); activeMarkerEl = null; }
+    if (_mapExifAbort) { _mapExifAbort.abort(); _mapExifAbort = null; }
     _cReset();
     cardMedia.innerHTML = '';
     cardInfo.innerHTML = '';
@@ -218,10 +220,14 @@
     overlayEl.classList.add('visible');
 
     // 异步加载 EXIF：设备型号 + 海拔
+    if (_mapExifAbort) { _mapExifAbort.abort(); _mapExifAbort = null; }
     if (/\.(jpe?g|heic)$/i.test(p.key)) {
-      fetch('/api/exif?key=' + encodeURIComponent(p.key))
+      const exifCtrl = new AbortController();
+      _mapExifAbort = exifCtrl;
+      fetch('/api/exif?key=' + encodeURIComponent(p.key), { signal: exifCtrl.signal })
         .then(r => r.ok ? r.json() : null)
         .then(exif => {
+          _mapExifAbort = null;
           if (!exif || !cardInfo.querySelector('.card-rows')) return;
           const rowsEl = cardInfo.querySelector('.card-rows');
           if (exif.make || exif.model) {
@@ -237,7 +243,7 @@
             rowsEl.appendChild(row);
           }
         })
-        .catch(() => {});
+        .catch(err => { if (err.name !== 'AbortError') console.error('EXIF fetch failed', err); });
     }
   }
 

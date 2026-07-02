@@ -248,11 +248,11 @@
   function _lpRow(label, value, cls) {
     const icon = _lpIcon(label);
     const valCls = cls ? ` ${cls}` : '';
-    return `<div class="lp-row"><span class="lp-label">${icon}${label}</span><span class="lp-value${valCls}">${escHtml(String(value))}</span></div>`;
+    return `<div class="lp-row"><span class="lp-label">${icon}${escHtml(label)}</span><span class="lp-value${valCls}">${escHtml(String(value))}</span></div>`;
   }
 
   function _lpSec(title, rows) {
-    return `<div class="lp-section-title">${title}</div><div class="lp-info-table">${rows.map(([l,v,cls]) => _lpRow(l,v,cls)).join('')}</div>`;
+    return `<div class="lp-section-title">${escHtml(title)}</div><div class="lp-info-table">${rows.map(([l,v,cls]) => _lpRow(l,v,cls)).join('')}</div>`;
   }
 
   // 缩略图第一次加载失败，先按 5s/15s/45s 退避重试原来的 /thumb/ 链接几次（破一下缓存强制重新请求）——
@@ -778,6 +778,8 @@
     _loadLightboxExif(p);
 
     if (_imgLoadAbort) { _imgLoadAbort.abort(); _imgLoadAbort = null; }
+    if (_currentBlobUrl) { URL.revokeObjectURL(_currentBlobUrl); _currentBlobUrl = null; }
+    _lbAnimating = false;
     const _progReset = document.getElementById('lbLoadProgress');
     if (_progReset) _progReset.classList.remove('visible');
 
@@ -835,6 +837,7 @@
         () => {
           showWhenReady(img);
           setTimeout(() => {
+            if (!document.body.contains(wrap)) return;
             video.loop = false;
             video.currentTime = 0;
             video.play().catch(() => {});
@@ -853,7 +856,7 @@
       wrap.addEventListener('mouseleave', () => { if (!stickyPlay) stopLive(); });
       // 点击切换粘性循环播放
       wrap.addEventListener('click', () => {
-        if (_lbSlideDragging) return;
+        if (Date.now() - _lbDragEndTime < 300) return;
         stickyPlay = !stickyPlay;
         if (stickyPlay) playLive(); else stopLive();
       });
@@ -918,6 +921,8 @@
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     if (_exifAbort) { _exifAbort.abort(); _exifAbort = null; }
     if (_imgLoadAbort) { _imgLoadAbort.abort(); _imgLoadAbort = null; }
+    if (_currentBlobUrl) { URL.revokeObjectURL(_currentBlobUrl); _currentBlobUrl = null; }
+    _lbAnimating = false;
     const _prog = document.getElementById('lbLoadProgress');
     if (_prog) _prog.classList.remove('visible');
     const strip = document.getElementById('lightboxFilmstrip');
@@ -963,6 +968,9 @@
   let _lbSlideDragX = 0, _lbSlideDragY = 0, _lbSlideDragging = false, _lbSlideActive = false;
   let _lbZoomHideTimer = null;
   let _imgLoadAbort = null;
+  let _lbDragEndTime = 0;
+  let _lbAnimating = false;
+  let _currentBlobUrl = null;
 
   function _loadImgWithProgress(url, img, onReady, onError) {
     const progEl = document.getElementById('lbLoadProgress');
@@ -983,10 +991,12 @@
           return reader.read().then(({ done, value }) => {
             if (ctrl.signal.aborted) return;
             if (done) {
+              if (_currentBlobUrl) { URL.revokeObjectURL(_currentBlobUrl); _currentBlobUrl = null; }
               const blob = new Blob(chunks);
               const objUrl = URL.createObjectURL(blob);
-              img.onload = () => { hide(); _imgLoadAbort = null; URL.revokeObjectURL(objUrl); onReady(); };
-              img.onerror = () => { hide(); _imgLoadAbort = null; URL.revokeObjectURL(objUrl); if (onError) onError(); };
+              _currentBlobUrl = objUrl;
+              img.onload = () => { _currentBlobUrl = null; hide(); if (_imgLoadAbort === ctrl) _imgLoadAbort = null; URL.revokeObjectURL(objUrl); onReady(); };
+              img.onerror = () => { _currentBlobUrl = null; hide(); if (_imgLoadAbort === ctrl) _imgLoadAbort = null; URL.revokeObjectURL(objUrl); if (onError) onError(); };
               img.src = objUrl;
               return;
             }
@@ -1006,9 +1016,9 @@
       })
       .catch(err => {
         if (ctrl.signal.aborted) return;
-        hide(); _imgLoadAbort = null;
-        img.onload = onReady;
-        img.onerror = onError || null;
+        hide();
+        img.onload = () => { if (_imgLoadAbort === ctrl) _imgLoadAbort = null; onReady(); };
+        img.onerror = () => { if (_imgLoadAbort === ctrl) _imgLoadAbort = null; if (onError) onError(); };
         img.src = url;
       });
   }
@@ -1135,13 +1145,16 @@
       _lbSlideActive = false;
       if (_lbSlideDragging) {
         _lbSlideDragging = false;
+        _lbDragEndTime = Date.now();
         const dx = e.clientX - _lbSlideDragX;
-        if (Math.abs(dx) > 80) {
+        if (Math.abs(dx) > 80 && !_lbAnimating) {
           autoPlaying = false;
+          _lbAnimating = true;
           const dir = dx < 0 ? -1 : 1;
           lightboxBody.style.transition = 'transform 0.28s cubic-bezier(0.4,0,0.2,1)';
           lightboxBody.style.transform = `translateX(${dir * window.innerWidth}px)`;
           setTimeout(() => {
+            _lbAnimating = false;
             lightboxBody.style.transition = 'none';
             lightboxBody.style.transform = '';
             if (dx < 0) nextSlide(); else prevSlide();
@@ -1196,7 +1209,8 @@
     touchStartY = e.touches[0].clientY;
   }, { passive: true });
   lightbox.addEventListener('touchend', (e) => {
-    if (_lbScale > 1) return; // 放大时不触发切图
+    if (_lbScale > 1) return;
+    if (_lbSlideDragging || _lbSlideActive || _lbAnimating) return; // pointer events are handling this
     const dx = e.changedTouches[0].clientX - touchStartX;
     const dy = e.changedTouches[0].clientY - touchStartY;
     if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy)) return;

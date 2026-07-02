@@ -1952,7 +1952,7 @@ const MAP_HTML = (mapboxPublicToken) => `<!doctype html>
     <div class="card-info" id="cardInfo"></div>
   </div>
 
-<script>window.MAPBOX_TOKEN = ${JSON.stringify(mapboxPublicToken)};</script>
+<script>window.MAPBOX_TOKEN = ${JSON.stringify(mapboxPublicToken).replace(/<\//g, '<\\/')};</script>
 <script src="/map.js" defer></script>
 </body>
 </html>`;
