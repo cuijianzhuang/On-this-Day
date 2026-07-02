@@ -384,12 +384,17 @@
     lunarToggle.setAttribute('aria-pressed', showLunar ? 'true' : 'false');
     lunarToggle.title = showLunar ? '隐藏农历同日' : '显示农历同日';
   }
+  function removeLunarMemoriesFromDom() {
+    document.querySelectorAll('.lunar-divider, .year-block.lunar-year-block').forEach((el) => el.remove());
+  }
   syncLunarToggle();
   if (lunarToggle) {
     lunarToggle.onclick = () => {
       showLunar = !showLunar;
       localStorage.setItem('showLunarMemories', showLunar ? '1' : '0');
       syncLunarToggle();
+      // 关闭时先把已经渲染出来的农历段落立即移除，避免等待接口期间看起来像开关没生效。
+      if (!showLunar) removeLunarMemoriesFromDom();
       loadMemories(month, day);
     };
   }
@@ -1616,7 +1621,8 @@
       });
     }
 
-    const fetchPromise = fetch('/api/memories?month=' + month + '&day=' + day + (showLunar ? '&lunar=1' : '')).then(r => {
+    const includeLunarForRequest = showLunar;
+    const fetchPromise = fetch('/api/memories?month=' + month + '&day=' + day + (includeLunarForRequest ? '&lunar=1' : '&lunar=0')).then(r => {
       if (!r.ok) throw new Error('memories fetch failed: ' + r.status);
       return r.json();
     });
@@ -1631,7 +1637,7 @@
         _joinRoom(data.month + '-' + data.day);
 
         // 农历同日段落（后端算好：同一农历日在往年对应的公历日期的照片，公历同日重复的已排除）
-        const lunarYears = showLunar && data.lunar ? (data.lunar.years || []) : [];
+        const lunarYears = includeLunarForRequest && showLunar && data.lunar ? (data.lunar.years || []) : [];
 
         if (!data.years.length && !lunarYears.length) {
           subtitle.textContent = '这一天，还没有故事';
@@ -1756,7 +1762,7 @@
             ? `<button class="show-more-btn" data-total="${y.photos.length}" onclick="toggleShowMore(this)">展开查看全部 ${y.photos.length} 张 ›</button>`
             : '';
           return `
-      <div class="year-block" id="${idPrefix}${y.year}">
+      <div class="year-block${idPrefix === 'lunar-year-' ? ' lunar-year-block' : ''}" id="${idPrefix}${y.year}">
         <div class="year-title">${y.year} 年 <span class="count">（${y.photos.length} 份）</span></div>
         <div class="grid">${cells}</div>
         ${showMoreBtn}
