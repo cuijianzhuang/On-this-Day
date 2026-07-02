@@ -190,15 +190,26 @@
     if (e.touches.length > 1 && !isInLightbox(e.target)) e.preventDefault();
   }, { passive: false });
 
+  // 横向偏移归零：body{overflow-x:hidden} 只挡 body 层，html 层仍可横向偏移；
+  // 任何时候 scrollX != 0 立即归零，防止 zoom/pan 后页面"不居中"且无法自动恢复
+  function _resetScrollX() {
+    if (window.scrollX !== 0) window.scrollTo({ left: 0, top: window.scrollY, behavior: 'instant' });
+  }
+  window.addEventListener('scroll', _resetScrollX, { passive: true });
+
   // 层 4：visualViewport 自动恢复——万一以上三层都被绕过，检测到 scale>1 立即强制归零
   // minimum-scale=1 + maximum-scale=1 会让 iOS Safari 立刻 snap 回 scale 1
   if (window.visualViewport) {
-    window.visualViewport.addEventListener('resize', () => {
-      if (window.visualViewport.scale > 1.05) {
+    const _vpRecover = () => {
+      const vp = window.visualViewport;
+      if (vp.scale > 1.05 || vp.offsetLeft !== 0) {
         const m = document.querySelector('meta[name="viewport"]');
         if (m) m.content = 'width=device-width,initial-scale=1,minimum-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover';
+        _resetScrollX();
       }
-    });
+    };
+    window.visualViewport.addEventListener('resize', _vpRecover);
+    window.visualViewport.addEventListener('scroll', _vpRecover);
   }
   // ─────────────────────────────────────────────────────────────────────────────
 
