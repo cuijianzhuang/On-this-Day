@@ -101,6 +101,10 @@ export default {
       return handleStaticMap(request, env, url);
     }
 
+    if (url.pathname === "/og-image") {
+      return handleOgImage(request, env, url);
+    }
+
     if (url.pathname === "/api/poem") {
       return handlePoem(request, env, url);
     }
@@ -124,7 +128,14 @@ export default {
       }
     }
 
-    // 其余请求（/、/favicon.svg、/app.css、/app.js 等）交给 Static Assets CDN
+    // 首页：静态 HTML 出来后动态注入 og meta——分享到微信/Telegram/Twitter 时
+    // 预览卡片能带上"当天最高分照片 + 日期标题"，链接不再是光秃秃一行字
+    if (url.pathname === "/") {
+      const assetResp = await env.ASSETS.fetch(request);
+      return injectOgTags(assetResp, url);
+    }
+
+    // 其余请求（/favicon.svg、/app.css、/app.js 等）交给 Static Assets CDN
     return env.ASSETS.fetch(request);
   },
 
@@ -201,10 +212,7 @@ async function sendDailyMemories(env) {
   }
 
   // 北京时间当前日期（UTC+8）
-  const now = new Date();
-  const bjNow = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-  const month = String(bjNow.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(bjNow.getUTCDate()).padStart(2, "0");
+  const { month, day } = bjToday();
 
   // 查当天历史上评分最高的图片，最多取 5 张。
   // LEFT JOIN：还没打完分的新照片（比如当天刚上传、Workflow 还在排队）按上传时间兜底补位，
@@ -298,6 +306,93 @@ async function sendDailyMemories(env) {
   } else {
     console.log(`sendDailyMemories: sent ${photos.length} photos for ${month}-${day}`);
   }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+// 北京时间（UTC+8）的今天，返回 { month: "MM", day: "DD" }
+function bjToday() {
+  const bj = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  return {
+    month: String(bj.getUTCMonth() + 1).padStart(2, "0"),
+    day: String(bj.getUTCDate()).padStart(2, "0"),
+  };
+}
+
+// ── OG 分享卡片 ────────────────────────────────────────────────────────────────
+// /og-image?month=MM&day=DD：当天最高分照片裁成 1200×630 JPEG（OG 标准尺寸）。
+// 成品按张缓存在 PREVIEWS（og/ 前缀），响应本身走边缘缓存一天——分数更新后
+// 第二天换封面
+async function handleOgImage(request, env, url) {
+  const today = bjToday();
+  const month = /^\d{2}$/.test(url.searchParams.get("month") || "") ? url.searchParams.get("month") : today.month;
+  const day = /^\d{2}$/.test(url.searchParams.get("day") || "") ? url.searchParams.get("day") : today.day;
+
+  const cache = caches.default;
+  const cacheKey = new Request(`${SITE_ORIGIN}/og-image?month=${month}&day=${day}`);
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  const { results } = await env.DB.prepare(
+    `SELECT pi.key AS key FROM photos_index pi
+     LEFT JOIN photo_scores ps ON pi.key = ps.key
+     WHERE pi.month = ? AND pi.day = ? AND pi.type = 'image'
+     ORDER BY ps.score DESC, pi.uploaded DESC LIMIT 1`
+  ).bind(month, day).all();
+  if (!results.length) return new Response("Not Found", { status: 404 });
+  const key = results[0].key;
+
+  const ogKey = `og/${key.replace(/\.[^.]+$/, "")}.jpg`;
+  let buf;
+  const existing = await env.PREVIEWS.get(ogKey);
+  if (existing) {
+    buf = await existing.arrayBuffer();
+  } else {
+    const object = await env.PHOTOS.get(key);
+    if (!object) return new Response("Not Found", { status: 404 });
+    try {
+      const transformed = await env.IMAGES.input(object.body)
+        .transform({ width: 1200, height: 630, fit: "cover" })
+        .output({ format: "image/jpeg", quality: 82 });
+      buf = await transformed.response().arrayBuffer();
+    } catch {
+      return new Response("Unprocessable", { status: 422 });
+    }
+    await env.PREVIEWS.put(ogKey, buf, {
+      httpMetadata: { contentType: "image/jpeg", cacheControl: "public, max-age=31536000, immutable" },
+    });
+  }
+
+  const resp = new Response(buf, {
+    headers: { "content-type": "image/jpeg", "cache-control": "public, max-age=86400" },
+  });
+  await cache.put(cacheKey, resp.clone());
+  return resp;
+}
+
+// 首页 HTML 注入 og meta。month/day 都是校验过的两位数字，title 只含数字和汉字，
+// 不存在注入面
+function injectOgTags(assetResp, url) {
+  const today = bjToday();
+  const month = /^\d{2}$/.test(url.searchParams.get("month") || "") ? url.searchParams.get("month") : today.month;
+  const day = /^\d{2}$/.test(url.searchParams.get("day") || "") ? url.searchParams.get("day") : today.day;
+  const title = `${parseInt(month)}月${parseInt(day)}日，那些年的此刻`;
+  const tags =
+    `<meta property="og:type" content="website">` +
+    `<meta property="og:site_name" content="那年今日">` +
+    `<meta property="og:title" content="${title}">` +
+    `<meta property="og:description" content="横跨那些年头的家庭照片回忆">` +
+    `<meta property="og:url" content="${SITE_ORIGIN}/?month=${month}&day=${day}">` +
+    `<meta property="og:image" content="${SITE_ORIGIN}/og-image?month=${month}&day=${day}">` +
+    `<meta property="og:image:width" content="1200">` +
+    `<meta property="og:image:height" content="630">` +
+    `<meta name="twitter:card" content="summary_large_image">`;
+  return new HTMLRewriter()
+    .on("head", {
+      element(el) {
+        el.append(tags, { html: true });
+      },
+    })
+    .transform(assetResp);
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
