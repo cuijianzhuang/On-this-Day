@@ -77,7 +77,10 @@ export default {
     }
 
     if (url.pathname === "/admin/test-telegram") {
-      if (!checkAdminToken(request, env)) return new Response("Unauthorized", { status: 401 });
+      const token = url.searchParams.get("token");
+      if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
+        return new Response("Forbidden", { status: 403 });
+      }
       try {
         await sendDailyMemories(env);
         return new Response("OK", { status: 200 });
@@ -167,6 +170,30 @@ export default {
 };
 
 // ── 每日零点精选推送 Telegram ───────────────────────────────────────────────────
+
+// 给 Telegram 推送预生成 JPEG 缩略图，返回 PREVIEWS 桶的公开直链。
+// 不发 /thumb/ 的 302——Telegram 抓 URL 图片时对重定向和 WebP 的支持都不可靠，
+// JPEG 直链（无跳转、格式明确）是最稳的形态。已生成过的直接复用。
+async function tgPhotoUrl(env, key) {
+  const thumbKey = `tg/${key.replace(/\.[^.]+$/, "")}.jpg`;
+  if (!(await env.PREVIEWS.head(thumbKey))) {
+    const object = await env.PHOTOS.get(key);
+    if (!object) return null;
+    try {
+      const transformed = await env.IMAGES.input(object.body)
+        .transform({ width: 1280, fit: "scale-down" })
+        .output({ format: "image/jpeg", quality: 85 });
+      const buf = await transformed.response().arrayBuffer();
+      await env.PREVIEWS.put(thumbKey, buf, {
+        httpMetadata: { contentType: "image/jpeg", cacheControl: "public, max-age=31536000, immutable" },
+      });
+    } catch {
+      return null; // 解码失败（损坏文件等）就跳过这张，别让一张坏图拖垮整次推送
+    }
+  }
+  return `${env.PREVIEWS_PUBLIC_URL}/${thumbKey.split("/").map(encodeURIComponent).join("/")}`;
+}
+
 async function sendDailyMemories(env) {
   if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) {
     console.log("sendDailyMemories: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set, skipping");
@@ -179,15 +206,31 @@ async function sendDailyMemories(env) {
   const month = String(bjNow.getUTCMonth() + 1).padStart(2, "0");
   const day = String(bjNow.getUTCDate()).padStart(2, "0");
 
-  // 查当天历史上评分最高的图片，最多取 5 张
-  const { results: photos } = await env.DB.prepare(
-    `SELECT key, url, year, name, lat, lon FROM photos_index
-     WHERE month = ? AND day = ? AND type = 'image' AND score IS NOT NULL
-     ORDER BY score DESC LIMIT 5`
+  // 查当天历史上评分最高的图片，最多取 5 张。
+  // LEFT JOIN：还没打完分的新照片（比如当天刚上传、Workflow 还在排队）按上传时间兜底补位，
+  // 不然"今天刚拍的"反而永远缺席零点推送。SQLite 把 NULL 当最小值，DESC 排序自然垫底，
+  // 正好实现"有分的按分数优先，没分的按上传时间补位"
+  const { results: candidates } = await env.DB.prepare(
+    `SELECT pi.key AS key, pi.year AS year
+     FROM photos_index pi
+     LEFT JOIN photo_scores ps ON pi.key = ps.key
+     WHERE pi.month = ? AND pi.day = ? AND pi.type = 'image'
+     ORDER BY ps.score DESC, pi.uploaded DESC LIMIT 5`
   ).bind(month, day).all();
 
+  if (!candidates.length) {
+    console.log(`sendDailyMemories: no photos for ${month}-${day}`);
+    return;
+  }
+
+  // 逐张预生成 JPEG 直链，生成失败的跳过
+  const photos = [];
+  for (const p of candidates) {
+    const photoUrl = await tgPhotoUrl(env, p.key);
+    if (photoUrl) photos.push({ ...p, photoUrl });
+  }
   if (!photos.length) {
-    console.log(`sendDailyMemories: no scored photos for ${month}-${day}`);
+    console.log(`sendDailyMemories: all thumbnail generations failed for ${month}-${day}`);
     return;
   }
 
@@ -198,7 +241,7 @@ async function sendDailyMemories(env) {
   // 今日诗词（复用现有缓存逻辑）
   let poemLine = "";
   try {
-    const poem = await getDailyPoem();
+    const poem = await getDailyPoem(env);
     if (poem?.content) {
       poemLine = `「${poem.content}」`;
       if (poem.dynasty || poem.author) {
@@ -225,11 +268,6 @@ async function sendDailyMemories(env) {
 
   const tgBase = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`;
 
-  // 构建缩略图 URL（Worker 图片变换接口）
-  function thumbUrl(p) {
-    return p.url.replace("/img/", "/thumb/") + "?w=1200&h=900&q=85&fit=scale-down";
-  }
-
   let resp;
   if (photos.length === 1) {
     resp = await fetch(`${tgBase}/sendPhoto`, {
@@ -237,14 +275,14 @@ async function sendDailyMemories(env) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: env.TELEGRAM_CHAT_ID,
-        photo: thumbUrl(photos[0]),
+        photo: photos[0].photoUrl,
         caption,
       }),
     });
   } else {
     const media = photos.map((p, i) => ({
       type: "photo",
-      media: thumbUrl(p),
+      media: p.photoUrl,
       ...(i === 0 ? { caption } : {}),
     }));
     resp = await fetch(`${tgBase}/sendMediaGroup`, {
@@ -1314,13 +1352,25 @@ async function handleUploadHeicPreview(request, env, url) {
   }
 
   const buffer = new Uint8Array(await request.arrayBuffer());
-  // 简单校验一下确实是 JPEG（FF D8 开头），免得垫一些奇怪的内容进桶
+  // 快速预检：JPEG 魔数（FF D8 开头），不是的直接拒绝，省掉后面的解码开销
   if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) {
     return new Response("Bad Request: not a JPEG", { status: 400 });
   }
   // 限制一下大小，浏览器端解码出来的预览图正常不会很大，避免有人故意传超大文件占地方
   if (buffer.length > 10 * 1024 * 1024) {
     return new Response("Payload Too Large", { status: 413 });
+  }
+  // 真解码验证：魔数很容易伪造（前两个字节对了就行），用 IMAGES binding 实际解一遍，
+  // 确认整个文件是合法 JPEG 且尺寸在合理范围——站点是公开的，这个端点等于对外可写 R2，
+  // 校验必须做在服务端
+  try {
+    const info = await env.IMAGES.info(new Blob([buffer]).stream());
+    if (info.format !== "image/jpeg" || !info.width || !info.height ||
+        info.width > 12000 || info.height > 12000) {
+      return new Response("Bad Request: invalid image", { status: 400 });
+    }
+  } catch {
+    return new Response("Bad Request: undecodable image", { status: 400 });
   }
 
   // 已经有真预览版（不管是服务端转的还是别人先传过的）就不用再写一次；如果只是个失败占位图
@@ -1942,26 +1992,45 @@ async function getJinrishiciToken() {
   return token;
 }
 
-// 诗词本身按"今天的真实日期"缓存一份，一天之内重复访问不会重新调用第三方接口，
-// 也不会让每个访问者都各自换到不同的句子——同一天看到的应该是同一句
-async function getDailyPoem() {
+// 每日诗词：按"北京时间的今天"为 key，权威副本存 D1 meta 表——
+// Workers Cache 是按机房隔离的，只用 Cache 的话不同大区当天会各自抽到不同句子，
+// Telegram 推送里的句子也可能跟网页对不上。D1 全球一份，保证同一天全世界同一句；
+// Cache API 降级为 L1，挡住同机房的重复读，避免每次页面访问都打 D1
+async function getDailyPoem(env) {
+  const bjToday = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10); // 北京时间 YYYY-MM-DD
   const cache = caches.default;
-  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD（UTC），够用，不需要按时区精确到当地"今天"
-  const cacheKey = new Request("https://memories.internal/daily-poem/" + today);
+  const cacheKey = new Request("https://memories.internal/daily-poem/" + bjToday);
   const cached = await cache.match(cacheKey);
   if (cached) return await cached.json();
 
-  const token = await getJinrishiciToken();
-  const resp = await fetch("https://v2.jinrishici.com/sentence", {
-    headers: { "X-User-Token": token },
-  });
-  const data = await resp.json();
-  const poem = {
-    content: data.data.content,
-    title: data.data.origin.title,
-    author: data.data.origin.author,
-    dynasty: data.data.origin.dynasty,
-  };
+  const metaKey = `poem:${bjToday}`;
+  let poem;
+  const row = await env.DB.prepare("SELECT value FROM meta WHERE key = ?").bind(metaKey).first();
+  if (row?.value) {
+    poem = JSON.parse(row.value);
+  } else {
+    const token = await getJinrishiciToken();
+    const resp = await fetch("https://v2.jinrishici.com/sentence", {
+      headers: { "X-User-Token": token },
+    });
+    const data = await resp.json();
+    poem = {
+      content: data.data.content,
+      title: data.data.origin.title,
+      author: data.data.origin.author,
+      dynasty: data.data.origin.dynasty,
+    };
+    // 并发时第一个写进去的胜出（INSERT OR IGNORE），写完重读一次，
+    // 保证即使两个机房同时初始化，最终大家用的也是同一句
+    await env.DB.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)")
+      .bind(metaKey, JSON.stringify(poem)).run();
+    const winner = await env.DB.prepare("SELECT value FROM meta WHERE key = ?").bind(metaKey).first();
+    if (winner?.value) poem = JSON.parse(winner.value);
+    // 顺手清掉 7 天前的旧句子，meta 表不积灰（ISO 日期字典序可比）
+    const cutoff = new Date(Date.now() + 8 * 60 * 60 * 1000 - 7 * 86400 * 1000).toISOString().slice(0, 10);
+    await env.DB.prepare("DELETE FROM meta WHERE key LIKE 'poem:%' AND key < ?").bind(`poem:${cutoff}`).run();
+  }
+
   await cache.put(
     cacheKey,
     new Response(JSON.stringify(poem), {
@@ -1973,7 +2042,7 @@ async function getDailyPoem() {
 
 async function handlePoem(request, env, url) {
   try {
-    const poem = await getDailyPoem();
+    const poem = await getDailyPoem(env);
     return new Response(JSON.stringify(poem), {
       headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=3600" },
     });
@@ -2098,7 +2167,8 @@ export class MemoryRoom {
     // tag[0]=userId 用于去重；tag[1]=gravatarHash 发给客户端拼 Gravatar URL
     this.state.acceptWebSocket(server, [userId, gravatarHash]);
 
-    const reactions_v2 = (await this.state.storage.get("reactions_v2")) || {};
+    await this._migrateReactions();
+    const reactions_v2 = await this._allReactions();
     const my_reactions = (await this.state.storage.get(`mr:${userId}`)) || {};
     const { count, list } = this._usersInfo();
     server.send(JSON.stringify({ type: "init", count, reactions_v2, my_reactions, you: userId, list }));
@@ -2107,46 +2177,61 @@ export class MemoryRoom {
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  // 旧版把整个房间的表态挤在一个 "reactions_v2" key 里，DO 单 key 有 128KB 上限，
+  // 照片数 × emoji 种类长年累积会顶到头。现在按照片拆成 rx:<photoKey> 独立 key，
+  // 首次访问时把旧数据懒迁移过去。DO 的 input gate 保证 storage await 期间不插入
+  // 其他事件，整段迁移事实上是原子的
+  async _migrateReactions() {
+    const legacy = await this.state.storage.get("reactions_v2");
+    if (!legacy) return;
+    const entries = Object.entries(legacy);
+    // storage.put 批量写一次最多 128 个键值对，分批
+    for (let i = 0; i < entries.length; i += 128) {
+      const batch = {};
+      for (const [k, v] of entries.slice(i, i + 128)) batch[`rx:${k}`] = v;
+      await this.state.storage.put(batch);
+    }
+    await this.state.storage.delete("reactions_v2");
+  }
+
+  // 聚合所有 rx: key，拼回 {photoKey: {emoji: count}}——发给客户端的 init 消息
+  // 字段名保持 reactions_v2 不变，前端无需任何改动
+  async _allReactions() {
+    const map = await this.state.storage.list({ prefix: "rx:" });
+    const out = {};
+    for (const [k, v] of map) out[k.slice(3)] = v;
+    return out;
+  }
+
   async webSocketMessage(ws, raw) {
     try {
       const msg = JSON.parse(typeof raw === "string" ? raw : new TextDecoder().decode(raw));
-      if (msg.type === "react" && typeof msg.key === "string" && msg.key.length < 300) {
+      const isReact = msg.type === "react";
+      const isUnreact = msg.type === "unreact";
+      if ((isReact || isUnreact) && typeof msg.key === "string" && msg.key.length < 300) {
         const VALID_EMOJIS = new Set(['👍','❤️','😍','😂','😮','😢','🔥','✨']);
         const emoji = VALID_EMOJIS.has(msg.emoji) ? msg.emoji : '❤️';
         const [userId] = this.state.getTags(ws);
         const mrKey = `mr:${userId}`;
         const myR = (await this.state.storage.get(mrKey)) || {};
-        const alreadyDone = (myR[msg.key] || []).includes(emoji);
-        if (alreadyDone) return;
-        if (!myR[msg.key]) myR[msg.key] = [];
-        myR[msg.key].push(emoji);
-        const reactions_v2 = (await this.state.storage.get("reactions_v2")) || {};
-        if (!reactions_v2[msg.key]) reactions_v2[msg.key] = {};
-        reactions_v2[msg.key][emoji] = (reactions_v2[msg.key][emoji] || 0) + 1;
+        const mine = myR[msg.key] || [];
+        const has = mine.includes(emoji);
+        if (isReact ? has : !has) return; // 幂等：重复 react / 无中生有的 unreact 直接忽略
+        const rxKey = `rx:${msg.key}`;
+        const counts = (await this.state.storage.get(rxKey)) || {};
+        if (isReact) {
+          mine.push(emoji);
+          counts[emoji] = (counts[emoji] || 0) + 1;
+        } else {
+          mine.splice(mine.indexOf(emoji), 1);
+          counts[emoji] = Math.max(0, (counts[emoji] || 0) - 1);
+        }
+        myR[msg.key] = mine;
         await Promise.all([
           this.state.storage.put(mrKey, myR),
-          this.state.storage.put("reactions_v2", reactions_v2),
+          this.state.storage.put(rxKey, counts),
         ]);
-        const count = reactions_v2[msg.key][emoji];
-        this._broadcast({ type: "react", key: msg.key, emoji, count });
-      } else if (msg.type === "unreact" && typeof msg.key === "string" && msg.key.length < 300) {
-        const VALID_EMOJIS = new Set(['👍','❤️','😍','😂','😮','😢','🔥','✨']);
-        const emoji = VALID_EMOJIS.has(msg.emoji) ? msg.emoji : '❤️';
-        const [userId] = this.state.getTags(ws);
-        const mrKey = `mr:${userId}`;
-        const myR = (await this.state.storage.get(mrKey)) || {};
-        const idx = (myR[msg.key] || []).indexOf(emoji);
-        if (idx === -1) return;
-        myR[msg.key].splice(idx, 1);
-        const reactions_v2 = (await this.state.storage.get("reactions_v2")) || {};
-        if (!reactions_v2[msg.key]) reactions_v2[msg.key] = {};
-        reactions_v2[msg.key][emoji] = Math.max(0, (reactions_v2[msg.key][emoji] || 0) - 1);
-        await Promise.all([
-          this.state.storage.put(mrKey, myR),
-          this.state.storage.put("reactions_v2", reactions_v2),
-        ]);
-        const count = reactions_v2[msg.key][emoji];
-        this._broadcast({ type: "react", key: msg.key, emoji, count });
+        this._broadcast({ type: "react", key: msg.key, emoji, count: counts[emoji] });
       }
     } catch (_) {}
   }
