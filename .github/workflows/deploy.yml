@@ -47,7 +47,12 @@ jobs:
           wranglerVersion: "4.107.0"
           command: deploy
 
+      # Secret 是持久的：deploy 不会清掉已设置的 secret，这步只是把 GitHub Secrets 的最新值
+      # 同步过去，绝大多数时候是幂等空转。只要 Cloudflare Build 的 Git 连接还没断开，
+      # 它的"非生产分支构建"随时会传未部署版本触发 10215 拒绝——那不影响本次部署的正确性，
+      # 所以 continue-on-error：同步得上就同步，同步不上不拉红整个 workflow
       - name: Sync secrets
+        continue-on-error: true
         run: |
           jq -n '{ADMIN_TOKEN: env.ADMIN_TOKEN, TELEGRAM_BOT_TOKEN: env.TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID: env.TELEGRAM_CHAT_ID}' \
             | npx wrangler secret bulk
