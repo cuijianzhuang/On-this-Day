@@ -1640,8 +1640,9 @@
 
         // 农历同日段落（后端算好：同一农历日在往年对应的公历日期的照片，公历同日重复的已排除）
         const lunarYears = includeLunarForRequest && data.lunar ? (data.lunar.years || []) : [];
+        const visibleYears = includeLunarForRequest ? lunarYears : data.years;
 
-        if (!data.years.length && !lunarYears.length) {
+        if (!visibleYears.length) {
           subtitle.textContent = '这一天，还没有故事';
           content.innerHTML = '<div class="empty">去拍一张，留给未来的自己</div>';
           fadeIn();
