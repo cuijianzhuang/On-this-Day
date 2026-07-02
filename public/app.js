@@ -300,6 +300,25 @@
   // heic2any 偶尔会因为浏览器一时半会的内存/资源紧张失败（不是文件真解不开），重试几次再放弃；
   // 重试间隔故意拉开（1.5s/4s），别让标签页在很短时间里反复占满内存做无意义的重试
   const HEIC_DECODE_RETRY_DELAYS = [1500, 4000];
+
+  // heic2any 有 1.3MB，而且只在"服务端转码没跑到、缩略图加载失败"这条兜底路径上才用得到——
+  // 绝大多数访问根本走不到这里。所以不在页面加载时引入，第一次真的需要时才动态注入 script，
+  // 并且所有并发调用共享同一个加载 Promise；加载失败（弱网）时清掉缓存的 Promise，下次调用重新试
+  let _heicLibPromise = null;
+  function loadHeicLib() {
+    if (window.heic2any) return Promise.resolve();
+    if (!_heicLibPromise) {
+      _heicLibPromise = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = '/vendor/heic2any.min.js';
+        s.onload = resolve;
+        s.onerror = () => { _heicLibPromise = null; s.remove(); reject(new Error('heic2any load failed')); };
+        document.head.appendChild(s);
+      });
+    }
+    return _heicLibPromise;
+  }
+
   window.heicFallback = async function (imgEl, originalUrl, attempt) {
     attempt = attempt || 0;
     if (!/\.heic$/i.test(originalUrl)) {
@@ -308,7 +327,7 @@
       return;
     }
     try {
-      const resp = await fetch(originalUrl);
+      const [, resp] = await Promise.all([loadHeicLib(), fetch(originalUrl)]);
       const blob = await resp.blob();
       const converted = await heic2any({ blob, toType: 'image/jpeg', quality: 0.85 });
       const previewBlob = Array.isArray(converted) ? converted[0] : converted;
