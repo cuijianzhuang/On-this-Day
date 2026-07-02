@@ -1631,7 +1631,7 @@
         _joinRoom(data.month + '-' + data.day);
 
         // 农历同日段落（后端算好：同一农历日在往年对应的公历日期的照片，公历同日重复的已排除）
-        const lunarYears = (data.lunar && data.lunar.years) || [];
+        const lunarYears = showLunar && data.lunar ? (data.lunar.years || []) : [];
 
         if (!data.years.length && !lunarYears.length) {
           subtitle.textContent = '这一天，还没有故事';
