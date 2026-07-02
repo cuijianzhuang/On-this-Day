@@ -485,9 +485,7 @@
 
   /* 小地图 */
   .lp-mini-map {
-    width: 100%; aspect-ratio: 2/1; overflow: hidden;
-    border-top: 1px solid rgba(255,255,255,0.07);
-    border-bottom: 1px solid rgba(255,255,255,0.07);
+    width: 100%; aspect-ratio: 16/9; overflow: hidden;
   }
   .lp-mini-map img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
@@ -536,20 +534,7 @@
     background: rgba(0,0,0,0.45);
   }
 
-  /* 日照模式覆盖 */
-  body.sun-on .lightbox-panel { background: rgba(230,232,237,0.92); border-left-color: rgba(0,0,0,0.07); }
-  body.sun-on .lp-photo-title { color: #1c1c1e; }
-  body.sun-on .lp-photo-caption { color: #6e6e73; }
-  body.sun-on .lp-reactions { border-color: rgba(0,0,0,0.07); }
-  body.sun-on .lp-emoji-btn { background: rgba(0,0,0,0.05); border-color: rgba(0,0,0,0.08); color: #3a3a3c; }
-  body.sun-on .lp-emoji-btn:hover { background: rgba(0,0,0,0.1); }
-  body.sun-on .lp-emoji-cnt { color: #6e6e73; }
-  body.sun-on .lp-section-title { color: #8a8a90; border-color: rgba(0,0,0,0.07); }
-  body.sun-on .lp-row { border-color: rgba(0,0,0,0.05); }
-  body.sun-on .lp-label { color: #8a8a90; }
-  body.sun-on .lp-value { color: #3a3a3c; }
-  body.sun-on .lp-mini-map { border-color: rgba(0,0,0,0.07); }
-  body.sun-on .lp-histogram-wrap { background: rgba(0,0,0,0.08); }
+  /* 灯箱面板始终保持深色主题，photo viewer 不跟随日照模式反色 */
 
   /* 缩放状态游标 */
   #lightboxBody { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
@@ -600,16 +585,6 @@
   }
   .lb-emoji-popup.open { opacity: 1; transform: none; pointer-events: auto; }
   .lb-emoji-popup .lp-emoji-grid { grid-template-columns: repeat(4, 1fr); gap: 0.4rem; }
-  body.sun-on .lb-react-btn {
-    background: rgba(255,255,255,0.72); border-color: rgba(0,0,0,0.12); color: #1c1c1e;
-    box-shadow: 0 4px 22px rgba(0,0,0,0.12);
-  }
-  body.sun-on .lb-react-btn:hover { background: rgba(255,255,255,0.9); }
-  body.sun-on .lb-react-count { color: rgba(0,0,0,0.45); }
-  body.sun-on .lb-emoji-popup {
-    background: rgba(248,248,252,0.94); border-color: rgba(0,0,0,0.10);
-    box-shadow: 0 10px 40px rgba(0,0,0,0.15);
-  }
 
   /* 胶片条 */
   .lightbox-filmstrip {
@@ -695,6 +670,27 @@
     opacity: 0; transition: opacity 0.25s ease;
   }
   .lb-scale-badge.visible { opacity: 1; }
+
+  /* 图片加载进度覆层 */
+  .lb-load-progress {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    display: none; align-items: center; gap: 0.55rem;
+    background: rgba(0,0,0,0.58); backdrop-filter: blur(16px);
+    border: 1px solid rgba(255,255,255,0.13); border-radius: 10px;
+    padding: 0.58rem 1rem; z-index: 10;
+    font-size: 0.72rem; color: rgba(255,255,255,0.75);
+    font-family: 'Space Grotesk', sans-serif;
+    white-space: nowrap; pointer-events: none;
+  }
+  .lb-load-progress.visible { display: flex; }
+  .lightbox-stage:has(#lbLoadProgress.visible)::after { opacity: 0; }
+  @keyframes lbProgSpin { to { transform: rotate(360deg); } }
+  .lb-prog-spin {
+    width: 14px; height: 14px; flex-shrink: 0;
+    border: 2px solid rgba(255,255,255,0.2); border-top-color: rgba(255,255,255,0.8);
+    border-radius: 50%; animation: lbProgSpin 0.7s linear infinite;
+  }
+
   .lightbox-btn {
     width: 38px; height: 38px; border-radius: 50%; display: flex;
     align-items: center; justify-content: center; cursor: pointer;
