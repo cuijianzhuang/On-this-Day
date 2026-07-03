@@ -135,6 +135,10 @@ export default {
       return handlePoem(request, env, url);
     }
 
+    if (url.pathname === "/api/onthisday") {
+      return handleOnThisDay(request, env, url);
+    }
+
     if (url.pathname === "/api/upload-heic-preview" && request.method === "POST") {
       return handleUploadHeicPreview(request, env, url);
     }
@@ -3014,6 +3018,57 @@ async function handlePoem(request, env, url) {
     });
   } catch {
     // 第三方接口挂了也别影响主页面，前端拿到 204 就什么都不显示
+    return new Response(null, { status: 204 });
+  }
+}
+
+// ---------- 历史上的今天：Wikimedia Feed API，给"那年今日"再配一层世界史坐标 ----------
+// https://api.wikimedia.org/feed/v1/wikipedia/{lang}/onthisday/selected/{MM}/{DD}
+// 中文维基优先（selected 是人工精选的大事记），条目太少或不可用时回退英文维基。
+// 历史事件内容基本不变，边缘缓存 7 天；上游挂了返回 204，前端整块隐藏不影响主功能
+async function handleOnThisDay(request, env, url) {
+  const month = url.searchParams.get("month");
+  const day = url.searchParams.get("day");
+  if (!/^\d{2}$/.test(month || "") || !/^\d{2}$/.test(day || "")) {
+    return new Response(JSON.stringify({ error: "month/day required, format MM/DD" }), {
+      status: 400,
+      headers: { "content-type": "application/json; charset=utf-8" },
+    });
+  }
+
+  const cache = caches.default;
+  const cacheKey = new Request(`${SITE_ORIGIN}/api/onthisday?month=${month}&day=${day}`);
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  const fetchLang = async (lang) => {
+    const resp = await fetch(`https://api.wikimedia.org/feed/v1/wikipedia/${lang}/onthisday/selected/${month}/${day}`, {
+      // Wikimedia 要求带能标识来源的 UA，匿名调用有限速但配合 7 天缓存完全够用
+      headers: { "user-agent": "memories-today/1.0 (https://memories.cuijianzhuang.com)", accept: "application/json" },
+    });
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    return (data.selected || [])
+      .filter((e) => e && typeof e.year === "number" && e.text)
+      .map((e) => ({ year: e.year, text: e.text }));
+  };
+
+  try {
+    let events = await fetchLang("zh");
+    if (events.length < 3) {
+      const en = await fetchLang("en");
+      if (en.length > events.length) events = en;
+    }
+    if (events.length === 0) throw new Error("empty");
+    events.sort((a, b) => b.year - a.year);
+    events = events.slice(0, 12);
+
+    const response = new Response(JSON.stringify({ month, day, events }), {
+      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=604800" },
+    });
+    await cache.put(cacheKey, response.clone());
+    return response;
+  } catch {
     return new Response(null, { status: 204 });
   }
 }

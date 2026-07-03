@@ -325,6 +325,34 @@
   .daily-poem .poem-source { color: #5a5a5e; font-style: normal; margin-left: 0.4rem; }
   /* text-shadow 会从 .daily-poem 继承下来，这里只用补一下浅色模式下的字色，对比度才够 */
   body.sun-on .daily-poem .poem-source { color: #44444a; }
+  /* 历史上的今天：Wikimedia 大事记，默认折叠成一颗小胶囊，点开是当天的编年列表 */
+  .otd { margin: 0.75rem auto 0; max-width: 620px; padding: 0 1.2rem; }
+  .otd-toggle {
+    border: none; background: rgba(255,255,255,0.07); color: #98989d;
+    font-family: inherit; font-size: 0.72rem; letter-spacing: 0.04em;
+    padding: 0.3rem 0.85rem; border-radius: 999px; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .otd-toggle:hover { background: rgba(255,255,255,0.13); color: #d8d8dc; }
+  .otd-arrow { display: inline-block; margin-left: 0.35rem; transition: transform 0.2s ease; }
+  .otd-toggle.open .otd-arrow { transform: rotate(180deg); }
+  .otd-list {
+    margin-top: 0.6rem; text-align: left;
+    display: flex; flex-direction: column; gap: 0.4rem;
+    padding: 0.7rem 0.9rem; border-radius: 12px;
+    background: rgba(255,255,255,0.04);
+  }
+  .otd-item { font-size: 0.76rem; color: #a8a8ad; line-height: 1.6; }
+  .otd-year {
+    color: #d8b96a; font-weight: 600; margin-right: 0.4em;
+    font-family: 'Space Grotesk', "SF Pro Display", sans-serif;
+  }
+  body.sun-on .otd-toggle { background: rgba(0,0,0,0.14); color: #3a3a3c; }
+  body.sun-on .otd-toggle:hover { background: rgba(0,0,0,0.22); }
+  body.sun-on .otd-list { background: rgba(255,255,255,0.45); }
+  body.sun-on .otd-item { color: #3a3a3c; }
+  body.sun-on .otd-year { color: #8a6a1f; }
   .year-block { max-width: 1100px; margin: 0 auto 3.4rem; padding: 0 1.6rem; }
   .year-title {
     font-size: 1.3rem; font-weight: 600; color: #f5f5f7; margin-bottom: 1.1rem;

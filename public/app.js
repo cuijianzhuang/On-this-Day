@@ -392,6 +392,41 @@
     el.classList.add('show');
   }).catch(() => {});
 
+  // 历史上的今天（Wikimedia）：跟着正在浏览的日期走，loadMemories 每次切日期都会重新拉。
+  // 接口 204/失败就整块隐藏；内容来自第三方，只用 textContent 渲染不当 HTML 插
+  let _otdSeq = 0;
+  function loadOnThisDay(m, d) {
+    const seq = ++_otdSeq;
+    const block = document.getElementById('otdBlock');
+    const list = document.getElementById('otdList');
+    if (!block || !list) return;
+    fetch('/api/onthisday?month=' + m + '&day=' + d)
+      .then(r => (r.ok && r.status !== 204) ? r.json() : null)
+      .then(data => {
+        if (seq !== _otdSeq) return; // 已切到别的日期，丢弃过期结果
+        if (!data || !Array.isArray(data.events) || !data.events.length) { block.hidden = true; return; }
+        list.textContent = '';
+        for (const ev of data.events) {
+          const row = document.createElement('div');
+          row.className = 'otd-item';
+          const y = document.createElement('span');
+          y.className = 'otd-year';
+          y.textContent = ev.year + '年';
+          row.appendChild(y);
+          row.appendChild(document.createTextNode(String(ev.text)));
+          list.appendChild(row);
+        }
+        block.hidden = false;
+      })
+      .catch(() => { if (seq === _otdSeq) block.hidden = true; });
+  }
+  document.getElementById('otdToggle').addEventListener('click', () => {
+    const list = document.getElementById('otdList');
+    const open = list.hidden;
+    list.hidden = !open;
+    document.getElementById('otdToggle').classList.toggle('open', open);
+  });
+
   const params = new URLSearchParams(location.search);
   const now = new Date();
   // 改成 let——切日期不再整页刷新，这两个变量要跟着原地更新（地图链接、日历高亮都靠它们）
@@ -1591,6 +1626,9 @@
     const seq = ++_memSeq;
     const isFirst = _memFirstLoad;
     _memFirstLoad = false;
+
+    // 历史上的今天跟着这次要看的日期一起换，独立请求互不阻塞
+    loadOnThisDay(month, day);
 
     // 骨架屏的卡片直接复用真实照片用的 .cell/.frame-inner——尺寸/倾斜角/摇摆节奏的算法
     // 也跟下面渲染真实照片时的 pickSize/pickTilt 保持一致（seed 就用数组下标），

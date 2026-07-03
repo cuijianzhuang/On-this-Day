@@ -30,6 +30,7 @@
 - **OG 分享卡片**：链接分享到微信/Telegram/Twitter 时，预览卡片自动带上当天最高分照片和日期标题（HTMLRewriter 注入 + `/og-image` 动态生成）
 - **PWA 可安装**：manifest + 动态应用图标（`/app-icon` 用全库最高分照片裁方形生成），`<link rel="manifest">` 带 `crossorigin="use-credentials"` 以兼容 Cloudflare Access
 - **Telegram 推送**：北京时间每天零点把当天历史照片按 AI 评分挑最高的几张推送到 Telegram 群（配文案 + 跳转链接）；新照片上传即时推送（10 分钟聚合窗口防刷屏）
+- **历史上的今天**：Wikimedia Feed API 的当日大事记（中文维基精选优先、英文兜底），折叠在诗词下方，跟着正在浏览的日期切换；边缘缓存 7 天，接口挂了整块隐藏不影响主页面
 
 ### 数据索引（photos_index）
 - R2 里的照片/视频不再靠每次访问现场 `list()` 扫描——D1 索引表 `photos_index`（key, type, year, month, day, size, uploaded），按 month/day 建了索引
@@ -213,6 +214,7 @@ push 到 `master` 即触发 GitHub Actions（`.github/workflows/deploy.yml`）�
 | `GET /api/top-loved` | 表态聚合排行（5 分钟边缘缓存） |
 | `GET /api/recap?year=YYYY` | 某年评分最高的 40 张（放映数据源） |
 | `GET /api/poem` | 今日诗词（jinrishici.com，D1 按北京日期缓存，挂了返回 204） |
+| `GET /api/onthisday?month=MM&day=DD` | 历史上的今天（Wikimedia，中文优先英文兜底，边缘缓存 7 天，挂了返回 204） |
 | `GET /api/static-map?lat=&lng=` | 拍摄地点迷你地图（Mapbox Static） |
 | `WS /api/room/{MM-DD}` | 实时房间 WebSocket（在线人数 + 表态） |
 | `GET /img/{key}?dl=1` | 图片/视频代理；`dl=1` 触发下载 |
