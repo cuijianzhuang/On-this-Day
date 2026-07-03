@@ -1027,9 +1027,10 @@
       max-height: calc(100dvh - 50px - 58px - 64px);
       border-radius: 0;
     }
-    /* 实况照片包裹层也全宽 */
-    #lightboxBody .live-photo-wrap { width: 100%; }
-    #lightboxBody .live-photo-wrap img { max-width: 100vw; width: 100%; max-height: calc(100dvh - 50px - 58px - 64px); }
+    /* 实况照片包裹层：让 flex 居中，不强制撑满——iOS Safari 的 object-fit:contain
+       在 width:100% 无明确 height 时对齐退化为左对齐，改用 auto+max 让浏览器按比例缩放 */
+    #lightboxBody .live-photo-wrap { max-width: 100%; }
+    #lightboxBody .live-photo-wrap img { width: auto; height: auto; max-width: 100%; max-height: calc(100dvh - 50px - 58px - 64px); }
     /* 实况徽标藏在图片内——由顶部导航条代替 */
     #lightboxBody .live-photo-badge { display: none; }
 
