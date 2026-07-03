@@ -507,7 +507,7 @@ const RECAP_HTML = `<!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>年度回忆 · 那年今日</title>
-<link rel="icon" type="image/jpeg" href="/app-icon?size=64" />
+<link rel="icon" type="image/x-icon" href="/favicon.ico" />
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
@@ -746,7 +746,7 @@ const LOVED_HTML = `<!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>全家最爱 · 那年今日</title>
-<link rel="icon" type="image/jpeg" href="/app-icon?size=64" />
+<link rel="icon" type="image/x-icon" href="/favicon.ico" />
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -3114,7 +3114,7 @@ const MAP_HTML = (mapboxPublicToken) => `<!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>足迹 · 那年今日</title>
-<link rel="icon" type="image/jpeg" href="/app-icon?size=64" />
+<link rel="icon" type="image/x-icon" href="/favicon.ico" />
 <link href="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.css" rel="stylesheet" />
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.js"></script>
 <link rel="stylesheet" href="/map.css" />
