@@ -507,7 +507,7 @@ const RECAP_HTML = `<!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>年度回忆 · 那年今日</title>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="icon" type="image/jpeg" href="/app-icon?size=64" />
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
@@ -746,7 +746,7 @@ const LOVED_HTML = `<!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>全家最爱 · 那年今日</title>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="icon" type="image/jpeg" href="/app-icon?size=64" />
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -809,7 +809,8 @@ const LOVED_HTML = `<!doctype html>
 // 用全库 AI 评分最高的照片裁成方形做安装图标（PWA manifest + apple-touch-icon），
 // 每个尺寸的成品缓存在 PREVIEWS，边缘缓存一天
 async function handleAppIcon(request, env, url) {
-  const allowed = [180, 192, 512];
+  // 64 给浏览器标签页 favicon，180 给 apple-touch-icon，192/512 给 PWA manifest
+  const allowed = [64, 180, 192, 512];
   const size = allowed.includes(Number(url.searchParams.get("size"))) ? Number(url.searchParams.get("size")) : 512;
 
   const cache = caches.default;
@@ -3113,7 +3114,7 @@ const MAP_HTML = (mapboxPublicToken) => `<!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>足迹 · 那年今日</title>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="icon" type="image/jpeg" href="/app-icon?size=64" />
 <link href="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.css" rel="stylesheet" />
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.js"></script>
 <link rel="stylesheet" href="/map.css" />
