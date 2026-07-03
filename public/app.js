@@ -352,6 +352,12 @@
     }
   };
 
+  // 长按实况照片要触发播放而不是系统菜单：iOS 的"保存/复制"菜单由
+  // -webkit-touch-callout:none 拦（见 CSS），Android Chrome 的 contextmenu 在这里拦
+  document.addEventListener('contextmenu', (e) => {
+    if (e.target.closest && e.target.closest('.live-photo-cell, .live-photo-wrap')) e.preventDefault();
+  });
+
   window.livePhotoTouchStart = function(el, e) {
     if (e.touches.length > 1) return; // ignore pinch
     el._lpTimer = setTimeout(() => {
