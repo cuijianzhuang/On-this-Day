@@ -7,12 +7,14 @@
 ### 核心逻辑
 - 自动按"今天的月/日"匹配历年照片，跨年份展示
 - **农历"那年今日"**：顶栏"公/农"滑块切换历法——农历模式下按同一农历日反推历年对应的公历日期来匹配照片（内置 1900–2049 农历压缩表，支持闰月），公历同日已出现过的照片自动去重
-- 支持文件名带日期（`IMG_20260627_141422.PNG`）和纯序号命名（`IMG_1017.JPG`）两种素材：
-  - 带日期的直接按文件名匹配
-  - 不带日期的，JPEG/HEIC 读 EXIF `DateTimeOriginal`，其他格式回退用 R2 上传时间近似
+- 支持文件名带日期（`IMG_20260627_141422.PNG`）和纯序号命名（`IMG_1017.JPG`）两种素材，**年月日整体取自同一个拍摄日期源**：
+  - 带日期的直接按文件名解析年月日（带月/日合法性校验，防毫秒时间戳误判）
+  - 不带日期的，JPEG/HEIC 读 EXIF `DateTimeOriginal`（含年份），其他格式回退用 R2 上传时间近似
+  - **不信备份路径的年月**——iPhone 备份按"备份时间"落目录，6/14 拍的照片 7 月才备份会躺在 `07/` 目录里，早期"路径出月 + 文件名出日"的拼法会索引出 7月14日 这种不存在的拍摄日
 - 同一年的照片按文件名排序，不再是 R2 返回的随机顺序
 - 图片/视频代理接口隐藏真实 R2 链接，支持 inline 预览和 `?dl=1` 下载两种模式
-- **Live Photo 配对**：同目录下文件名（去掉扩展名）完全相同的一张 HEIC/JPEG + 一段 MOV，自动识别成一条 `type: 'live'` 记录；网格缩略图悬浮（桌面）/长按（移动端）播放配对的短视频预览，灯箱大图同样悬浮播放
+- **Live Photo 配对**：同目录下文件名（去掉扩展名）完全相同的一张 HEIC/JPEG + 一段 MOV，自动识别成一条 `type: 'live'` 记录
+- **实况照片播放（对齐苹果相册）**：灯箱里照片左上角叠"实况"角标（虚线外圈 + 实线内圈 + 中心点的苹果同款 SVG 图标），打开自动播一遍（静音）；移动端**长按带声循环播放、松手即停**，桌面悬浮静音预览、按住鼠标带声播放。两个 iOS Safari 的坑：长按会被系统"保存图片"菜单抢占，必须 `-webkit-touch-callout: none`（`preventDefault(touchstart)` 拦不住）；video 覆盖层用 CSS Grid `grid-area: 1/1` 叠层而不是 `position:absolute + height:100%`（父元素 `height:auto` 时百分比解析不稳定，画面会偏移）
 
 ### 实时共享（Durable Objects）
 - 每个日期（"MM-DD"）对应一个 DO 房间实例，家人同时打开同一天时顶部显示"👥 N 人在看"（按唯一用户去重；启用 Cloudflare Access 时用邮箱识别身份并显示 Gravatar 头像）
@@ -33,6 +35,7 @@
 - R2 里的照片/视频不再靠每次访问现场 `list()` 扫描——D1 索引表 `photos_index`（key, type, year, month, day, size, uploaded），按 month/day 建了索引
 - **R2 Event Notification → Queue → Workflow** 增量维护：新文件一上传，`queue()` consumer 只负责触发 `PhotoProcessingWorkflow`，索引、HEIC 转预览、AI 打分、查地点、清缓存分散到 Workflow 的独立步骤里（每步持久化、独立重试）；删除事件轻量内联处理，同步清掉索引/打分/地点/预览图/日期缓存
 - 首次部署或存量库很大时跑一次性回填：`GET /admin/backfill-photos-index?token=xxx&limit=200`；Cron 也会自动补，**全部补完后写 `backfill_done_at` 标记，降频为每天核对一次**，不再空转扫桶
+- **存量日期重算**：索引日期规则变更后（见"核心逻辑"），Cron 在回填的对侧分钟自动分批重算存量行（每趟 200 行，进度存 KV，扫完写 `reindex_dates_done_at` 后永久跳过），修正的行顺手清掉新旧两天的缓存；`/admin/reindex-photo-dates` 可手动加速
 
 ### 成本控制（边缘缓存）
 - `/api/memories`、`/api/map-photos` 结果用 Workers Cache API 缓存；新文件上传/删除时自动清对应日期的缓存
@@ -56,10 +59,10 @@
   - 原生 GeoJSON 聚合（cluster），聚合圈点击弹"附近有 N 张照片"缩略图九宫格，单点点击弹照片详情卡（图 + 地点·日期 + 设备/坐标/海拔），点图跳回那一天
 
 ### 后台任务（Cron）
-- `*/10 * * * *`：维护任务——新照片聚合推送、索引回填（完成后降频）、AI 打分、查地点、HEIC 转码
+- `*/10 * * * *`：维护任务——新照片聚合推送、索引回填（完成后降频）、存量日期重算（完成后跳过）、AI 打分、查地点、HEIC 转码
 - `0 16 * * *`：北京时间零点，当天精选推送 Telegram
 - 打分/查地点候选**在 SQL 侧用 LEFT JOIN 直接筛选**（`findUnscoredKeys` / `findUnlocatedKeys`），不再把整张表读进内存过滤；优先处理"服务器真实的今天" + "最近有人在看的那一天"
-- 索引回填跟 HEIC 转码按分钟单双错峰跑，保证两个吃内存大户永远不同时出现
+- 索引回填（`listAll` 大数组）跟日期重算/HEIC 转码按分钟单双错峰跑，保证吃内存大户永远不同时出现
 
 ### 前端体验
 - 宝丽来风格错落"回忆墙"：随机尺寸 + 轻微倾斜 + 挂绳图钉效果，悬停指尖联动倾斜（触屏设备自动禁用 3D 倾斜，避免 tap 合成事件导致比例错乱）
@@ -85,7 +88,7 @@ public/manifest.json    # PWA manifest
 public/vendor/          # 自托管第三方资源（Space Grotesk 字体、heic2any）
 public/favicon.svg      # 站点图标
 schema.sql              # D1 数据库表结构
-wrangler.toml           # Cloudflare 部署配置（Static Assets、R2、AI、Images、D1、Queue、Workflow、DO、Cron）
+wrangler.toml           # Cloudflare 部署配置（Static Assets、R2、AI、Images、D1、KV、Queue、Workflow、DO、Cron）
 .github/workflows/deploy.yml  # GitHub Actions 自动部署（push master 触发）
 node-shims.js           # 本地/打包环境需要时的 Node 兼容占位
 package.json            # 锁定 wrangler 版本（devDependencies）
@@ -108,13 +111,15 @@ Photos/MobileBackup/iPhone/{年}/{月}/{文件名}
 - `photo_places (key, lat, lon, name)` —— 反向地理编码结果
 - `photo_reactions (key, emoji, count)` —— 表态计数镜像（权威数据在 DO Storage，这张表供"全家最爱"跨日期聚合）
 - `photo_notes (key, note, updated_at)` —— 照片手记
-- `meta (key, value)` —— 杂项：`last_viewed_day`（最近浏览的日期）、`poem:*`（每日诗词）、`notify:*`（待聚合的新照片推送队列）、`backfill_done_at`（回填完成标记）
+- `meta (key, value)` —— 杂项：`poem:*`（每日诗词）、`notify:*`（待聚合的新照片推送队列）
+
+全局轻量状态存 **Workers KV**（比 D1 meta 表更轻，全球复制读取快）：`jinrishici-token`（今日诗词 API token）、`last_viewed_day`（最近浏览的日期）、`backfill_done_at`（回填完成标记）、`reindex_dates_offset` / `reindex_dates_done_at`（存量日期重算进度/完成标记）
 
 ## 部署
 
 ### 自动部署（推荐）
 
-push 到 `master` 即触发 GitHub Actions（`.github/workflows/deploy.yml`）：语法检查 → `wrangler deploy` → 同步 secrets。需要在仓库 Settings → Secrets 配置：
+push 到 `master` 即触发 GitHub Actions（`.github/workflows/deploy.yml`）：语法检查 → **打包体积门禁**（`wrangler deploy --dry-run` 先打包，gzip 超 1MB 预警线直接拦下——付费版硬限制 10MB，当前实际约 30KB，防的是误引入大依赖）→ `wrangler deploy` → 同步 secrets。需要在仓库 Settings → Secrets 配置：
 
 - `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`
 - `ADMIN_TOKEN` / `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`（部署后自动注入为 Worker Secret）
@@ -150,14 +155,21 @@ push 到 `master` 即触发 GitHub Actions（`.github/workflows/deploy.yml`）�
    npx wrangler r2 bucket notification create <你的照片桶名> --event-type object-delete --queue photo-index-queue --prefix "Photos/MobileBackup/iPhone/"
    ```
 
-4. 编辑 `wrangler.toml`：
+4. 创建 KV namespace（存全局轻量状态）：
+
+   ```bash
+   npx wrangler kv namespace create MEMORIES_KV
+   # 把输出的 id 填进 wrangler.toml 的 [[kv_namespaces]]
+   ```
+
+5. 编辑 `wrangler.toml`：
    - `PHOTOS` 绑定的 `bucket_name` 改成你存原图的 R2 桶名；`PREVIEWS` 指向另一个单独的桶（存 HEIC 预览和 WebP 缩略图），建议配 7 天生命周期规则
    - `routes` 改成你的自定义域名；`PREVIEWS_PUBLIC_URL` 改成预览桶的公开访问域名
    - `[[d1_databases]]` 的 `database_id` 换成第 2 步创建出来的 ID
    - `MAPBOX_PUBLIC_TOKEN` 必须是 public token（`pk.` 开头）；反向地理编码用的 secret token 用 `npx wrangler secret put MAPBOX_TOKEN` 单独存，创建时勾上 **Geocoding** 权限
    - `ADMIN_TOKEN` 等敏感值一律 `npx wrangler secret put`，**不要写进 wrangler.toml**
 
-5. 部署并回填存量：
+6. 部署并回填存量：
 
    ```bash
    npx wrangler deploy
@@ -212,6 +224,7 @@ push 到 `master` 即触发 GitHub Actions（`.github/workflows/deploy.yml`）�
 | `GET /admin/locate-photos?limit=10` | 批量查拍摄地点 |
 | `GET /admin/convert-heic-photos?limit=3` | 批量 HEIC 转 JPEG 预览 |
 | `GET /admin/backfill-photos-index?limit=200` | 存量文件回填进 photos_index |
+| `GET /admin/reindex-photo-dates?limit=200&offset=0` | 按新规则重算存量索引行的年月日（Cron 会自动跑，此端点用于手动加速；按返回的 `nextOffset` 翻页，`null` 表示扫完） |
 | `GET /admin/backfill-workflows?limit=20` | 历史积压照片批量触发 Workflow（转码+打分一条龙） |
 | `GET /admin/purge-cache?month=MM&day=DD` | 手动清某天的边缘缓存 |
 | `GET /admin/test-telegram` | 手动触发一次 Telegram 每日推送 |
