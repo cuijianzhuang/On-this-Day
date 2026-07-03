@@ -86,7 +86,8 @@ public/map.css          # 足迹地图页样式
 public/map.js           # 足迹地图页交互（3D 地球、聚合、照片卡）
 public/manifest.json    # PWA manifest
 public/vendor/          # 自托管第三方资源（Space Grotesk 字体、heic2any）
-public/favicon.svg      # 站点图标
+public/favicon.ico      # 站点图标（标签页 favicon，多尺寸 ico）
+public/favicon.svg      # 矢量图标（manifest 兜底）
 schema.sql              # D1 数据库表结构
 wrangler.toml           # Cloudflare 部署配置（Static Assets、R2、AI、Images、D1、KV、Queue、Workflow、DO、Cron）
 .github/workflows/deploy.yml  # GitHub Actions 自动部署（push master 触发）
