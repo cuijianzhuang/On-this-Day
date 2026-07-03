@@ -893,7 +893,6 @@
   }
 
   let _exifAbort = null;
-  let _lbLiveMuted = true;
   function _loadLightboxExif(p) {
     const el = document.getElementById('lpExif');
     if (!el) return;
@@ -984,16 +983,16 @@
       const video = document.createElement('video');
       video.className = 'live-photo-video';
       video.src = p.videoUrl;
-      video.loop = true;
       video.preload = 'metadata';
-      // 实况照片默认静音，确保打开照片后的自动预览不会被浏览器的自动播放策略拦截。
-      video.muted = _lbLiveMuted;
+      // 静音是浏览器允许自动播放的前提，长按带声播放属于用户手势不受限
+      video.muted = true;
       video.playsInline = true;
 
+      // 苹果相册同款"实况"角标：虚线外圈 + 实线内圈 + 中心点，叠在照片左上角
       const badge = document.createElement('div');
       badge.className = 'live-photo-badge';
       badge.style.opacity = '0';
-      badge.innerHTML = '<span class="lp-live-icon"></span><span class="lp-live-text">实际状况</span>';
+      badge.innerHTML = '<svg class="lp-live-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor"><circle cx="10" cy="10" r="8.25" stroke-width="1.5" stroke-dasharray="1.55 2.75" stroke-linecap="round"/><circle cx="10" cy="10" r="4.9" stroke-width="1.5"/><circle cx="10" cy="10" r="1.9" fill="currentColor" stroke="none"/></svg><span class="lp-live-text">实况</span>';
 
       const wrap = document.createElement('div');
       wrap.className = 'live-photo-wrap';
@@ -1002,38 +1001,22 @@
       wrap.appendChild(badge);
       lightboxBody.appendChild(wrap);
 
-      let stickyPlay = false;
-
-      // 两个独立的扬声器 SVG，内联到 pill 里，颜色跟随 currentColor 自动适配静止/播放两种状态
-      const _MUTE_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`;
-      const _SOUND_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>`;
-
-      const syncLiveMuteButton = () => {
-        const icon = document.getElementById('lbLiveMute');
-        if (icon) icon.innerHTML = _lbLiveMuted ? _MUTE_SVG : _SOUND_SVG;
-      };
-      const playLive = ({ restart = true, muted = _lbLiveMuted } = {}) => {
+      // 苹果相册逻辑：长按/按住 → 从头带声循环播放，松手回到静态；没有声音开关和锁定循环
+      const playLive = ({ muted }) => {
         video.loop = true;
         video.muted = muted;
-        if (restart) video.currentTime = 0;
+        video.currentTime = 0;
         wrap.classList.add('playing');
-        if (_lbLiveBar) _lbLiveBar.classList.add('playing');
         video.play().catch(() => {
-          // 带声音播放被浏览器拦截时回退成静音预览
-          video.muted = true;
-          _lbLiveMuted = true;
-          syncLiveMuteButton();
-          video.play().catch(() => {});
+          if (!muted) { video.muted = true; video.play().catch(() => {}); }
         });
       };
-      const stopLive = ({ clearSticky = true } = {}) => {
-        if (clearSticky) stickyPlay = false;
+      const stopLive = () => {
         video.pause();
         wrap.classList.remove('playing');
-        if (_lbLiveBar) _lbLiveBar.classList.remove('playing');
       };
 
-      // 图片加载完成后自动播一次，让用户感知到这是实况照片
+      // 图片加载完成后自动播一次（静音），和苹果相册滑到实况照片时一样
       const liveSrc = p.url.replace('/img/', '/thumb/') + '?w=1600&q=85&fit=scale-down';
       _loadImgWithProgress(liveSrc, img,
         () => {
@@ -1045,65 +1028,48 @@
             video.muted = true;
             video.currentTime = 0;
             wrap.classList.add('playing');
-            if (_lbLiveBar) _lbLiveBar.classList.add('playing');
             video.play().catch(() => {});
-            video.onended = () => {
-              video.loop = true;
-              video.muted = _lbLiveMuted;
-              if (!stickyPlay) {
-                wrap.classList.remove('playing');
-                if (_lbLiveBar) _lbLiveBar.classList.remove('playing');
-              }
-            };
+            video.onended = () => { wrap.classList.remove('playing'); };
           }, 500);
         },
         () => { heicFallback(img, p.url); }
       );
 
-      // 桌面：悬浮静音预览，点击切换粘性循环播放
-      wrap.addEventListener('mouseenter', () => { if (!stickyPlay) playLive({ muted: true }); });
-      wrap.addEventListener('mouseleave', () => { if (!stickyPlay) stopLive({ clearSticky: false }); });
-      wrap.addEventListener('click', () => {
-        if (Date.now() - _lbDragEndTime < 300) return;
-        stickyPlay = !stickyPlay;
-        if (stickyPlay) playLive({ muted: _lbLiveMuted }); else stopLive();
+      // 桌面：悬浮静音预览；按住鼠标（≥250ms）带声播放，松开回到静音
+      let _hovering = false;
+      wrap.addEventListener('mouseenter', () => { _hovering = true; playLive({ muted: true }); });
+      wrap.addEventListener('mouseleave', () => { _hovering = false; stopLive(); });
+      let _pressTimer = null;
+      wrap.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        _pressTimer = setTimeout(() => { _pressTimer = null; playLive({ muted: false }); }, 250);
       });
-      // 移动端：长按（≥350ms）播放，松手停止——与 lens.bh8.ga 一致
+      wrap.addEventListener('mouseup', () => {
+        if (_pressTimer) { clearTimeout(_pressTimer); _pressTimer = null; return; }
+        if (_hovering) video.muted = true; else stopLive();
+      });
+      // 移动端：长按（≥350ms）带声播放，松手停止——与苹果相册一致
       let _lpTimer = null;
+      const cancelPress = () => { if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; } };
       wrap.addEventListener('touchstart', (e) => {
+        // 双指捏合 / 已放大平移时不触发长按播放
+        if (e.touches.length > 1 || _lbScale > 1) { cancelPress(); return; }
         e.preventDefault();
-        _lpTimer = setTimeout(() => { _lpTimer = null; playLive({ muted: _lbLiveMuted }); }, 350);
+        _lpTimer = setTimeout(() => { _lpTimer = null; playLive({ muted: false }); }, 350);
       }, { passive: false });
       wrap.addEventListener('touchend', () => {
-        if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; }
-        else if (!stickyPlay) stopLive({ clearSticky: false });
+        if (_lpTimer) cancelPress();
+        else stopLive();
       });
-      wrap.addEventListener('touchcancel', () => {
-        if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; }
-        if (!stickyPlay) stopLive({ clearSticky: false });
-      });
+      wrap.addEventListener('touchcancel', () => { cancelPress(); stopLive(); });
 
-      // 顶部实况 pill：图标 + "实际状况" + 声音开关三合一，点击切换静音
-      if (_lbLiveBar) {
-        const _LIVE_ICON_SVG = `<svg class="lp-live-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="9" cy="9" r="2.6" fill="currentColor" stroke="none"/><line x1="9" y1="0.8" x2="9" y2="3.2" stroke-width="1.6"/><line x1="9" y1="14.8" x2="9" y2="17.2" stroke-width="1.6"/><line x1="0.8" y1="9" x2="3.2" y2="9" stroke-width="1.6"/><line x1="14.8" y1="9" x2="17.2" y2="9" stroke-width="1.6"/><line x1="2.93" y1="2.93" x2="4.73" y2="4.73" stroke-width="1.6"/><line x1="13.27" y1="13.27" x2="15.07" y2="15.07" stroke-width="1.6"/><line x1="15.07" y1="2.93" x2="13.27" y2="4.73" stroke-width="1.6"/><line x1="4.73" y1="13.27" x2="2.93" y2="15.07" stroke-width="1.6"/></svg>`;
-        _lbLiveBar.innerHTML = `<button class="lb-live-pill" id="lbLivePill" type="button" title="点击切换声音">${_LIVE_ICON_SVG}<span class="lp-live-text">实际状况</span><span class="lp-mute-icon" id="lbLiveMute"></span></button>`;
-        syncLiveMuteButton();
-        document.getElementById('lbLivePill').onclick = (ev) => {
-          ev.preventDefault(); ev.stopPropagation();
-          _lbLiveMuted = !_lbLiveMuted;
-          video.muted = _lbLiveMuted;
-          syncLiveMuteButton();
-          if (!_lbLiveMuted) { stickyPlay = true; playLive({ restart: false, muted: false }); }
-        };
-      }
-
-      // 提示文字（移动端"长按"提示；桌面保留"悬浮预览"）
+      // 提示文字
       _lbIsLivePhoto = true;
       const _hint = document.getElementById('lbZoomHint');
       if (_hint) {
         clearTimeout(_lbZoomHideTimer);
         const isMobileTouch = window.matchMedia('(pointer: coarse)').matches;
-        _hint.textContent = isMobileTouch ? '长按播放实况照片 · 捏合缩放' : '悬浮预览 · 点击锁定播放';
+        _hint.textContent = isMobileTouch ? '长按播放实况 · 捏合缩放' : '悬浮预览 · 按住带声播放';
         _hint.style.opacity = '1';
         _lbZoomHideTimer = setTimeout(() => { if (_hint) _hint.style.opacity = '0'; }, 3000);
       }

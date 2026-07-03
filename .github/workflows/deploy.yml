@@ -31,6 +31,20 @@ jobs:
           node --check public/app.js
           node --check public/map.js
 
+      # Workers 付费版对打包后脚本的硬限制是 gzip 10MB，public/ 静态资源走
+      # Static Assets 不计入。这里卡 1MB 预警线（硬限制的 1/10，当前实际约 30KB）：
+      # 一旦 worker.js 或它 import 的 npm 依赖把打包体积推过线就拦下部署，
+      # 提前暴露体积异常增长，而不是等逼近 10MB 才发现
+      - name: Worker bundle size check (gzip ≤ 1MB)
+        run: |
+          npx wrangler deploy --dry-run --outdir /tmp/wrk-dist
+          SIZE=$(gzip -c /tmp/wrk-dist/worker.js | wc -c)
+          echo "bundled worker.js gzip size: ${SIZE} bytes ($((SIZE / 1024)) KiB)"
+          if [ "$SIZE" -gt 1048576 ]; then
+            echo "::error::Worker 打包后 gzip ${SIZE}B 超过 1MB 预警线"
+            exit 1
+          fi
+
       # command: deploy 强制用 wrangler deploy（非 versions upload），DO migrations 必须走这条路（error 10211）。
       # 必须锁 wrangler 4：action 自带的 3.90.0 不认识 [images] 配置段，只警告不报错，
       # 部署出来的 Worker 直接丢掉 IMAGES 绑定（env.IMAGES undefined，缩略图转 WebP 全挂）。
