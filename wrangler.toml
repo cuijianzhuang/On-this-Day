@@ -55,7 +55,7 @@ database_id = "dac6d064-83bc-4cb9-b742-0938e0f58101"
 # 拿到 id 后填入下面
 [[kv_namespaces]]
 binding = "KV"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "416a9183c40347288fbd9c05c7a4a295"
 
 # 新照片落地 R2 -> R2 Event Notification 推到这个队列 -> 下面的 queue() consumer 增量写进
 # photos_index 表（见 schema.sql），免得 matchPhotosForDay 每次都要 list() 扫一遍 R2。
