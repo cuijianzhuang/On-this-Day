@@ -711,31 +711,12 @@
     body.lb-open.custom-cursor-active #lightboxBody.zoomed.panning * { cursor: grabbing !important; }
   }
 
-  /* 顶部实况指示条：实况照片时在左上角显示，非实况为空时隐藏 */
+  /* 顶部实况指示条：已弃用（"实况"角标像苹果相册一样直接叠在照片上），空时隐藏 */
   .lb-live-bar:empty { display: none; }
   .lb-live-bar {
     position: fixed; top: 1rem; left: 1rem; z-index: 52;
     display: flex; align-items: center; gap: 0.45rem;
   }
-  .lb-live-pill {
-    display: inline-flex; align-items: center; gap: 0.32rem;
-    height: 28px; padding: 0 0.55rem; border-radius: 999px;
-    color: rgba(255,255,255,0.88); background: rgba(0,0,0,0.46);
-    border: 1px solid rgba(255,255,255,0.14); backdrop-filter: blur(12px) saturate(1.35);
-    font-size: 0.76rem; font-weight: 600; letter-spacing: 0.02em; cursor: pointer;
-    box-shadow: 0 4px 18px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.08);
-    -webkit-tap-highlight-color: transparent;
-    transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
-  }
-  .lb-live-bar.playing .lb-live-pill {
-    color: #1a1600; background: rgba(255,214,10,0.92);
-    border-color: rgba(255,214,10,0.4);
-  }
-  .lb-live-pill:hover { background: rgba(40,40,44,0.66); }
-  .lb-live-bar.playing .lb-live-pill:hover { background: rgba(255,224,40,0.96); }
-  .lp-live-text { font-size: 0.76rem; font-weight: 600; }
-  .lp-mute-icon { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; }
-  .lp-mute-icon svg { width: 14px; height: 14px; }
 
   /* 底部提示 + 表态栏包装（桌面：覆盖整个舞台；移动：fixed 底部条） */
   .lb-bottom-bar {
@@ -813,44 +794,20 @@
   }
   .live-photo-wrap.playing .live-photo-video { opacity: 1; }
   .live-photo-wrap.playing img { opacity: 0; }
-  /* 实况照片角标：始终可见（低不透明度），播放时高亮 + 图标脉冲 */
+  /* "实况"角标：苹果相册同款——灰色毛玻璃胶囊叠在照片左上角，播放时随其他 UI 一起淡出 */
   .live-photo-badge {
-    position: absolute; top: 0.7rem; left: 0.8rem;
-    display: flex; align-items: center; gap: 0.35rem;
-    padding: 0.22rem 0.55rem 0.22rem 0.42rem; border-radius: 999px;
-    background: rgba(0,0,0,0.46); backdrop-filter: blur(10px) saturate(1.35);
-    border: 1px solid rgba(255,230,0,0.22);
-    color: #ffe600; font-size: 0.72rem; font-weight: 700;
-    letter-spacing: 0.05em; font-family: 'Space Grotesk', sans-serif;
+    position: absolute; top: 0.7rem; left: 0.8rem; z-index: 2;
+    display: flex; align-items: center; gap: 0.3rem;
+    padding: 0.24rem 0.6rem 0.24rem 0.4rem; border-radius: 999px;
+    background: rgba(60,60,66,0.55); backdrop-filter: blur(14px) saturate(1.4);
+    color: #fff; font-size: 0.7rem; font-weight: 600;
+    letter-spacing: 0.04em;
     pointer-events: none; user-select: none;
-    opacity: 0.82; transition: opacity 0.3s ease;
+    transition: opacity 0.3s ease;
   }
-  .live-photo-wrap.playing .live-photo-badge { opacity: 1; }
-  /* Apple Live Photo 图标 */
-  .lp-live-icon {
-    width: 15px; height: 15px; flex-shrink: 0; position: relative; display: inline-block;
-  }
-  /* 角标里的 <span class="lp-live-icon"> 用伪元素绘制（SVG pill 里不生效，无副作用） */
-  .lp-live-icon::before {
-    content: ''; position: absolute; inset: 0; border-radius: 50%;
-    border: 1.5px solid currentColor;
-  }
-  .lp-live-icon::after {
-    content: ''; position: absolute; top: 50%; left: 50%;
-    width: 5px; height: 5px; border-radius: 50%;
-    background: currentColor; transform: translate(-50%, -50%);
-  }
-  .live-photo-wrap.playing .lp-live-icon::before {
-    animation: lpRingPulse 1.4s ease-in-out infinite;
-  }
-  /* pill 里的 <svg class="lp-live-icon"> 整体脉冲 */
-  .lb-live-bar.playing .lp-live-icon {
-    animation: lpRingPulse 1.4s ease-in-out infinite;
-  }
-  @keyframes lpRingPulse {
-    0%, 100% { transform: scale(1); opacity: 1; }
-    50% { transform: scale(1.4); opacity: 0.35; }
-  }
+  .live-photo-wrap.playing .live-photo-badge { opacity: 0; }
+  /* Apple Live Photo 图标：虚线外圈 + 实线内圈 + 中心点（SVG 绘制） */
+  .lp-live-icon { width: 15px; height: 15px; flex-shrink: 0; display: block; }
   .lightbox-actions {
     position: absolute; top: 1rem; right: 1rem; z-index: 52;
     display: flex; gap: 0.5rem; align-items: center;
@@ -1039,8 +996,7 @@
     /* video grid item：取消 .lightbox-stage video 通用 override 对 max-width/max-height 的干扰，
        让 grid stretch 自己决定尺寸 */
     #lightboxBody .live-photo-wrap .live-photo-video { max-width: none; max-height: none; width: 100%; height: 100%; }
-    /* 实况徽标藏在图片内——由顶部导航条代替 */
-    #lightboxBody .live-photo-badge { display: none; }
+    /* 实况角标像苹果相册一样叠在照片左上角（不再挪去顶部导航条） */
 
     /* 顶部操作栏：全宽，毛玻璃 */
     .lightbox-actions {
@@ -1052,12 +1008,8 @@
     }
     .lightbox-btn { width: 36px; height: 36px; }
 
-    /* 实况指示（顶栏左侧） */
-    .lb-live-bar {
-      position: static; display: flex; flex: 1; align-items: center; gap: 0.45rem;
-      font-size: 0.73rem; color: rgba(255,255,255,0.82); letter-spacing: 0.03em;
-    }
-    .lb-live-pill { height: 28px; padding: 0 0.55rem; }
+    /* 顶栏左侧空占位（实况角标已叠在照片上），flex:1 把操作按钮推到右边 */
+    .lb-live-bar, .lb-live-bar:empty { position: static; display: flex; flex: 1; }
 
     /* 隐藏左右箭头（用滑动代替） */
     .lightbox-nav { display: none; }
