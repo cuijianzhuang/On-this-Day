@@ -31,6 +31,35 @@ jobs:
           node --check public/app.js
           node --check public/map.js
 
+      # KV namespace 自动供给：只在 wrangler.toml 里还是占位符时触发（全新账号/fork 首次部署），
+      # 先按标题查已有 namespace，没有才创建，拿到 id 后 sed 进本次构建的 wrangler.toml
+      # （不改仓库文件）。幂等——重复跑不会重复建。已填真实 id 时这步直接跳过。
+      # 需要 API Token 带 "Workers KV Storage:Edit" 权限
+      - name: Provision KV namespace (first deploy only)
+        run: |
+          if ! grep -q "REPLACE_WITH_KV_NAMESPACE_ID" wrangler.toml; then
+            echo "wrangler.toml 已配置 KV id，跳过"
+            exit 0
+          fi
+          TITLE="memories-today-MEMORIES_KV"
+          ID=$(npx wrangler kv namespace list 2>/dev/null | sed -n '/^\[/,$p' | jq -r --arg t "$TITLE" '.[] | select(.title == $t) | .id' | head -1)
+          if [ -z "$ID" ]; then
+            echo "创建 KV namespace: $TITLE"
+            npx wrangler kv namespace create MEMORIES_KV
+            ID=$(npx wrangler kv namespace list 2>/dev/null | sed -n '/^\[/,$p' | jq -r --arg t "$TITLE" '.[] | select(.title == $t) | .id' | head -1)
+          else
+            echo "复用已有 KV namespace: $ID"
+          fi
+          if [ -z "$ID" ]; then
+            echo "::error::KV namespace 创建/查询失败，检查 API Token 是否有 Workers KV Storage:Edit 权限"
+            exit 1
+          fi
+          sed -i "s/REPLACE_WITH_KV_NAMESPACE_ID/$ID/" wrangler.toml
+          echo "已写入 KV namespace id: $ID"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
       # Workers 付费版对打包后脚本的硬限制是 gzip 10MB，public/ 静态资源走
       # Static Assets 不计入。这里卡 1MB 预警线（硬限制的 1/10，当前实际约 30KB）：
       # 一旦 worker.js 或它 import 的 npm 依赖把打包体积推过线就拦下部署，

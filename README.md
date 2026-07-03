@@ -162,6 +162,10 @@ push 到 `master` 即触发 GitHub Actions（`.github/workflows/deploy.yml`）�
    # 把输出的 id 填进 wrangler.toml 的 [[kv_namespaces]]
    ```
 
+   走 GitHub Actions 部署的话这步可以跳过——workflow 里有自动供给：`wrangler.toml` 的 id 还是
+   `REPLACE_WITH_KV_NAMESPACE_ID` 占位符时，CI 会先查同名 namespace（没有才创建），把 id 注入
+   本次构建（幂等，不改仓库文件）。前提是 `CLOUDFLARE_API_TOKEN` 带 **Workers KV Storage:Edit** 权限
+
 5. 编辑 `wrangler.toml`：
    - `PHOTOS` 绑定的 `bucket_name` 改成你存原图的 R2 桶名；`PREVIEWS` 指向另一个单独的桶（存 HEIC 预览和 WebP 缩略图），建议配 7 天生命周期规则
    - `routes` 改成你的自定义域名；`PREVIEWS_PUBLIC_URL` 改成预览桶的公开访问域名
