@@ -720,23 +720,22 @@
   .lb-live-pill {
     display: inline-flex; align-items: center; gap: 0.32rem;
     height: 28px; padding: 0 0.55rem; border-radius: 999px;
-    color: #ffe600; background: rgba(0,0,0,0.46);
-    border: 1px solid rgba(255,230,0,0.22); backdrop-filter: blur(12px) saturate(1.35);
-    font-size: 0.76rem; font-weight: 700; letter-spacing: 0.02em;
+    color: rgba(255,255,255,0.88); background: rgba(0,0,0,0.46);
+    border: 1px solid rgba(255,255,255,0.14); backdrop-filter: blur(12px) saturate(1.35);
+    font-size: 0.76rem; font-weight: 600; letter-spacing: 0.02em; cursor: pointer;
     box-shadow: 0 4px 18px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.08);
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
   }
-  .lb-live-mute {
-    width: 28px; height: 28px; border: none; border-radius: 50%;
-    display: inline-flex; align-items: center; justify-content: center;
-    color: #fff; background: rgba(0,0,0,0.46); backdrop-filter: blur(12px) saturate(1.35);
-    box-shadow: 0 4px 18px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.08);
-    cursor: pointer; -webkit-tap-highlight-color: transparent;
-    transition: transform 0.12s ease, background 0.15s ease, opacity 0.15s ease;
+  .lb-live-bar.playing .lb-live-pill {
+    color: #1a1600; background: rgba(255,214,10,0.92);
+    border-color: rgba(255,214,10,0.4);
   }
-  .lb-live-mute::before { content: '🔊'; font-size: 0.82rem; line-height: 1; }
-  .lb-live-mute.muted::before { content: '🔇'; }
-  .lb-live-mute:hover { background: rgba(255,255,255,0.16); transform: scale(1.06); }
-  .lb-live-mute:active { transform: scale(0.94); }
+  .lb-live-pill:hover { background: rgba(40,40,44,0.66); }
+  .lb-live-bar.playing .lb-live-pill:hover { background: rgba(255,224,40,0.96); }
+  .lp-live-text { font-size: 0.76rem; font-weight: 600; }
+  .lp-mute-icon { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; }
+  .lp-mute-icon svg { width: 14px; height: 14px; }
 
   /* 底部提示 + 表态栏包装（桌面：覆盖整个舞台；移动：fixed 底部条） */
   .lb-bottom-bar {
@@ -822,10 +821,11 @@
     opacity: 0.82; transition: opacity 0.3s ease;
   }
   .live-photo-wrap.playing .live-photo-badge { opacity: 1; }
-  /* Apple Live Photo 图标：外圆 + 中心点 */
+  /* Apple Live Photo 图标 */
   .lp-live-icon {
-    width: 13px; height: 13px; flex-shrink: 0; position: relative;
+    width: 15px; height: 15px; flex-shrink: 0; position: relative; display: inline-block;
   }
+  /* 角标里的 <span class="lp-live-icon"> 用伪元素绘制（SVG pill 里不生效，无副作用） */
   .lp-live-icon::before {
     content: ''; position: absolute; inset: 0; border-radius: 50%;
     border: 1.5px solid currentColor;
@@ -836,6 +836,10 @@
     background: currentColor; transform: translate(-50%, -50%);
   }
   .live-photo-wrap.playing .lp-live-icon::before {
+    animation: lpRingPulse 1.4s ease-in-out infinite;
+  }
+  /* pill 里的 <svg class="lp-live-icon"> 整体脉冲 */
+  .lb-live-bar.playing .lp-live-icon {
     animation: lpRingPulse 1.4s ease-in-out infinite;
   }
   @keyframes lpRingPulse {
@@ -1045,7 +1049,6 @@
       font-size: 0.73rem; color: rgba(255,255,255,0.82); letter-spacing: 0.03em;
     }
     .lb-live-pill { height: 28px; padding: 0 0.55rem; }
-    .lb-live-bar .lp-live-icon { width: 14px; height: 14px; color: currentColor; }
 
     /* 隐藏左右箭头（用滑动代替） */
     .lightbox-nav { display: none; }

@@ -993,7 +993,7 @@
       const badge = document.createElement('div');
       badge.className = 'live-photo-badge';
       badge.style.opacity = '0';
-      badge.innerHTML = '<span class="lp-live-icon"></span><span>实况</span>';
+      badge.innerHTML = '<span class="lp-live-icon"></span><span class="lp-live-text">实际状况</span>';
 
       const wrap = document.createElement('div');
       wrap.className = 'live-photo-wrap';
@@ -1003,20 +1003,23 @@
       lightboxBody.appendChild(wrap);
 
       let stickyPlay = false;
+
+      // 两个独立的扬声器 SVG，内联到 pill 里，颜色跟随 currentColor 自动适配静止/播放两种状态
+      const _MUTE_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`;
+      const _SOUND_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>`;
+
       const syncLiveMuteButton = () => {
-        const btn = document.getElementById('lbLiveMute');
-        if (!btn) return;
-        btn.classList.toggle('muted', _lbLiveMuted);
-        btn.setAttribute('aria-label', _lbLiveMuted ? '开启实况声音' : '关闭实况声音');
-        btn.title = _lbLiveMuted ? '开启声音' : '关闭声音';
+        const icon = document.getElementById('lbLiveMute');
+        if (icon) icon.innerHTML = _lbLiveMuted ? _MUTE_SVG : _SOUND_SVG;
       };
       const playLive = ({ restart = true, muted = _lbLiveMuted } = {}) => {
         video.loop = true;
         video.muted = muted;
         if (restart) video.currentTime = 0;
         wrap.classList.add('playing');
+        if (_lbLiveBar) _lbLiveBar.classList.add('playing');
         video.play().catch(() => {
-          // 如果带声音播放被浏览器拦截，回退成静音预览，用户仍可再次点声音按钮开启。
+          // 带声音播放被浏览器拦截时回退成静音预览
           video.muted = true;
           _lbLiveMuted = true;
           syncLiveMuteButton();
@@ -1025,10 +1028,12 @@
       };
       const stopLive = ({ clearSticky = true } = {}) => {
         if (clearSticky) stickyPlay = false;
-        video.pause(); wrap.classList.remove('playing');
+        video.pause();
+        wrap.classList.remove('playing');
+        if (_lbLiveBar) _lbLiveBar.classList.remove('playing');
       };
 
-      // 图片加载完成后自动播放一次，告知用户这是实况照片
+      // 图片加载完成后自动播一次，让用户感知到这是实况照片
       const liveSrc = p.url.replace('/img/', '/thumb/') + '?w=1600&q=85&fit=scale-down';
       _loadImgWithProgress(liveSrc, img,
         () => {
@@ -1040,56 +1045,65 @@
             video.muted = true;
             video.currentTime = 0;
             wrap.classList.add('playing');
+            if (_lbLiveBar) _lbLiveBar.classList.add('playing');
             video.play().catch(() => {});
             video.onended = () => {
               video.loop = true;
               video.muted = _lbLiveMuted;
-              if (!stickyPlay) wrap.classList.remove('playing');
+              if (!stickyPlay) {
+                wrap.classList.remove('playing');
+                if (_lbLiveBar) _lbLiveBar.classList.remove('playing');
+              }
             };
           }, 500);
         },
         () => { heicFallback(img, p.url); }
       );
 
-      // 悬浮预览（桌面）
+      // 桌面：悬浮静音预览，点击切换粘性循环播放
       wrap.addEventListener('mouseenter', () => { if (!stickyPlay) playLive({ muted: true }); });
       wrap.addEventListener('mouseleave', () => { if (!stickyPlay) stopLive({ clearSticky: false }); });
-      // 点击切换粘性循环播放
       wrap.addEventListener('click', () => {
         if (Date.now() - _lbDragEndTime < 300) return;
         stickyPlay = !stickyPlay;
         if (stickyPlay) playLive({ muted: _lbLiveMuted }); else stopLive();
       });
-      // 移动端：按住播放，松开停止
-      wrap.addEventListener('touchstart', (e) => { e.preventDefault(); playLive({ muted: _lbLiveMuted }); }, { passive: false });
-      wrap.addEventListener('touchend', () => { if (!stickyPlay) stopLive({ clearSticky: false }); });
+      // 移动端：长按（≥350ms）播放，松手停止——与 lens.bh8.ga 一致
+      let _lpTimer = null;
+      wrap.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        _lpTimer = setTimeout(() => { _lpTimer = null; playLive({ muted: _lbLiveMuted }); }, 350);
+      }, { passive: false });
+      wrap.addEventListener('touchend', () => {
+        if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; }
+        else if (!stickyPlay) stopLive({ clearSticky: false });
+      });
+      wrap.addEventListener('touchcancel', () => {
+        if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; }
+        if (!stickyPlay) stopLive({ clearSticky: false });
+      });
 
-      // 顶部实况指示 + 声音开关（桌面/移动端共用）
+      // 顶部实况 pill：图标 + "实际状况" + 声音开关三合一，点击切换静音
       if (_lbLiveBar) {
-        _lbLiveBar.innerHTML = '<span class="lb-live-pill"><span class="lp-live-icon"></span><span>实况</span></span><button class="lb-live-mute" id="lbLiveMute" type="button"></button>';
-        const muteBtn = document.getElementById('lbLiveMute');
+        const _LIVE_ICON_SVG = `<svg class="lp-live-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="9" cy="9" r="2.6" fill="currentColor" stroke="none"/><line x1="9" y1="0.8" x2="9" y2="3.2" stroke-width="1.6"/><line x1="9" y1="14.8" x2="9" y2="17.2" stroke-width="1.6"/><line x1="0.8" y1="9" x2="3.2" y2="9" stroke-width="1.6"/><line x1="14.8" y1="9" x2="17.2" y2="9" stroke-width="1.6"/><line x1="2.93" y1="2.93" x2="4.73" y2="4.73" stroke-width="1.6"/><line x1="13.27" y1="13.27" x2="15.07" y2="15.07" stroke-width="1.6"/><line x1="15.07" y1="2.93" x2="13.27" y2="4.73" stroke-width="1.6"/><line x1="4.73" y1="13.27" x2="2.93" y2="15.07" stroke-width="1.6"/></svg>`;
+        _lbLiveBar.innerHTML = `<button class="lb-live-pill" id="lbLivePill" type="button" title="点击切换声音">${_LIVE_ICON_SVG}<span class="lp-live-text">实际状况</span><span class="lp-mute-icon" id="lbLiveMute"></span></button>`;
         syncLiveMuteButton();
-        if (muteBtn) {
-          muteBtn.onclick = (ev) => {
-            ev.preventDefault();
-            ev.stopPropagation();
-            _lbLiveMuted = !_lbLiveMuted;
-            video.muted = _lbLiveMuted;
-            syncLiveMuteButton();
-            if (!_lbLiveMuted) {
-              stickyPlay = true;
-              playLive({ restart: false, muted: false });
-            }
-          };
-        }
+        document.getElementById('lbLivePill').onclick = (ev) => {
+          ev.preventDefault(); ev.stopPropagation();
+          _lbLiveMuted = !_lbLiveMuted;
+          video.muted = _lbLiveMuted;
+          syncLiveMuteButton();
+          if (!_lbLiveMuted) { stickyPlay = true; playLive({ restart: false, muted: false }); }
+        };
       }
 
-      // 提示文字
+      // 提示文字（移动端"长按"提示；桌面保留"悬浮预览"）
       _lbIsLivePhoto = true;
       const _hint = document.getElementById('lbZoomHint');
       if (_hint) {
         clearTimeout(_lbZoomHideTimer);
-        _hint.textContent = '悬浮预览 · 点击锁定播放 · 声音按钮可开关声音';
+        const isMobileTouch = window.matchMedia('(pointer: coarse)').matches;
+        _hint.textContent = isMobileTouch ? '长按播放实况照片 · 捏合缩放' : '悬浮预览 · 点击锁定播放';
         _hint.style.opacity = '1';
         _lbZoomHideTimer = setTimeout(() => { if (_hint) _hint.style.opacity = '0'; }, 3000);
       }
@@ -1778,7 +1792,7 @@
             // 不再传 h= + fit=cover 强制裁成正方形——只限宽，fit=scale-down 按原图比例缩放，不裁内容
             const thumbSrc = p.url.replace('/img/', '/thumb/') + '?w=' + thumbW + '&q=75&fit=scale-down';
             if (p.type === 'video') {
-              return `<div class="cell${extraClass}" style="${style}" onclick="openLightbox(${flatIndex}, false)"><div class="frame-inner"><video data-src="${escAttr(p.url)}#t=0.5" muted loop preload="metadata" onloadeddata="this.classList.add('loaded')" onmouseenter="this.play().catch(()=>{})" onmouseleave="this.pause();this.currentTime=0.5"></video></div><span class="play-badge">▶ 视频</span><span class="frame-year">${y.year}</span><button class="react-btn" data-key="${escAttr(p.key)}" onclick="event.stopPropagation();doReact(this)">❤️<span class="react-cnt">${_roomReactions[p.key] > 0 ? _roomReactions[p.key] : ''}</span></button></div>`;
+              return `<div class="cell${extraClass}" style="${style}" onclick="openLightbox(${flatIndex}, false)"><div class="frame-inner"><video data-src="${escAttr(p.url)}#t=0.5" muted loop playsinline preload="metadata" onloadeddata="this.classList.add('loaded')" onmouseenter="this.play().catch(()=>{})" onmouseleave="this.pause();this.currentTime=0.5"></video></div><span class="play-badge">▶ 视频</span><span class="frame-year">${y.year}</span><button class="react-btn" data-key="${escAttr(p.key)}" onclick="event.stopPropagation();doReact(this)">❤️<span class="react-cnt">${_roomReactions[p.key] > 0 ? _roomReactions[p.key] : ''}</span></button></div>`;
             }
             if (p.type === 'live') {
               // Live Photo 缩略图：默认显示静态图，悬浮（桌面）/长按（移动端）才播放配对的短视频
