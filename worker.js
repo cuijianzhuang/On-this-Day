@@ -965,6 +965,26 @@ async function runBackgroundMaintenance(env) {
         await env.KV.delete("backfill_done_at");
       }
     }
+  } else {
+    // 单双分钟的另一半：一次性重算存量索引行的日期（修正"路径月+文件名日"时期写错的行，
+    // 见 reindexPhotoDatesBatch）。进度存 KV，每趟一批，扫完整张表写完成标记后永久跳过。
+    // 批内 EXIF 读取是串行的（单个 256KB 缓冲），不会和回填的 listAll 大数组撞内存
+    const reindexDone = await env.KV.get("reindex_dates_done_at");
+    if (!reindexDone) {
+      const offset = Number((await env.KV.get("reindex_dates_offset")) || 0);
+      const res = await reindexPhotoDatesBatch(env, 200, offset);
+      if (res.fixed > 0) {
+        console.log(`reindexPhotoDates: offset=${offset} fixed=${res.fixed}`,
+          JSON.stringify(res.changes.slice(0, 5)));
+      }
+      if (res.nextOffset == null) {
+        await env.KV.put("reindex_dates_done_at", new Date().toISOString());
+        await env.KV.delete("reindex_dates_offset");
+        console.log("reindexPhotoDates: 全表扫描完成");
+      } else {
+        await env.KV.put("reindex_dates_offset", String(res.nextOffset));
+      }
+    }
   }
 
   // 之前这里用 listAll() 扫一遍整个 R2 桶 + matchPhotosForDay() 对每个年份再扫一遍、
@@ -2860,16 +2880,9 @@ async function backfillPhotosIndexBatch(env, limit) {
 }
 
 // 按新规则（年月日整体取拍摄日期，不再信备份路径）重算存量 photos_index 行的日期，
-// 修正"6/14 拍的照片被记到 7 月"这类历史错行。分页扫全表，改了的行顺手把新旧两天的缓存都清掉。
-// 用法：/admin/reindex-photo-dates?token=xxx&limit=200&offset=0，返回 nextOffset 继续翻页
-async function handleReindexPhotoDates(request, env, url) {
-  const token = url.searchParams.get("token");
-  if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
-    return new Response("Forbidden", { status: 403 });
-  }
-
-  const limit = Math.min(Number(url.searchParams.get("limit")) || 200, 500);
-  const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
+// 修正"6/14 拍的照片被记到 7 月"这类历史错行。改了的行顺手把新旧两天的缓存都清掉。
+// Cron 每趟自动跑一批（见 runBackgroundMaintenance），手动端点可以随时加速
+async function reindexPhotoDatesBatch(env, limit, offset) {
   const { results } = await env.DB.prepare(
     "SELECT key, year, month, day, size, uploaded FROM photos_index ORDER BY key LIMIT ? OFFSET ?"
   ).bind(limit, offset).all();
@@ -2892,12 +2905,28 @@ async function handleReindexPhotoDates(request, env, url) {
     await purgeDayCache(m, d);
   }
 
-  return new Response(JSON.stringify({
+  return {
     scanned: results.length,
     fixed: changes.length,
     nextOffset: results.length === limit ? offset + limit : null, // null = 扫完了
     changes,
-  }), { headers: { "content-type": "application/json; charset=utf-8" } });
+  };
+}
+
+// 用法：/admin/reindex-photo-dates?token=xxx&limit=200&offset=0，返回 nextOffset 继续翻页
+async function handleReindexPhotoDates(request, env, url) {
+  const token = url.searchParams.get("token");
+  if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
+    return new Response("Forbidden", { status: 403 });
+  }
+
+  const limit = Math.min(Number(url.searchParams.get("limit")) || 200, 500);
+  const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
+  const result = await reindexPhotoDatesBatch(env, limit, offset);
+
+  return new Response(JSON.stringify(result), {
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
 }
 
 async function handleBackfillPhotosIndex(request, env, url) {
