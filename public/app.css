@@ -801,9 +801,14 @@
     font-size: 0.5rem; color: rgba(255,255,255,0.8);
     text-shadow: 0 1px 2px rgba(0,0,0,0.6);
   }
-  .live-photo-wrap { position: relative; display: inline-block; cursor: pointer; }
+  /* CSS Grid 叠层：img 和 video 放在同一个 grid cell，避免 position:absolute + height:100%
+     在 iOS Safari height:auto 父元素里百分比解析失败导致画面偏移 */
+  .live-photo-wrap { position: relative; display: grid; cursor: pointer; }
+  .live-photo-wrap > img,
+  .live-photo-wrap > .live-photo-video { grid-area: 1/1; }
   .live-photo-video {
-    position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+    align-self: stretch; justify-self: stretch;
+    object-fit: contain; object-position: center;
     border-radius: 10px; opacity: 0; pointer-events: none; transition: opacity 0.3s ease;
   }
   .live-photo-wrap.playing .live-photo-video { opacity: 1; }
@@ -1031,6 +1036,9 @@
        在 width:100% 无明确 height 时对齐退化为左对齐，改用 auto+max 让浏览器按比例缩放 */
     #lightboxBody .live-photo-wrap { max-width: 100%; }
     #lightboxBody .live-photo-wrap img { width: auto; height: auto; max-width: 100%; max-height: calc(100dvh - 50px - 58px - 64px); }
+    /* video grid item：取消 .lightbox-stage video 通用 override 对 max-width/max-height 的干扰，
+       让 grid stretch 自己决定尺寸 */
+    #lightboxBody .live-photo-wrap .live-photo-video { max-width: none; max-height: none; width: 100%; height: 100%; }
     /* 实况徽标藏在图片内——由顶部导航条代替 */
     #lightboxBody .live-photo-badge { display: none; }
 
