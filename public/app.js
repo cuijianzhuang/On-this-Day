@@ -1778,7 +1778,7 @@
             // 不再传 h= + fit=cover 强制裁成正方形——只限宽，fit=scale-down 按原图比例缩放，不裁内容
             const thumbSrc = p.url.replace('/img/', '/thumb/') + '?w=' + thumbW + '&q=75&fit=scale-down';
             if (p.type === 'video') {
-              return `<div class="cell${extraClass}" style="${style}" onclick="openLightbox(${flatIndex}, false)"><div class="frame-inner"><video data-src="${escAttr(p.url)}#t=0.5" muted loop preload="metadata" onloadeddata="this.classList.add('loaded')" onmouseenter="this.play().catch(()=>{})" onmouseleave="this.pause();this.currentTime=0.5"></video></div><span class="play-badge">▶ 视频</span><span class="frame-year">${y.year}</span><button class="react-btn" data-key="${escAttr(p.key)}" onclick="event.stopPropagation();doReact(this)">❤️<span class="react-cnt">${_roomReactions[p.key] > 0 ? _roomReactions[p.key] : ''}</span></button></div>`;
+              return `<div class="cell${extraClass}" style="${style}" onclick="openLightbox(${flatIndex}, false)"><div class="frame-inner"><video data-src="${escAttr(p.url)}#t=0.5" muted loop playsinline preload="metadata" onloadeddata="this.classList.add('loaded')" onmouseenter="this.play().catch(()=>{})" onmouseleave="this.pause();this.currentTime=0.5"></video></div><span class="play-badge">▶ 视频</span><span class="frame-year">${y.year}</span><button class="react-btn" data-key="${escAttr(p.key)}" onclick="event.stopPropagation();doReact(this)">❤️<span class="react-cnt">${_roomReactions[p.key] > 0 ? _roomReactions[p.key] : ''}</span></button></div>`;
             }
             if (p.type === 'live') {
               // Live Photo 缩略图：默认显示静态图，悬浮（桌面）/长按（移动端）才播放配对的短视频
