@@ -31,10 +31,10 @@ jobs:
           node --check public/app.js
           node --check public/map.js
 
-      # Workers 对打包后脚本的硬限制按 gzip 算（免费版 3MB / 付费版 10MB），
-      # public/ 静态资源走 Static Assets 不计入。这里卡 1MB 预警线：
+      # Workers 付费版对打包后脚本的硬限制是 gzip 10MB，public/ 静态资源走
+      # Static Assets 不计入。这里卡 1MB 预警线（硬限制的 1/10，当前实际约 30KB）：
       # 一旦 worker.js 或它 import 的 npm 依赖把打包体积推过线就拦下部署，
-      # 逼着把大依赖挪去 Workflow/绑定服务、大数据挪去 KV/R2，而不是等线上报错
+      # 提前暴露体积异常增长，而不是等逼近 10MB 才发现
       - name: Worker bundle size check (gzip ≤ 1MB)
         run: |
           npx wrangler deploy --dry-run --outdir /tmp/wrk-dist
