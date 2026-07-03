@@ -333,9 +333,17 @@
     padding: 0.3rem 0.85rem; border-radius: 999px; cursor: pointer;
     -webkit-tap-highlight-color: transparent;
     transition: background 0.15s ease, color 0.15s ease;
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    max-width: min(88vw, 560px);
   }
   .otd-toggle:hover { background: rgba(255,255,255,0.13); color: #d8d8dc; }
-  .otd-arrow { display: inline-block; margin-left: 0.35rem; transition: transform 0.2s ease; }
+  /* 折叠态单条轮播：长事件截断成省略号，切换时先淡出再换字淡入 */
+  .otd-ticker-text {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    transition: opacity 0.25s ease;
+  }
+  .otd-ticker-text.otd-fading { opacity: 0; }
+  .otd-arrow { display: inline-block; flex-shrink: 0; transition: transform 0.2s ease; }
   .otd-toggle.open .otd-arrow { transform: rotate(180deg); }
   .otd-list {
     margin-top: 0.6rem; text-align: left;

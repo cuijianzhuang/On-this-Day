@@ -393,8 +393,31 @@
   }).catch(() => {});
 
   // 历史上的今天（Wikimedia）：跟着正在浏览的日期走，loadMemories 每次切日期都会重新拉。
-  // 接口 204/失败就整块隐藏；内容来自第三方，只用 textContent 渲染不当 HTML 插
-  let _otdSeq = 0;
+  // 折叠态是单条轮播（每 8 秒淡入淡出换一条大事记），点开是完整列表（展开时暂停轮播，
+  // 展开状态跨日期保持）。接口 204/失败就整块隐藏；第三方内容只用 textContent 渲染
+  let _otdSeq = 0, _otdEvents = [], _otdIdx = 0, _otdTimer = null;
+  function _otdShowTick(animate) {
+    const el = document.getElementById('otdTicker');
+    if (!el || !_otdEvents.length) return;
+    const ev = _otdEvents[_otdIdx % _otdEvents.length];
+    const set = () => { el.textContent = '🕰 ' + ev.year + '年 · ' + ev.text; };
+    if (animate) {
+      el.classList.add('otd-fading');
+      setTimeout(() => { set(); el.classList.remove('otd-fading'); }, 250);
+    } else {
+      set();
+    }
+  }
+  function _otdStartTicker() {
+    clearInterval(_otdTimer);
+    if (_otdEvents.length < 2) return;
+    _otdTimer = setInterval(() => {
+      const list = document.getElementById('otdList');
+      if (!list || !list.hidden) return; // 展开时暂停轮播
+      _otdIdx = (_otdIdx + 1) % _otdEvents.length;
+      _otdShowTick(true);
+    }, 8000);
+  }
   function loadOnThisDay(m, d) {
     const seq = ++_otdSeq;
     const block = document.getElementById('otdBlock');
@@ -404,7 +427,14 @@
       .then(r => (r.ok && r.status !== 204) ? r.json() : null)
       .then(data => {
         if (seq !== _otdSeq) return; // 已切到别的日期，丢弃过期结果
-        if (!data || !Array.isArray(data.events) || !data.events.length) { block.hidden = true; return; }
+        if (!data || !Array.isArray(data.events) || !data.events.length) {
+          block.hidden = true;
+          clearInterval(_otdTimer);
+          _otdEvents = [];
+          return;
+        }
+        _otdEvents = data.events;
+        _otdIdx = 0;
         list.textContent = '';
         for (const ev of data.events) {
           const row = document.createElement('div');
@@ -417,14 +447,20 @@
           list.appendChild(row);
         }
         block.hidden = false;
+        // 展开状态跨日期保持：展开时按钮显示固定标题，收起时恢复单条轮播
+        if (list.hidden) _otdShowTick(false);
+        else document.getElementById('otdTicker').textContent = '🕰 历史上的今天';
+        _otdStartTicker();
       })
       .catch(() => { if (seq === _otdSeq) block.hidden = true; });
   }
   document.getElementById('otdToggle').addEventListener('click', () => {
     const list = document.getElementById('otdList');
-    const open = list.hidden;
+    const open = list.hidden; // 本次点击是要展开吗
     list.hidden = !open;
     document.getElementById('otdToggle').classList.toggle('open', open);
+    if (open) document.getElementById('otdTicker').textContent = '🕰 历史上的今天';
+    else _otdShowTick(false);
   });
 
   const params = new URLSearchParams(location.search);
