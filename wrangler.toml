@@ -49,6 +49,14 @@ binding = "DB"
 database_name = "memories-db"
 database_id = "dac6d064-83bc-4cb9-b742-0938e0f58101"
 
+# KV：存全局轻量级状态（jinrishici-token、last_viewed_day、backfill_done_at）
+# 比 D1 meta 表更轻，全球一份读取一致
+# 创建: wrangler kv namespace create MEMORIES_KV
+# 拿到 id 后填入下面
+[[kv_namespaces]]
+binding = "KV"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
 # 新照片落地 R2 -> R2 Event Notification 推到这个队列 -> 下面的 queue() consumer 增量写进
 # photos_index 表（见 schema.sql），免得 matchPhotosForDay 每次都要 list() 扫一遍 R2。
 # 通知规则本身是绑在 R2 桶上的，跟 wrangler.toml 无关，用

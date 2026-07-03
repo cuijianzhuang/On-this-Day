@@ -16,24 +16,14 @@ const IMAGE_EXT = /\.(jpe?g|png|heic|gif|webp)$/i;
 const VIDEO_EXT = /\.(mov|mp4)$/i;
 const BASE_PREFIX = "Photos/MobileBackup/iPhone/";
 
-// 记录最近一次有人查看的 month/day（存在 D1 的 meta 表），给 Cron 任务做优先级参考
+// 记录最近一次有人查看的 month/day，给 Cron 任务做优先级参考
+// 改用 KV：Cron 每 10 分钟读一次，KV 读比 D1 SELECT 快，且全局一份（不同 PoP 共享同一个值）
 async function getLastViewedDay(env) {
-  const row = await env.DB.prepare("SELECT value FROM meta WHERE key = 'last_viewed_day'").first();
-  if (!row) return null;
-  try {
-    return JSON.parse(row.value);
-  } catch {
-    return null;
-  }
+  return env.KV.get("last_viewed_day", { type: "json" });
 }
 
 async function setLastViewedDay(env, month, day) {
-  await env.DB.prepare(
-    "INSERT INTO meta (key, value) VALUES ('last_viewed_day', ?) " +
-      "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
-  )
-    .bind(JSON.stringify({ month, day }))
-    .run();
+  await env.KV.put("last_viewed_day", JSON.stringify({ month, day }));
 }
 
 export default {
@@ -961,17 +951,14 @@ async function runBackgroundMaintenance(env) {
     // 自动把存量照片慢慢补进 photos_index，不用再手动一次次点 /admin/backfill-photos-index。
     // 回填全部完成后写个时间戳标记：之后每天只核对一次，不再每 20 分钟白白 listAll 扫一遍
     // 全桶 + 全表 SELECT 来发现"没活干"（新上传的照片走 queue 增量维护，不依赖这里）
-    const doneRow = await env.DB.prepare("SELECT value FROM meta WHERE key = 'backfill_done_at'").first();
-    const doneAt = doneRow ? Date.parse(doneRow.value) : NaN;
+    const doneAt = Date.parse((await env.KV.get("backfill_done_at")) || "");
     if (!(Date.now() - doneAt < 24 * 3600 * 1000)) {
       const res = await backfillPhotosIndexBatch(env, 300);
       if (res.remaining === 0) {
-        await env.DB.prepare(
-          "INSERT INTO meta (key, value) VALUES ('backfill_done_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
-        ).bind(new Date().toISOString()).run();
+        await env.KV.put("backfill_done_at", new Date().toISOString());
       } else {
         // 又出现了没索引的文件（比如 R2 事件丢了）——清掉标记，恢复每 20 分钟一批的追赶节奏
-        await env.DB.prepare("DELETE FROM meta WHERE key = 'backfill_done_at'").run();
+        await env.KV.delete("backfill_done_at");
       }
     }
   }
@@ -2869,20 +2856,16 @@ async function handleBackfillPhotosIndex(request, env, url) {
 }
 
 // ---------- 今日诗词：每天在页面上配一句应景的古诗词（jinrishici.com），跟"那年今日"主题搭一块 ----------
-// token 永久有效，只要拿到一次就缓存住，不用每个请求都重新换
-async function getJinrishiciToken() {
-  const cache = caches.default;
-  const cacheKey = new Request("https://memories.internal/jinrishici-token");
-  const cached = await cache.match(cacheKey);
-  if (cached) return await cached.text();
+// token 永久有效，只要拿到一次就存进 KV——比 Cache API 好在：全局一份（不同 PoP 共享，不会重复申请），
+// Worker 重启/冷启动后也不用再去 jinrishici.com 换一个新的
+async function getJinrishiciToken(env) {
+  const cached = await env.KV.get("jinrishici-token");
+  if (cached) return cached;
 
   const resp = await fetch("https://v2.jinrishici.com/token");
   const data = await resp.json();
   const token = data.data;
-  await cache.put(
-    cacheKey,
-    new Response(token, { headers: { "cache-control": "max-age=31536000, immutable" } })
-  );
+  await env.KV.put("jinrishici-token", token);
   return token;
 }
 
@@ -2903,7 +2886,7 @@ async function getDailyPoem(env) {
   if (row?.value) {
     poem = JSON.parse(row.value);
   } else {
-    const token = await getJinrishiciToken();
+    const token = await getJinrishiciToken(env);
     const resp = await fetch("https://v2.jinrishici.com/sentence", {
       headers: { "X-User-Token": token },
     });
