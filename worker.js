@@ -62,6 +62,10 @@ export default {
       return handleBackfillPhotosIndex(request, env, url);
     }
 
+    if (url.pathname === "/admin/reindex-photo-dates") {
+      return handleReindexPhotoDates(request, env, url);
+    }
+
     if (url.pathname === "/admin/backfill-workflows") {
       return handleBackfillWorkflows(request, env, url);
     }
@@ -1370,23 +1374,32 @@ async function computePhotoMeta(env, key, knownObj) {
     uploaded = uploaded.toISOString();
   }
 
+  // 年/月/日必须整体来自同一个拍摄日期源，不能路径出月、文件名出日地拼——
+  // iPhone 备份是按"备份时间"落目录的（.../{备份年}/{备份月}/），6/14 拍的照片 7 月才备份
+  // 就会躺在 07/ 目录里，之前用路径月 + 文件名日拼出 7月14日 这种不存在的拍摄日
   const basename = key.split("/").pop();
-  let day = null;
-  const dateMatch = basename.match(/(19|20)\d{2}(\d{2})(\d{2})/); // YYYYMMDD，第二组是月第三组是日
-  if (dateMatch) {
+  let year = null, month = null, day = null;
+  const dateMatch = basename.match(/((?:19|20)\d{2})(\d{2})(\d{2})/); // YYYYMMDD
+  if (dateMatch && Number(dateMatch[2]) >= 1 && Number(dateMatch[2]) <= 12 && Number(dateMatch[3]) >= 1 && Number(dateMatch[3]) <= 31) {
+    year = dateMatch[1];
+    month = dateMatch[2];
     day = dateMatch[3];
   } else {
-    // 文件名没带日期，跟 matchPhotosForDay 用的是同一套兜底逻辑（EXIF 优先，没有就用 R2 上传时间）
+    // 文件名没带日期（IMG_1017.JPG 这类纯序号）：EXIF 优先，没有就用 R2 上传时间
     const md = await getCapturedMonthDay(env.PHOTOS, key);
-    day = md ? md.day : null;
+    if (md) {
+      year = md.year || ym.year; // 早期缓存条目没有 year，退回路径年份
+      month = md.month;
+      day = md.day;
+    }
   }
-  if (!day) return null; // 实在拿不到拍摄日，先不索引——下次事件重投或者再跑一次回填脚本还能补上
+  if (!month || !day) return null; // 实在拿不到拍摄日，先不索引——下次事件重投或者再跑一次回填脚本还能补上
 
   return {
     key,
     type: VIDEO_EXT.test(key) ? "video" : "image",
-    year: ym.year,
-    month: ym.month,
+    year,
+    month,
     day,
     size,
     uploaded,
@@ -1429,7 +1442,8 @@ async function removePhotoIndex(env, key) {
   return existing ? { month: existing.month, day: existing.day } : null;
 }
 
-// 获取文件的拍摄日期（月/日）。JPEG 读 EXIF，其他格式回退用 R2 上传时间近似
+// 获取文件的拍摄日期（年/月/日）。JPEG/HEIC 读 EXIF，其他格式回退用 R2 上传时间近似。
+// 早期缓存条目没有 year 字段，调用方要兜底（用路径年份）
 // 用 Workers Cache API 缓存结果，避免无日期文件名的文件每次请求都重新读取/解析
 async function getCapturedMonthDay(bucket, key) {
   const cache = caches.default;
@@ -1453,7 +1467,11 @@ async function getCapturedMonthDay(bucket, key) {
     const head = await bucket.head(key);
     if (head && head.uploaded) {
       const d = new Date(head.uploaded);
-      result = { month: String(d.getMonth() + 1).padStart(2, "0"), day: String(d.getDate()).padStart(2, "0") };
+      result = {
+        year: String(d.getFullYear()),
+        month: String(d.getMonth() + 1).padStart(2, "0"),
+        day: String(d.getDate()).padStart(2, "0"),
+      };
     }
   }
 
@@ -1704,7 +1722,7 @@ function parseExifTiff(buf, tiffStart) {
     if (!dateStr) return gps ? { lat: gps.lat, lon: gps.lon } : null;
     const m = dateStr.match(/^(\d{4}):(\d{2}):(\d{2})/);
     if (!m) return gps ? { lat: gps.lat, lon: gps.lon } : null;
-    return { month: m[2], day: m[3], lat: gps ? gps.lat : null, lon: gps ? gps.lon : null };
+    return { year: m[1], month: m[2], day: m[3], lat: gps ? gps.lat : null, lon: gps ? gps.lon : null };
   } catch {
     return null;
   }
@@ -2839,6 +2857,47 @@ async function backfillPhotosIndexBatch(env, limit) {
     alreadyIndexed: indexed.size,
     errors,
   };
+}
+
+// 按新规则（年月日整体取拍摄日期，不再信备份路径）重算存量 photos_index 行的日期，
+// 修正"6/14 拍的照片被记到 7 月"这类历史错行。分页扫全表，改了的行顺手把新旧两天的缓存都清掉。
+// 用法：/admin/reindex-photo-dates?token=xxx&limit=200&offset=0，返回 nextOffset 继续翻页
+async function handleReindexPhotoDates(request, env, url) {
+  const token = url.searchParams.get("token");
+  if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
+    return new Response("Forbidden", { status: 403 });
+  }
+
+  const limit = Math.min(Number(url.searchParams.get("limit")) || 200, 500);
+  const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
+  const { results } = await env.DB.prepare(
+    "SELECT key, year, month, day, size, uploaded FROM photos_index ORDER BY key LIMIT ? OFFSET ?"
+  ).bind(limit, offset).all();
+
+  const changes = [];
+  const affectedDays = new Set();
+  for (const row of results) {
+    // size/uploaded 直接用索引里已有的值，文件名带日期的照片一次 R2 调用都不用发
+    const meta = await computePhotoMeta(env, row.key, { size: row.size, uploaded: row.uploaded });
+    if (!meta) continue;
+    if (meta.year !== row.year || meta.month !== row.month || meta.day !== row.day) {
+      await upsertPhotoIndex(env, meta);
+      affectedDays.add(`${row.month}-${row.day}`);
+      affectedDays.add(`${meta.month}-${meta.day}`);
+      changes.push({ key: row.key, from: `${row.year}/${row.month}/${row.day}`, to: `${meta.year}/${meta.month}/${meta.day}` });
+    }
+  }
+  for (const md of affectedDays) {
+    const [m, d] = md.split("-");
+    await purgeDayCache(m, d);
+  }
+
+  return new Response(JSON.stringify({
+    scanned: results.length,
+    fixed: changes.length,
+    nextOffset: results.length === limit ? offset + limit : null, // null = 扫完了
+    changes,
+  }), { headers: { "content-type": "application/json; charset=utf-8" } });
 }
 
 async function handleBackfillPhotosIndex(request, env, url) {
