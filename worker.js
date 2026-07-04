@@ -3389,7 +3389,10 @@ export class PhotoProcessingWorkflow extends WorkflowEntrypoint {
     const { key } = event.payload;
 
     // ── Step 1: 索引 ──────────────────────────────────────────────────────────
-    const meta = await step.do("index", async () => {
+    // 加重试：R2 head() 或 D1 写入偶发网络超时会让步骤抛出，没有重试就直接 outcome:exception
+    const meta = await step.do("index", {
+      retries: { limit: 3, delay: "5 seconds", backoff: "exponential" },
+    }, async () => {
       return await indexPhoto(this.env, key);
     });
     // 非图片（视频/live photo 等）不需要 AI 打分和地点
@@ -3427,7 +3430,9 @@ export class PhotoProcessingWorkflow extends WorkflowEntrypoint {
     });
 
     // ── Step 5: 清边缘缓存 ───────────────────────────────────────────────────
-    await step.do("purge-cache", async () => {
+    await step.do("purge-cache", {
+      retries: { limit: 2, delay: "5 seconds" },
+    }, async () => {
       await purgeDayCache(meta.month, meta.day);
     });
 
@@ -3435,7 +3440,9 @@ export class PhotoProcessingWorkflow extends WorkflowEntrypoint {
     // 不在这里直接发 Telegram：批量上传会一张一条刷屏。只把 key 登记进 D1
     // （meta 表 notify: 前缀），由 */10 Cron 聚合成一条消息推送
     // （见 flushPendingNotifications）
-    await step.do("queue-notify", async () => {
+    await step.do("queue-notify", {
+      retries: { limit: 2, delay: "5 seconds" },
+    }, async () => {
       const today = bjToday();
       if (meta.month === today.month && meta.day === today.day) {
         await this.env.DB.prepare(
