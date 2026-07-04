@@ -115,6 +115,23 @@ export default {
       return handleNote(request, env, url);
     }
 
+    // ── 相簿 API ──────────────────────────────────────────────────────────────
+    if (url.pathname === "/api/albums" || url.pathname === "/api/albums/") {
+      return handleAlbums(request, env, url);
+    }
+    if (url.pathname.startsWith("/api/albums/")) {
+      return handleAlbumBySlug(request, env, url);
+    }
+
+    if (url.pathname === "/albums") {
+      const assetResp = await env.ASSETS.fetch(new Request(new URL("/albums.html", request.url), request));
+      return assetResp;
+    }
+
+    if (url.pathname === "/admin/albums") {
+      return handleAdminAlbums(request, env, url);
+    }
+
     if (url.pathname === "/loved") {
       return new Response(LOVED_HTML, {
         headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
@@ -368,6 +385,286 @@ async function ensureAuxTables(env) {
   _auxTablesReady = true;
 }
 
+let _albumTablesReady = false;
+async function ensureAlbumTables(env) {
+  if (_albumTablesReady) return;
+  await env.DB.batch([
+    env.DB.prepare(
+      "CREATE TABLE IF NOT EXISTS albums (" +
+      "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+      "slug TEXT NOT NULL UNIQUE, " +
+      "title TEXT NOT NULL, " +
+      "description TEXT, " +
+      "cover_key TEXT, " +
+      "is_private INTEGER NOT NULL DEFAULT 0, " +
+      "password_hash TEXT, " +
+      "created_at TEXT NOT NULL, " +
+      "updated_at TEXT NOT NULL)"
+    ),
+    env.DB.prepare(
+      "CREATE TABLE IF NOT EXISTS album_photos (" +
+      "album_id INTEGER NOT NULL REFERENCES albums(id) ON DELETE CASCADE, " +
+      "photo_key TEXT NOT NULL, " +
+      "sort_order INTEGER NOT NULL DEFAULT 0, " +
+      "added_at TEXT NOT NULL, " +
+      "PRIMARY KEY (album_id, photo_key))"
+    ),
+  ]);
+  _albumTablesReady = true;
+}
+
+async function sha256hex(text) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function adminGuard(request, env) {
+  const token = new URL(request.url).searchParams.get("token")
+    || request.headers.get("x-admin-token");
+  if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
+    return new Response(JSON.stringify({ error: "Forbidden" }), {
+      status: 403, headers: { "content-type": "application/json; charset=utf-8" },
+    });
+  }
+  return null;
+}
+
+// 从 photos_index + photo_scores + photo_places 组装相簿的照片列表
+// 仿照 handleMemories 的 enrich 逻辑，返回与前端 grid 兼容的格式
+async function buildAlbumPhotos(env, photoKeys) {
+  if (!photoKeys.length) return [];
+  const placeholders = photoKeys.map(() => "?").join(",");
+  const { results: rows } = await env.DB.prepare(
+    `SELECT pi.key, pi.year, pi.month, pi.day, pi.type
+     FROM photos_index pi WHERE pi.key IN (${placeholders})`
+  ).bind(...photoKeys).all();
+
+  const scores = await loadScoresForKeys(env, photoKeys);
+  const places = await loadPlacesForKeys(env, photoKeys);
+
+  const orderMap = Object.fromEntries(photoKeys.map((k, i) => [k, i]));
+  return rows
+    .sort((a, b) => (orderMap[a.key] ?? 999) - (orderMap[b.key] ?? 999))
+    .map((r) => {
+      const { score, hasFace, caption } = scoreInfoOf(scores[r.key]);
+      return {
+        key: r.key,
+        url: `/img/${encodeURIComponent(r.key)}`,
+        thumbUrl: `/thumb/${encodeURIComponent(r.key)}`,
+        type: r.type,
+        year: r.year,
+        month: r.month,
+        day: r.day,
+        score,
+        hasFace,
+        caption,
+        place: placeNameOf(places[r.key]),
+      };
+    });
+}
+
+// ── 相簿列表 / 创建 ────────────────────────────────────────────────────────────
+async function handleAlbums(request, env, url) {
+  await ensureAlbumTables(env);
+
+  if (request.method === "GET") {
+    const { results } = await env.DB.prepare(
+      "SELECT id, slug, title, description, cover_key, is_private, created_at FROM albums ORDER BY id DESC"
+    ).all();
+    const albums = results.map((r) => ({
+      slug: r.slug,
+      title: r.title,
+      description: r.description || "",
+      coverUrl: r.cover_key ? `/thumb/${encodeURIComponent(r.cover_key)}?w=600&q=80` : null,
+      isPrivate: !!r.is_private,
+      createdAt: r.created_at,
+    }));
+    return new Response(JSON.stringify({ albums }), {
+      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+    });
+  }
+
+  if (request.method === "POST") {
+    const denied = adminGuard(request, env);
+    if (denied) return denied;
+    let body;
+    try { body = await request.json(); } catch { return new Response("Bad Request", { status: 400 }); }
+    const title = (body.title || "").trim();
+    const slug = (body.slug || "").trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+    if (!title || !slug) return new Response(JSON.stringify({ error: "title and slug required" }), { status: 400, headers: { "content-type": "application/json; charset=utf-8" } });
+    const isPrivate = body.is_private ? 1 : 0;
+    const passwordHash = (isPrivate && body.password) ? await sha256hex(body.password) : null;
+    const now = new Date().toISOString();
+    try {
+      const { meta } = await env.DB.prepare(
+        "INSERT INTO albums (slug, title, description, cover_key, is_private, password_hash, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)"
+      ).bind(slug, title, body.description || null, body.cover_key || null, isPrivate, passwordHash, now, now).run();
+      return new Response(JSON.stringify({ ok: true, slug, id: meta.last_row_id }), {
+        status: 201, headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    } catch (e) {
+      if (String(e).includes("UNIQUE")) return new Response(JSON.stringify({ error: "slug already taken" }), { status: 409, headers: { "content-type": "application/json; charset=utf-8" } });
+      throw e;
+    }
+  }
+
+  return new Response("Method Not Allowed", { status: 405 });
+}
+
+// ── 相簿详情 / 修改 / 删除 / 照片管理 ─────────────────────────────────────────
+async function handleAlbumBySlug(request, env, url) {
+  await ensureAlbumTables(env);
+  // URL: /api/albums/:slug  or  /api/albums/:slug/photos
+  const rest = url.pathname.slice("/api/albums/".length); // "my-slug" or "my-slug/photos"
+  const slashPos = rest.indexOf("/");
+  const slug = slashPos === -1 ? rest : rest.slice(0, slashPos);
+  const subPath = slashPos === -1 ? "" : rest.slice(slashPos + 1);
+
+  if (!slug) return new Response("Not Found", { status: 404 });
+
+  const album = await env.DB.prepare("SELECT * FROM albums WHERE slug = ?").bind(slug).first();
+  if (!album) return new Response(JSON.stringify({ error: "Album not found" }), { status: 404, headers: { "content-type": "application/json; charset=utf-8" } });
+
+  // ── /api/albums/:slug/photos ────────────────────────────────────────────────
+  if (subPath === "photos") {
+    const denied = adminGuard(request, env);
+    if (denied) return denied;
+
+    if (request.method === "POST") {
+      let body;
+      try { body = await request.json(); } catch { return new Response("Bad Request", { status: 400 }); }
+      const now = new Date().toISOString();
+      let keys = [];
+
+      if (Array.isArray(body.keys) && body.keys.length > 0) {
+        // 手动指定 key 列表
+        keys = body.keys.map((k) => String(k)).filter(Boolean);
+      } else if (body.date_from && body.date_to) {
+        // 日期范围批量：查 photos_index，只取图片
+        const { results } = await env.DB.prepare(
+          "SELECT key FROM photos_index WHERE (year || '-' || month || '-' || day) BETWEEN ? AND ? ORDER BY year, month, day"
+        ).bind(body.date_from, body.date_to).all();
+        keys = results.map((r) => r.key);
+      } else {
+        return new Response(JSON.stringify({ error: "keys array or date_from/date_to required" }), { status: 400, headers: { "content-type": "application/json; charset=utf-8" } });
+      }
+
+      if (!keys.length) return new Response(JSON.stringify({ ok: true, added: 0 }), { headers: { "content-type": "application/json; charset=utf-8" } });
+
+      // 查现有最大 sort_order
+      const { results: sortRows } = await env.DB.prepare(
+        "SELECT MAX(sort_order) AS mx FROM album_photos WHERE album_id = ?"
+      ).bind(album.id).all();
+      let sortBase = (sortRows[0]?.mx ?? -1) + 1;
+
+      const stmts = keys.map((k, i) =>
+        env.DB.prepare("INSERT OR IGNORE INTO album_photos (album_id, photo_key, sort_order, added_at) VALUES (?,?,?,?)")
+          .bind(album.id, k, sortBase + i, now)
+      );
+      // 批量写入，100 条一批
+      for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+
+      // 如果还没设封面，取第一张图片作封面
+      if (!album.cover_key) {
+        const first = await env.DB.prepare(
+          "SELECT ap.photo_key FROM album_photos ap JOIN photos_index pi ON pi.key = ap.photo_key WHERE ap.album_id = ? AND pi.type = 'image' ORDER BY ap.sort_order LIMIT 1"
+        ).bind(album.id).first();
+        if (first) {
+          await env.DB.prepare("UPDATE albums SET cover_key = ?, updated_at = ? WHERE id = ?")
+            .bind(first.photo_key, now, album.id).run();
+        }
+      }
+      return new Response(JSON.stringify({ ok: true, added: keys.length }), { headers: { "content-type": "application/json; charset=utf-8" } });
+    }
+
+    if (request.method === "DELETE") {
+      let body;
+      try { body = await request.json(); } catch { return new Response("Bad Request", { status: 400 }); }
+      const key = String(body.key || "");
+      if (!key) return new Response("Bad Request", { status: 400 });
+      await env.DB.prepare("DELETE FROM album_photos WHERE album_id = ? AND photo_key = ?").bind(album.id, key).run();
+      return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json; charset=utf-8" } });
+    }
+
+    return new Response("Method Not Allowed", { status: 405 });
+  }
+
+  // ── /api/albums/:slug ────────────────────────────────────────────────────────
+  if (request.method === "GET") {
+    // 密码验证
+    if (album.is_private) {
+      const suppliedPw = request.headers.get("x-album-password") || url.searchParams.get("pw") || "";
+      const suppliedHash = suppliedPw ? await sha256hex(suppliedPw) : "";
+      const adminToken = url.searchParams.get("token") || request.headers.get("x-admin-token");
+      const isAdmin = env.ADMIN_TOKEN && adminToken === env.ADMIN_TOKEN;
+      if (!isAdmin && suppliedHash !== album.password_hash) {
+        return new Response(JSON.stringify({ error: "password_required" }), {
+          status: 401, headers: { "content-type": "application/json; charset=utf-8" },
+        });
+      }
+    }
+
+    const { results: apRows } = await env.DB.prepare(
+      "SELECT photo_key FROM album_photos WHERE album_id = ? ORDER BY sort_order, added_at"
+    ).bind(album.id).all();
+    const photoKeys = apRows.map((r) => r.photo_key);
+    const photos = await buildAlbumPhotos(env, photoKeys);
+
+    return new Response(JSON.stringify({
+      slug: album.slug,
+      title: album.title,
+      description: album.description || "",
+      coverUrl: album.cover_key ? `/thumb/${encodeURIComponent(album.cover_key)}?w=600&q=80` : null,
+      isPrivate: !!album.is_private,
+      createdAt: album.created_at,
+      photos,
+    }), { headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
+  }
+
+  if (request.method === "PATCH") {
+    const denied = adminGuard(request, env);
+    if (denied) return denied;
+    let body;
+    try { body = await request.json(); } catch { return new Response("Bad Request", { status: 400 }); }
+    const now = new Date().toISOString();
+    const updates = [];
+    const binds = [];
+    if (typeof body.title === "string") { updates.push("title = ?"); binds.push(body.title.trim()); }
+    if (typeof body.description === "string") { updates.push("description = ?"); binds.push(body.description || null); }
+    if (typeof body.cover_key === "string") { updates.push("cover_key = ?"); binds.push(body.cover_key || null); }
+    if (typeof body.is_private === "boolean") {
+      updates.push("is_private = ?"); binds.push(body.is_private ? 1 : 0);
+      if (body.is_private && body.password) {
+        updates.push("password_hash = ?"); binds.push(await sha256hex(body.password));
+      } else if (!body.is_private) {
+        updates.push("password_hash = ?"); binds.push(null);
+      }
+    }
+    if (!updates.length) return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json; charset=utf-8" } });
+    updates.push("updated_at = ?"); binds.push(now); binds.push(album.id);
+    await env.DB.prepare(`UPDATE albums SET ${updates.join(", ")} WHERE id = ?`).bind(...binds).run();
+    return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json; charset=utf-8" } });
+  }
+
+  if (request.method === "DELETE") {
+    const denied = adminGuard(request, env);
+    if (denied) return denied;
+    await env.DB.prepare("DELETE FROM albums WHERE id = ?").bind(album.id).run();
+    return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json; charset=utf-8" } });
+  }
+
+  return new Response("Method Not Allowed", { status: 405 });
+}
+
+// ── 相簿管理后台 HTML ──────────────────────────────────────────────────────────
+async function handleAdminAlbums(request, env, url) {
+  const denied = adminGuard(request, env);
+  if (denied) return new Response("Forbidden — ?token=ADMIN_TOKEN required", { status: 403, headers: { "content-type": "text/plain; charset=utf-8" } });
+  return new Response(ADMIN_ALBUMS_HTML(url.searchParams.get("token")), {
+    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+  });
+}
+
 // 北京时间（UTC+8）的今天，返回 { month: "MM", day: "DD" }
 function bjToday() {
   const bj = new Date(Date.now() + 8 * 60 * 60 * 1000);
@@ -515,6 +812,280 @@ async function handleRecap(request, env, url) {
   });
   await cache.put(cacheKey, response.clone());
   return response;
+}
+
+function ADMIN_ALBUMS_HTML(token) {
+  const t = JSON.stringify(token || "");
+  return `<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>相簿管理 · 那年今日</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}
+body{margin:0;background:#0a0a0e;color:#f5f5f7;font-family:"SF Pro Display",-apple-system,"PingFang SC",sans-serif;padding:1.5rem}
+h1{font-size:1.4rem;font-weight:700;margin:0 0 1.5rem}
+.card{background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:1.2rem;margin-bottom:1rem}
+label{display:block;font-size:.75rem;color:#8a8a8f;margin-bottom:.3rem}
+input,textarea,select{width:100%;background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:.55rem .75rem;color:#f5f5f7;font-size:.88rem;outline:none;margin-bottom:.8rem}
+input:focus,textarea:focus{border-color:rgba(255,255,255,0.35)}
+textarea{resize:vertical;min-height:70px}
+button{padding:.5rem 1.1rem;border-radius:8px;border:none;cursor:pointer;font-size:.85rem;font-weight:600}
+.btn-primary{background:#3a82f7;color:#fff}
+.btn-danger{background:rgba(255,59,48,0.8);color:#fff;float:right}
+.btn-sm{padding:.3rem .7rem;font-size:.75rem;border-radius:6px;background:rgba(255,255,255,0.1);color:#f5f5f7;margin-left:.4rem}
+.album-row{display:flex;align-items:center;gap:.8rem;padding:.7rem .9rem;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);border-radius:10px;margin-bottom:.5rem}
+.album-thumb{width:52px;height:52px;border-radius:8px;object-fit:cover;background:#111;flex-shrink:0}
+.album-info{flex:1;min-width:0}
+.album-title{font-weight:600;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.album-meta{font-size:.7rem;color:#8a8a8f;margin-top:.15rem}
+.tag{display:inline-block;padding:.1rem .5rem;border-radius:999px;font-size:.65rem;background:rgba(255,255,255,0.1);margin-right:.3rem}
+.tag.private{background:rgba(255,180,0,0.2);color:#ffbb33}
+.section{margin-bottom:1.5rem}
+h2{font-size:1rem;font-weight:600;margin:0 0 .8rem;color:#c7c7cc}
+.field-row{display:grid;grid-template-columns:1fr 1fr;gap:.8rem}
+@media(max-width:600px){.field-row{grid-template-columns:1fr}}
+.msg{padding:.5rem .9rem;border-radius:8px;font-size:.82rem;margin-bottom:.8rem;display:none}
+.msg.ok{background:rgba(52,199,89,0.18);color:#34c759;display:block}
+.msg.err{background:rgba(255,59,48,0.18);color:#ff3b30;display:block}
+#albums-list{min-height:40px}
+.detail-panel{display:none;margin-top:1rem;padding:1rem;background:rgba(0,0,0,0.3);border-radius:10px;border:1px solid rgba(255,255,255,0.07)}
+.detail-panel.open{display:block}
+</style>
+</head>
+<body>
+<h1>📁 相簿管理</h1>
+
+<div class="section">
+  <h2>新建相簿</h2>
+  <div class="card">
+    <div id="createMsg" class="msg"></div>
+    <div class="field-row">
+      <div>
+        <label>标题 *</label>
+        <input id="newTitle" placeholder="夏天的旅行" />
+      </div>
+      <div>
+        <label>标识符 (slug) *</label>
+        <input id="newSlug" placeholder="summer-trip" />
+      </div>
+    </div>
+    <label>简介</label>
+    <textarea id="newDesc" placeholder="可选"></textarea>
+    <div class="field-row">
+      <div>
+        <label>是否私密</label>
+        <select id="newPrivate"><option value="0">公开</option><option value="1">私密（需密码）</option></select>
+      </div>
+      <div>
+        <label>密码（私密时必填）</label>
+        <input id="newPw" type="password" placeholder="可选" />
+      </div>
+    </div>
+    <button class="btn-primary" onclick="createAlbum()">创建</button>
+  </div>
+</div>
+
+<div class="section">
+  <h2>已有相簿</h2>
+  <div id="albums-list"><div style="color:#8a8a8f;font-size:.85rem">加载中…</div></div>
+</div>
+
+<!-- 编辑 / 加照片面板（动态填充） -->
+<div id="detailPanel" class="detail-panel">
+  <h2 id="dpTitle"></h2>
+  <div id="dpMsg" class="msg"></div>
+
+  <div style="margin-bottom:1rem">
+    <h3 style="font-size:.85rem;font-weight:600;color:#c7c7cc;margin:0 0 .6rem">修改信息</h3>
+    <div class="field-row">
+      <div><label>标题</label><input id="dpEditTitle" /></div>
+      <div><label>简介</label><input id="dpEditDesc" /></div>
+    </div>
+    <div class="field-row">
+      <div>
+        <label>密码（留空不修改）</label>
+        <input id="dpEditPw" type="password" placeholder="留空=不修改" />
+      </div>
+      <div>
+        <label>是否私密</label>
+        <select id="dpEditPrivate"><option value="0">公开</option><option value="1">私密</option></select>
+      </div>
+    </div>
+    <button class="btn-primary btn-sm" onclick="saveAlbum()">保存</button>
+    <button class="btn-danger btn-sm" onclick="deleteAlbum()">删除相簿</button>
+  </div>
+
+  <hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:1rem 0" />
+
+  <div style="margin-bottom:1rem">
+    <h3 style="font-size:.85rem;font-weight:600;color:#c7c7cc;margin:0 0 .6rem">添加照片 — 手动指定 Key</h3>
+    <textarea id="dpKeys" placeholder="每行一个 photo key，例如：&#10;Photos/MobileBackup/iPhone/2023/07/IMG_1234.JPG" style="min-height:90px"></textarea>
+    <button class="btn-sm btn-primary" onclick="addByKeys()">添加</button>
+  </div>
+
+  <div>
+    <h3 style="font-size:.85rem;font-weight:600;color:#c7c7cc;margin:0 0 .6rem">添加照片 — 日期范围（YYYY-MM-DD）</h3>
+    <div class="field-row">
+      <div><label>开始日期</label><input type="date" id="dpDateFrom" /></div>
+      <div><label>结束日期</label><input type="date" id="dpDateTo" /></div>
+    </div>
+    <button class="btn-sm btn-primary" onclick="addByDateRange()">添加范围内所有照片</button>
+  </div>
+
+  <div id="dpPhotosWrap" style="margin-top:1rem"></div>
+</div>
+
+<script>
+var TOKEN = ${t};
+var currentSlug = null;
+
+function apiHeaders() {
+  return { 'content-type': 'application/json', 'x-admin-token': TOKEN };
+}
+
+function showMsg(el, type, text) {
+  el.className = 'msg ' + type;
+  el.textContent = text;
+  setTimeout(function() { el.className = 'msg'; }, 4000);
+}
+
+function loadAlbums() {
+  fetch('/api/albums').then(function(r){ return r.json(); }).then(function(data) {
+    var list = document.getElementById('albums-list');
+    if (!data.albums.length) { list.innerHTML = '<div style="color:#8a8a8f;font-size:.85rem">还没有相簿</div>'; return; }
+    list.innerHTML = data.albums.map(function(a) {
+      var thumb = a.coverUrl ? '<img class="album-thumb" src="'+a.coverUrl+'" />' : '<div class="album-thumb"></div>';
+      var tags = (a.isPrivate ? '<span class="tag private">🔒 私密</span>' : '<span class="tag">公开</span>');
+      return '<div class="album-row" onclick="openAlbum('+JSON.stringify(a.slug)+')" style="cursor:pointer">' +
+        thumb +
+        '<div class="album-info"><div class="album-title">'+a.title+'</div>' +
+        '<div class="album-meta">'+tags+' '+a.slug+'</div></div>' +
+        '</div>';
+    }).join('');
+  }).catch(function(e){ document.getElementById('albums-list').innerHTML = '<div style="color:#ff3b30">加载失败</div>'; });
+}
+
+function createAlbum() {
+  var title = document.getElementById('newTitle').value.trim();
+  var slug = document.getElementById('newSlug').value.trim();
+  var desc = document.getElementById('newDesc').value.trim();
+  var isPrivate = document.getElementById('newPrivate').value === '1';
+  var pw = document.getElementById('newPw').value;
+  var msg = document.getElementById('createMsg');
+  if (!title || !slug) { showMsg(msg, 'err', 'title 和 slug 必填'); return; }
+  fetch('/api/albums', {
+    method: 'POST',
+    headers: apiHeaders(),
+    body: JSON.stringify({ title: title, slug: slug, description: desc, is_private: isPrivate, password: pw })
+  }).then(function(r){ return r.json(); }).then(function(d) {
+    if (d.ok) { showMsg(msg, 'ok', '创建成功！'); loadAlbums(); }
+    else showMsg(msg, 'err', d.error || '创建失败');
+  }).catch(function() { showMsg(msg, 'err', '请求失败'); });
+}
+
+function openAlbum(slug) {
+  currentSlug = slug;
+  var panel = document.getElementById('detailPanel');
+  panel.classList.add('open');
+  document.getElementById('dpTitle').textContent = '编辑：' + slug;
+  document.getElementById('dpMsg').className = 'msg';
+  document.getElementById('dpPhotosWrap').innerHTML = '<div style="color:#8a8a8f;font-size:.82rem">加载照片列表…</div>';
+
+  fetch('/api/albums/' + slug, { headers: { 'x-admin-token': TOKEN } })
+    .then(function(r){ return r.json(); })
+    .then(function(d) {
+      document.getElementById('dpEditTitle').value = d.title || '';
+      document.getElementById('dpEditDesc').value = d.description || '';
+      document.getElementById('dpEditPrivate').value = d.isPrivate ? '1' : '0';
+      renderPhotos(d.photos || []);
+    })
+    .catch(function() { document.getElementById('dpPhotosWrap').innerHTML = '<div style="color:#ff3b30">加载失败</div>'; });
+
+  panel.scrollIntoView({ behavior: 'smooth' });
+}
+
+function renderPhotos(photos) {
+  var wrap = document.getElementById('dpPhotosWrap');
+  if (!photos.length) { wrap.innerHTML = '<div style="color:#8a8a8f;font-size:.82rem">暂无照片</div>'; return; }
+  wrap.innerHTML = '<div style="font-size:.8rem;color:#8a8a8f;margin-bottom:.5rem">' + photos.length + ' 张照片：</div>' +
+    '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
+    photos.map(function(p) {
+      return '<div style="position:relative;width:72px;height:72px">' +
+        '<img src="/thumb/'+encodeURIComponent(p.key)+'?w=144&q=70" style="width:72px;height:72px;object-fit:cover;border-radius:6px;background:#111" />' +
+        '<button onclick="removePhoto('+JSON.stringify(p.key)+')" style="position:absolute;top:2px;right:2px;background:rgba(0,0,0,.7);color:#fff;border:none;border-radius:50%;width:18px;height:18px;font-size:10px;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center">×</button>' +
+        '</div>';
+    }).join('') + '</div>';
+}
+
+function removePhoto(key) {
+  if (!currentSlug || !confirm('从相簿中移除这张照片？')) return;
+  fetch('/api/albums/' + currentSlug + '/photos', {
+    method: 'DELETE',
+    headers: apiHeaders(),
+    body: JSON.stringify({ key: key })
+  }).then(function(r){ return r.json(); }).then(function(d) {
+    if (d.ok) openAlbum(currentSlug);
+  });
+}
+
+function saveAlbum() {
+  if (!currentSlug) return;
+  var body = {
+    title: document.getElementById('dpEditTitle').value.trim(),
+    description: document.getElementById('dpEditDesc').value.trim(),
+    is_private: document.getElementById('dpEditPrivate').value === '1',
+  };
+  var pw = document.getElementById('dpEditPw').value;
+  if (pw) body.password = pw;
+  var msg = document.getElementById('dpMsg');
+  fetch('/api/albums/' + currentSlug, { method: 'PATCH', headers: apiHeaders(), body: JSON.stringify(body) })
+    .then(function(r){ return r.json(); })
+    .then(function(d){ if (d.ok) { showMsg(msg, 'ok', '已保存'); loadAlbums(); } else showMsg(msg, 'err', d.error || '失败'); })
+    .catch(function(){ showMsg(msg, 'err', '请求失败'); });
+}
+
+function deleteAlbum() {
+  if (!currentSlug || !confirm('确认删除相簿「' + currentSlug + '」？照片不会被删除，只是移出相簿。')) return;
+  fetch('/api/albums/' + currentSlug, { method: 'DELETE', headers: apiHeaders() })
+    .then(function(r){ return r.json(); })
+    .then(function(d) {
+      if (d.ok) {
+        document.getElementById('detailPanel').classList.remove('open');
+        currentSlug = null;
+        loadAlbums();
+      }
+    });
+}
+
+function addByKeys() {
+  if (!currentSlug) return;
+  var keys = document.getElementById('dpKeys').value.trim().split(/\n+/).map(function(k){ return k.trim(); }).filter(Boolean);
+  var msg = document.getElementById('dpMsg');
+  if (!keys.length) { showMsg(msg, 'err', '请填写至少一个 key'); return; }
+  fetch('/api/albums/' + currentSlug + '/photos', { method: 'POST', headers: apiHeaders(), body: JSON.stringify({ keys: keys }) })
+    .then(function(r){ return r.json(); })
+    .then(function(d){ if (d.ok) { showMsg(msg, 'ok', '已添加 '+d.added+' 张'); document.getElementById('dpKeys').value = ''; openAlbum(currentSlug); } else showMsg(msg, 'err', d.error || '失败'); })
+    .catch(function(){ showMsg(msg, 'err', '请求失败'); });
+}
+
+function addByDateRange() {
+  if (!currentSlug) return;
+  var from = document.getElementById('dpDateFrom').value;
+  var to = document.getElementById('dpDateTo').value;
+  var msg = document.getElementById('dpMsg');
+  if (!from || !to) { showMsg(msg, 'err', '请填写开始和结束日期'); return; }
+  fetch('/api/albums/' + currentSlug + '/photos', { method: 'POST', headers: apiHeaders(), body: JSON.stringify({ date_from: from, date_to: to }) })
+    .then(function(r){ return r.json(); })
+    .then(function(d){ if (d.ok) { showMsg(msg, 'ok', '已添加 '+d.added+' 张'); openAlbum(currentSlug); } else showMsg(msg, 'err', d.error || '失败'); })
+    .catch(function(){ showMsg(msg, 'err', '请求失败'); });
+}
+
+document.addEventListener('DOMContentLoaded', loadAlbums);
+</script>
+</body>
+</html>`;
 }
 
 const RECAP_HTML = `<!doctype html>
