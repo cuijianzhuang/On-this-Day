@@ -756,12 +756,40 @@
     body.lb-open.custom-cursor-active #lightboxBody.zoomed.panning * { cursor: grabbing !important; }
   }
 
-  /* 顶部实况指示条：已弃用（"实况"角标像苹果相册一样直接叠在照片上），空时隐藏 */
+  /* 左上角实况指示条（页面角落、照片外）：像素级复刻 lens.bh8.ga——
+     无底色白色「实况」角标 + 描边小喇叭，悬停角标才播放，空时隐藏 */
   .lb-live-bar:empty { display: none; }
   .lb-live-bar {
-    position: fixed; top: 1rem; left: 1rem; z-index: 52;
-    display: flex; align-items: center; gap: 0.45rem;
+    position: fixed; top: 1.1rem; left: 1.2rem; z-index: 52;
+    display: flex; align-items: center; gap: 0.55rem;
+    transition: opacity 0.3s ease;
   }
+  .lp-live-badge {
+    display: inline-flex; align-items: center; gap: 0.34rem;
+    color: #fff; font-size: 0.8rem; font-weight: 600; letter-spacing: 0.04em;
+    cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.45);
+    transition: color 0.15s ease, opacity 0.15s ease;
+    opacity: 0.92;
+  }
+  .lp-live-badge:hover { opacity: 1; }
+  /* 播放中：角标黄色高亮（lens.bh8.ga 播放态）+ 虚线外圈旋转 */
+  .lb-live-bar.playing .lp-live-badge { color: #ffe600; opacity: 1; }
+  .lb-live-bar.playing .lp-live-icon { animation: lpIconSpin 2.4s linear infinite; }
+  @keyframes lpIconSpin { to { transform: rotate(360deg); } }
+  .live-photo-mute {
+    border: none; background: none; padding: 2px; margin: 0;
+    display: inline-flex; color: #fff; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    filter: drop-shadow(0 1px 3px rgba(0,0,0,0.45));
+    opacity: 0.92; transition: opacity 0.15s ease, transform 0.12s ease;
+  }
+  .live-photo-mute:hover { opacity: 1; transform: scale(1.08); }
+  .live-photo-mute:active { transform: scale(0.94); }
+  .live-photo-mute svg { width: 17px; height: 17px; display: block; }
+  .live-photo-mute .lp-snd-off { display: none; }
+  .live-photo-mute.muted .lp-snd-off { display: initial; }
+  .live-photo-mute.muted .lp-snd-wave { display: none; }
 
   /* 底部提示 + 表态栏包装（桌面：覆盖整个舞台；移动：fixed 底部条） */
   .lb-bottom-bar {
@@ -843,41 +871,8 @@
   }
   .live-photo-wrap.playing .live-photo-video { opacity: 1; }
   .live-photo-wrap.playing img { opacity: 0; }
-  /* 左上角指示条：「实况」角标 + 声音开关（参考 lens.bh8.ga，悬停角标才播放） */
-  .live-photo-topbar {
-    position: absolute; top: 0.7rem; left: 0.8rem; z-index: 2;
-    display: flex; align-items: center; gap: 0.4rem;
-    transition: opacity 0.3s ease;
-  }
-  .live-photo-badge {
-    display: flex; align-items: center; gap: 0.3rem;
-    padding: 0.24rem 0.6rem 0.24rem 0.4rem; border-radius: 999px;
-    background: rgba(60,60,66,0.55); backdrop-filter: blur(14px) saturate(1.4);
-    color: #fff; font-size: 0.7rem; font-weight: 600;
-    letter-spacing: 0.04em;
-    cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
-    transition: background 0.15s ease, color 0.15s ease;
-  }
-  .live-photo-badge:hover { background: rgba(90,90,98,0.7); }
-  /* 播放中角标黄色高亮（lens.bh8.ga 同款播放态） */
-  .live-photo-wrap.playing .live-photo-badge {
-    background: rgba(255,230,0,0.16); color: #ffe600;
-  }
-  .live-photo-mute {
-    width: 27px; height: 27px; border: none; border-radius: 50%; padding: 0;
-    display: flex; align-items: center; justify-content: center;
-    background: rgba(60,60,66,0.55); backdrop-filter: blur(14px) saturate(1.4);
-    color: #fff; cursor: pointer; -webkit-tap-highlight-color: transparent;
-    transition: background 0.15s ease, transform 0.12s ease;
-  }
-  .live-photo-mute::before { content: '🔊'; font-size: 0.78rem; line-height: 1; }
-  .live-photo-mute.muted::before { content: '🔇'; }
-  .live-photo-mute:hover { background: rgba(90,90,98,0.7); transform: scale(1.06); }
-  .live-photo-mute:active { transform: scale(0.94); }
   /* Apple Live Photo 图标：虚线外圈 + 实线内圈 + 中心点（SVG 绘制） */
   .lp-live-icon { width: 15px; height: 15px; flex-shrink: 0; display: block; }
-  .live-photo-wrap.playing .lp-live-icon { animation: lpIconSpin 2.4s linear infinite; }
-  @keyframes lpIconSpin { to { transform: rotate(360deg); } }
   .lightbox-actions {
     position: absolute; top: 1rem; right: 1rem; z-index: 52;
     display: flex; gap: 0.5rem; align-items: center;
@@ -1078,8 +1073,8 @@
     }
     .lightbox-btn { width: 36px; height: 36px; }
 
-    /* 顶栏左侧空占位（实况角标已叠在照片上），flex:1 把操作按钮推到右边 */
-    .lb-live-bar, .lb-live-bar:empty { position: static; display: flex; flex: 1; }
+    /* 实况角标 + 声音开关放进顶栏左侧，flex:1 把操作按钮推到右边 */
+    .lb-live-bar, .lb-live-bar:empty { position: static; display: flex; flex: 1; align-items: center; }
 
     /* 隐藏左右箭头（用滑动代替） */
     .lightbox-nav { display: none; }
