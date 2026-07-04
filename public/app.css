@@ -60,6 +60,12 @@
     object-fit: cover; opacity: 0.4; mix-blend-mode: screen;
     filter: blur(1px) saturate(1.15);
   }
+  /* iOS 低电量模式会拒绝 autoplay 并在视频中央画系统播放按钮——装饰性背景绝不能出现这个，
+     把 WebKit 的原生播放控件整个藏掉（JS 里还有一层兜底：播放失败直接隐藏视频元素） */
+  #leafVideo::-webkit-media-controls,
+  #leafVideo::-webkit-media-controls-start-playback-button {
+    display: none !important; -webkit-appearance: none;
+  }
   @keyframes driftGlow {
     0%, 100% { transform: translate(0, 0) scale(1); }
     50% { transform: translate(3%, 2%) scale(1.05); }
@@ -333,9 +339,17 @@
     padding: 0.3rem 0.85rem; border-radius: 999px; cursor: pointer;
     -webkit-tap-highlight-color: transparent;
     transition: background 0.15s ease, color 0.15s ease;
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    max-width: min(88vw, 560px);
   }
   .otd-toggle:hover { background: rgba(255,255,255,0.13); color: #d8d8dc; }
-  .otd-arrow { display: inline-block; margin-left: 0.35rem; transition: transform 0.2s ease; }
+  /* 折叠态单条轮播：长事件截断成省略号，切换时先淡出再换字淡入 */
+  .otd-ticker-text {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    transition: opacity 0.25s ease;
+  }
+  .otd-ticker-text.otd-fading { opacity: 0; }
+  .otd-arrow { display: inline-block; flex-shrink: 0; transition: transform 0.2s ease; }
   .otd-toggle.open .otd-arrow { transform: rotate(180deg); }
   .otd-list {
     margin-top: 0.6rem; text-align: left;
@@ -343,6 +357,9 @@
     padding: 0.7rem 0.9rem; border-radius: 12px;
     background: rgba(255,255,255,0.04);
   }
+  /* display:flex 会盖掉 hidden 属性的 UA 默认 display:none，必须显式补回来，
+     不然列表永远展开、点按钮也收不回去 */
+  .otd-list[hidden], .otd[hidden] { display: none; }
   .otd-item { font-size: 0.76rem; color: #a8a8ad; line-height: 1.6; }
   .otd-year {
     color: #d8b96a; font-weight: 600; margin-right: 0.4em;
