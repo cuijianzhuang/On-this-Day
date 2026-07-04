@@ -76,8 +76,8 @@
     const lat = Number(p.lat), lon = Number(p.lon);
     const name = p.key.split('/').pop().replace(/\.[^.]+$/, '').replace(/_/g, ' ');
     const sub = [p.name, fmtDate(p)].filter(Boolean).join(' · ');
-    const coordStr = (lat >= 0 ? '北纬 ' : '南纬 ') + Math.abs(lat).toFixed(4) + '°，'
-      + (lon >= 0 ? '东经 ' : '西经 ') + Math.abs(lon).toFixed(4) + '°';
+    const coordStr = lat.toFixed(4) + '°' + (lat >= 0 ? 'N' : 'S') + '，'
+      + lon.toFixed(4) + '°' + (lon >= 0 ? 'E' : 'W');
     const dayHref = '/?month=' + photoMonth(p) + '&day=' + photoDay(p);
     const thumb = p.url.replace('/img/', '/thumb/') + '?w=480&h=340&q=80&fit=cover';
     const media = p.type === 'video'
@@ -116,7 +116,7 @@
           }
           if (exif.altitude !== undefined) {
             rows.insertAdjacentHTML('beforeend',
-              '<div class="pp-row">' + ICON_ALT + '<span>' + esc(exif.altitude.toFixed(1)) + ' 米</span></div>');
+              '<div class="pp-row">' + ICON_ALT + '<span>' + esc(exif.altitude.toFixed(1)) + 'm</span></div>');
           }
         })
         .catch(() => {});
