@@ -237,6 +237,7 @@ async function tgPhotoUrl(env, key) {
 
 // 支持 TELEGRAM_CHAT_ID 为单个 ID 或逗号分隔多个 ID
 function tgChatIds(env) {
+  if (!env.TELEGRAM_CHAT_ID) return [];
   return String(env.TELEGRAM_CHAT_ID)
     .split(",")
     .map((s) => s.trim())
