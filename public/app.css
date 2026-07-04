@@ -60,6 +60,12 @@
     object-fit: cover; opacity: 0.4; mix-blend-mode: screen;
     filter: blur(1px) saturate(1.15);
   }
+  /* iOS 低电量模式会拒绝 autoplay 并在视频中央画系统播放按钮——装饰性背景绝不能出现这个，
+     把 WebKit 的原生播放控件整个藏掉（JS 里还有一层兜底：播放失败直接隐藏视频元素） */
+  #leafVideo::-webkit-media-controls,
+  #leafVideo::-webkit-media-controls-start-playback-button {
+    display: none !important; -webkit-appearance: none;
+  }
   @keyframes driftGlow {
     0%, 100% { transform: translate(0, 0) scale(1); }
     50% { transform: translate(3%, 2%) scale(1.05); }

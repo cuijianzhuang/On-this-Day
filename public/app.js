@@ -666,6 +666,18 @@
   sunlight.classList.add('on');
   ambientAudio.volume = 0.5;
   ambientAudio.play().catch(() => {});
+
+  // 背景叶影视频：iOS 低电量模式禁止 autoplay 且会画系统 ▶ 按钮。播放失败就把视频藏掉
+  // （光斑 glow 层照常，氛围不塌），等用户第一次触摸/点击（此时允许播放了）再恢复
+  const leafVideo = document.getElementById('leafVideo');
+  if (leafVideo) {
+    const tryPlayLeaf = () => {
+      leafVideo.play().then(() => { leafVideo.style.display = ''; }).catch(() => { leafVideo.style.display = 'none'; });
+    };
+    tryPlayLeaf();
+    window.addEventListener('touchend', tryPlayLeaf, { once: true, passive: true });
+    window.addEventListener('click', tryPlayLeaf, { once: true });
+  }
   sunlightSwitch.onchange = () => {
     document.body.classList.toggle('sun-on', sunlightSwitch.checked);
     sunlight.classList.toggle('on', sunlightSwitch.checked);
