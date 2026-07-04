@@ -235,6 +235,14 @@ async function tgPhotoUrl(env, key) {
   return `${env.PREVIEWS_PUBLIC_URL}/${thumbKey.split("/").map(encodeURIComponent).join("/")}`;
 }
 
+// 支持 TELEGRAM_CHAT_ID 为单个 ID 或逗号分隔多个 ID
+function tgChatIds(env) {
+  return String(env.TELEGRAM_CHAT_ID)
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 async function sendDailyMemories(env) {
   if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) {
     console.log("sendDailyMemories: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set, skipping");
@@ -305,36 +313,39 @@ async function sendDailyMemories(env) {
   ].filter((l) => l !== null).join("\n");
 
   const tgBase = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`;
+  const chatIds = tgChatIds(env);
 
-  let resp;
-  if (photos.length === 1) {
-    resp = await fetch(`${tgBase}/sendPhoto`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: env.TELEGRAM_CHAT_ID,
-        photo: photos[0].photoUrl,
-        caption,
-      }),
-    });
-  } else {
-    const media = photos.map((p, i) => ({
-      type: "photo",
-      media: p.photoUrl,
-      ...(i === 0 ? { caption } : {}),
-    }));
-    resp = await fetch(`${tgBase}/sendMediaGroup`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, media }),
-    });
-  }
+  for (const chatId of chatIds) {
+    let resp;
+    if (photos.length === 1) {
+      resp = await fetch(`${tgBase}/sendPhoto`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          photo: photos[0].photoUrl,
+          caption,
+        }),
+      });
+    } else {
+      const media = photos.map((p, i) => ({
+        type: "photo",
+        media: p.photoUrl,
+        ...(i === 0 ? { caption } : {}),
+      }));
+      resp = await fetch(`${tgBase}/sendMediaGroup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, media }),
+      });
+    }
 
-  if (!resp.ok) {
-    const body = await resp.text();
-    console.error("sendDailyMemories: Telegram API error", resp.status, body);
-  } else {
-    console.log(`sendDailyMemories: sent ${photos.length} photos for ${month}-${day}`);
+    if (!resp.ok) {
+      const body = await resp.text();
+      console.error(`sendDailyMemories: Telegram API error for chat ${chatId}`, resp.status, body);
+    } else {
+      console.log(`sendDailyMemories: sent ${photos.length} photos for ${month}-${day} → chat ${chatId}`);
+    }
   }
 }
 // ─────────────────────────────────────────────────────────────────────────────
@@ -908,34 +919,40 @@ async function flushPendingNotifications(env) {
   const { month, day } = bjToday();
   const caption = `📸 今天新增 ${photoKeys.length} 张照片\n🔗 ${SITE_ORIGIN}/?month=${month}&day=${day}`;
   const tgBase = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`;
+  const chatIds = tgChatIds(env);
 
-  let resp;
-  if (media.length === 0) {
-    // 全部生成失败——退化为纯文本，至少让人知道有新照片
-    resp = await fetch(`${tgBase}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: caption }),
-    });
-  } else if (media.length === 1) {
-    resp = await fetch(`${tgBase}/sendPhoto`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, photo: media[0].media, caption }),
-    });
-  } else {
-    media[0].caption = caption;
-    resp = await fetch(`${tgBase}/sendMediaGroup`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, media }),
-    });
+  let anyFailed = false;
+  for (const chatId of chatIds) {
+    let resp;
+    if (media.length === 0) {
+      // 全部生成失败——退化为纯文本，至少让人知道有新照片
+      resp = await fetch(`${tgBase}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text: caption }),
+      });
+    } else if (media.length === 1) {
+      resp = await fetch(`${tgBase}/sendPhoto`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, photo: media[0].media, caption }),
+      });
+    } else {
+      const mediaWithCaption = media.map((m, i) => (i === 0 ? { ...m, caption } : m));
+      resp = await fetch(`${tgBase}/sendMediaGroup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, media: mediaWithCaption }),
+      });
+    }
+
+    if (!resp.ok) {
+      console.error(`flushPendingNotifications: Telegram API error for chat ${chatId}`, resp.status, await resp.text());
+      anyFailed = true;
+    }
   }
 
-  if (!resp.ok) {
-    console.error("flushPendingNotifications: Telegram API error", resp.status, await resp.text());
-    return; // 失败保留队列，下一趟 Cron 重试
-  }
+  if (anyFailed) return; // 有失败则保留队列，下一趟 Cron 重试
   const placeholders = metaKeys.map(() => "?").join(",");
   await env.DB.prepare(`DELETE FROM meta WHERE key IN (${placeholders})`).bind(...metaKeys).run();
   console.log(`flushPendingNotifications: notified ${photoKeys.length} new photos`);
