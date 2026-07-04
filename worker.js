@@ -948,12 +948,16 @@ async function flushPendingNotifications(env) {
     }
 
     if (!resp.ok) {
-      console.error(`flushPendingNotifications: Telegram API error for chat ${chatId}`, resp.status, await resp.text());
-      anyFailed = true;
+      const errText = await resp.text();
+      console.error(`flushPendingNotifications: Telegram API error for chat ${chatId}`, resp.status, errText);
+      // 5xx / 429 是临时性错误，保留队列下趟重试；400 / 403 / 404 是永久性错误，不阻塞队列清理
+      if (resp.status >= 500 || resp.status === 429) {
+        anyFailed = true;
+      }
     }
   }
 
-  if (anyFailed) return; // 有失败则保留队列，下一趟 Cron 重试
+  if (anyFailed) return; // 有临时性失败，保留队列下一趟 Cron 重试
   const placeholders = metaKeys.map(() => "?").join(",");
   await env.DB.prepare(`DELETE FROM meta WHERE key IN (${placeholders})`).bind(...metaKeys).run();
   console.log(`flushPendingNotifications: notified ${photoKeys.length} new photos`);
