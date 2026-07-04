@@ -1077,26 +1077,42 @@
       video.muted = true;
       video.playsInline = true;
 
-      // 苹果相册同款"实况"角标：虚线外圈 + 实线内圈 + 中心点，叠在照片左上角
+      // 苹果相册同款"实况"角标：虚线外圈 + 实线内圈 + 中心点，叠在照片左上角。
+      // 参考 lens.bh8.ga：悬停角标才播放（鼠标扫过照片不触发），旁边带一个声音开关
       const badge = document.createElement('div');
       badge.className = 'live-photo-badge';
-      badge.style.opacity = '0';
       badge.innerHTML = '<svg class="lp-live-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor"><circle cx="10" cy="10" r="8.25" stroke-width="1.5" stroke-dasharray="1.55 2.75" stroke-linecap="round"/><circle cx="10" cy="10" r="4.9" stroke-width="1.5"/><circle cx="10" cy="10" r="1.9" fill="currentColor" stroke="none"/></svg><span class="lp-live-text">实况</span>';
+
+      const muteBtn = document.createElement('button');
+      muteBtn.className = 'live-photo-mute';
+      muteBtn.type = 'button';
+      const syncMuteBtn = () => {
+        muteBtn.classList.toggle('muted', _lbLiveMuted);
+        muteBtn.title = _lbLiveMuted ? '开启声音' : '关闭声音';
+        muteBtn.setAttribute('aria-label', muteBtn.title);
+      };
+      syncMuteBtn();
+
+      const topbar = document.createElement('div');
+      topbar.className = 'live-photo-topbar';
+      topbar.style.opacity = '0';
+      topbar.appendChild(badge);
+      topbar.appendChild(muteBtn);
 
       const wrap = document.createElement('div');
       wrap.className = 'live-photo-wrap';
       wrap.appendChild(img);
       wrap.appendChild(video);
-      wrap.appendChild(badge);
+      wrap.appendChild(topbar);
       lightboxBody.appendChild(wrap);
 
-      // 苹果相册逻辑：长按/按住 → 从头带声循环播放，松手回到静态；没有声音开关和锁定循环
-      const playLive = ({ muted }) => {
+      const playLive = ({ muted = _lbLiveMuted } = {}) => {
         video.loop = true;
         video.muted = muted;
         video.currentTime = 0;
         wrap.classList.add('playing');
         video.play().catch(() => {
+          // 带声播放被自动播放策略拦下时退回静音预览，不改全局开关状态
           if (!muted) { video.muted = true; video.play().catch(() => {}); }
         });
       };
@@ -1105,12 +1121,21 @@
         wrap.classList.remove('playing');
       };
 
+      // 声音开关：切换全局静音状态；正在播放时立即生效
+      muteBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        _lbLiveMuted = !_lbLiveMuted;
+        syncMuteBtn();
+        if (wrap.classList.contains('playing')) video.muted = _lbLiveMuted;
+      });
+
       // 图片加载完成后自动播一次（静音），和苹果相册滑到实况照片时一样
       const liveSrc = p.url.replace('/img/', '/thumb/') + '?w=1600&q=85&fit=scale-down';
       _loadImgWithProgress(liveSrc, img,
         () => {
           showWhenReady(img);
-          badge.style.opacity = '';
+          topbar.style.opacity = '';
           setTimeout(() => {
             if (!document.body.contains(wrap)) return;
             video.loop = false;
@@ -1124,29 +1149,23 @@
         () => { heicFallback(img, p.url); }
       );
 
-      // 桌面：悬浮静音预览；按住鼠标（≥250ms）带声播放，松开回到静音
-      let _hovering = false;
-      wrap.addEventListener('mouseenter', () => { _hovering = true; playLive({ muted: true }); });
-      wrap.addEventListener('mouseleave', () => { _hovering = false; stopLive(); });
-      let _pressTimer = null;
-      wrap.addEventListener('mousedown', (e) => {
-        if (e.button !== 0) return;
-        _pressTimer = setTimeout(() => { _pressTimer = null; playLive({ muted: false }); }, 250);
-      });
-      wrap.addEventListener('mouseup', () => {
-        if (_pressTimer) { clearTimeout(_pressTimer); _pressTimer = null; return; }
-        if (_hovering) video.muted = true; else stopLive();
-      });
-      // 移动端：长按（≥350ms）带声播放，松手停止——与苹果相册一致
+      // 桌面：悬停「实况」角标播放，移开停止——鼠标扫过照片本身不再触发
+      badge.addEventListener('mouseenter', () => playLive());
+      badge.addEventListener('mouseleave', () => stopLive());
+      badge.addEventListener('click', (ev) => ev.stopPropagation());
+      // 移动端：长按照片（≥350ms）带声播放，松手停止——与苹果相册一致
       let _lpTimer = null;
       const cancelPress = () => { if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; } };
       wrap.addEventListener('touchstart', (e) => {
+        // 点在声音开关/角标上时交给它们自己的 click，不进长按逻辑
+        if (e.target.closest && e.target.closest('.live-photo-topbar')) return;
         // 双指捏合 / 已放大平移时不触发长按播放
         if (e.touches.length > 1 || _lbScale > 1) { cancelPress(); return; }
         e.preventDefault();
-        _lpTimer = setTimeout(() => { _lpTimer = null; playLive({ muted: false }); }, 350);
+        _lpTimer = setTimeout(() => { _lpTimer = null; playLive({ muted: _lbLiveMuted }); }, 350);
       }, { passive: false });
-      wrap.addEventListener('touchend', () => {
+      wrap.addEventListener('touchend', (e) => {
+        if (e.target.closest && e.target.closest('.live-photo-topbar')) return;
         if (_lpTimer) cancelPress();
         else stopLive();
       });
@@ -1158,7 +1177,7 @@
       if (_hint) {
         clearTimeout(_lbZoomHideTimer);
         const isMobileTouch = window.matchMedia('(pointer: coarse)').matches;
-        _hint.textContent = isMobileTouch ? '长按播放实况 · 捏合缩放' : '悬浮预览 · 按住带声播放';
+        _hint.textContent = isMobileTouch ? '长按播放实况 · 捏合缩放' : '悬停左上「实况」播放 · 旁边按钮开关声音';
         _hint.style.opacity = '1';
         _lbZoomHideTimer = setTimeout(() => { if (_hint) _hint.style.opacity = '0'; }, 3000);
       }
@@ -1274,6 +1293,9 @@
   let _lbAnimating = false;
   let _currentBlobUrl = null;
   let _lbIsLivePhoto = false;
+  // 实况照片声音开关（跨照片记忆）；默认开声（同 lens.bh8.ga），
+  // 悬停播放被浏览器自动播放策略拦下时会临时退回静音，不改这个全局状态
+  let _lbLiveMuted = false;
 
   function _loadImgWithProgress(url, img, onReady, onError) {
     const progEl = document.getElementById('lbLoadProgress');
