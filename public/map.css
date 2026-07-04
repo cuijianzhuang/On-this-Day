@@ -91,3 +91,17 @@
   .cp-meta svg { width: 11px; height: 11px; flex-shrink: 0; fill: none; stroke: #8a8a8f; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
   .mapboxgl-ctrl-attrib { font-size: 0.62rem; }
+
+  /* ── 聚合弹窗加载状态 ──────────────────────────────────────────────────────── */
+  .cp-loading {
+    display: flex; align-items: center; justify-content: center;
+    height: 88px;
+  }
+  .cp-spinner {
+    width: 32px; height: 32px;
+    animation: cpSpin 0.85s linear infinite;
+  }
+  @keyframes cpSpin { to { transform: rotate(360deg); } }
+  /* 加载中隐藏 hint，内容到位后移除 loading class，hint 自然显示 */
+  .cluster-popup--loading .cp-hint { display: none; }
+

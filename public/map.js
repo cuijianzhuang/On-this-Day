@@ -33,12 +33,35 @@
   const ICON_ALT = '<svg viewBox="0 0 24 24"><polyline points="3 20 9 12 13 16 17 11 21 20"/></svg>';
   const ICON_CAL = '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/></svg>';
 
-  let _popup = null;      // 当前打开的弹窗（单张/聚合共用一个位置）
-  let _exifAbort = null;  // 详情卡的 EXIF 请求，切换时取消在途的
+  let _popup = null;
+  let _exifAbort = null;
+  // hover 交互状态：鼠标在标记上或在弹窗上时保持弹窗，移开后 200ms 无交互才关闭
+  let _hoverActive = false;
+  let _closeTimer = null;
+  let _popupTracked = false;   // 弹窗 mouseenter/leave 只绑一次
+  let _clusterItems = null;    // 聚合弹窗当前条目，click handler 通过此引用取值
+  let _clusterLoadId = 0;      // 防止旧请求覆盖新弹窗
 
   function closePopup() {
+    clearTimeout(_closeTimer);
     if (_popup) { _popup.remove(); _popup = null; }
     if (_exifAbort) { _exifAbort.abort(); _exifAbort = null; }
+    _popupTracked = false;
+    _clusterItems = null;
+  }
+
+  function scheduleClose() {
+    clearTimeout(_closeTimer);
+    _closeTimer = setTimeout(() => { if (!_hoverActive) closePopup(); }, 200);
+  }
+
+  // 让弹窗本身也能阻止关闭：鼠标移进弹窗视为"仍在交互"
+  function trackPopupHover() {
+    if (!_popup || _popupTracked) return;
+    _popupTracked = true;
+    const el = _popup.getElement();
+    el.addEventListener('mouseenter', () => { _hoverActive = true; clearTimeout(_closeTimer); });
+    el.addEventListener('mouseleave', () => { _hoverActive = false; scheduleClose(); });
   }
 
   // 单天模式的旧缓存响应里可能没有 month/day 字段，用页面参数兜底（本来就是那一天）
@@ -46,8 +69,9 @@
   function photoDay(p) { return p.day || mapDay; }
   function fmtDate(p) { return p.year + '年' + parseInt(photoMonth(p)) + '月' + parseInt(photoDay(p)) + '日'; }
 
-  // ── 单张照片详情卡：锚定在标记上（图 + 名称 + 地点·日期 + 设备/坐标/海拔）──────
-  function showPhotoPopup(p) {
+  // ── 单张照片详情卡 ──────────────────────────────────────────────────────────
+  // navigate=true 时地图平移到照片位置（点击时），hover 时不平移避免视图跳动
+  function showPhotoPopup(p, { navigate = false } = {}) {
     closePopup();
     const lat = Number(p.lat), lon = Number(p.lon);
     const name = p.key.split('/').pop().replace(/\.[^.]+$/, '').replace(/_/g, ' ');
@@ -73,7 +97,8 @@
     _popup = new mapboxgl.Popup({ closeButton: true, maxWidth: 'none', className: 'photo-popup', offset: 16 })
       .setLngLat([lon, lat]).setHTML(html).addTo(map);
     _popup.on('close', () => { if (_exifAbort) { _exifAbort.abort(); _exifAbort = null; } });
-    map.easeTo({ center: [lon, lat], offset: [0, -140], duration: 420 });
+    trackPopupHover();
+    if (navigate) map.easeTo({ center: [lon, lat], offset: [0, -140], duration: 420 });
 
     // 异步补 EXIF：设备型号 + 海拔
     if (/\.(jpe?g|heic)$/i.test(p.key)) {
@@ -98,9 +123,8 @@
     }
   }
 
-  // ── 聚合弹窗："附近有 N 张照片" + 缩略图九宫格 + 地点 + 时间范围 ────────────────
-  function showClusterPopup(coords, total, items) {
-    closePopup();
+  // ── 聚合弹窗 HTML 构建 ──────────────────────────────────────────────────────
+  function buildClusterHTML(total, items) {
     const place = (items.find(p => p.name) || {}).name || '';
     const sorted = items.slice().sort((a, b) =>
       (a.year + photoMonth(a) + photoDay(a)).localeCompare(b.year + photoMonth(b) + photoDay(b)));
@@ -114,19 +138,25 @@
       return '<div class="cp-thumb" data-i="' + i + '"><img src="' + escAttr(t) + '" loading="lazy" />' + more + '</div>';
     }).join('');
 
-    const html =
+    return (
       '<div class="cp-head"><span>附近有 ' + total + ' 张照片</span><span class="cp-hint">点击图片查看详情</span></div>' +
       '<div class="cp-grid">' + thumbs + '</div>' +
       (place ? '<div class="cp-meta">' + ICON_PIN + '<span>' + esc(place) + '</span></div>' : '') +
-      '<div class="cp-meta">' + ICON_CAL + '<span>' + esc(range) + '</span></div>';
+      '<div class="cp-meta">' + ICON_CAL + '<span>' + esc(range) + '</span></div>'
+    );
+  }
 
-    _popup = new mapboxgl.Popup({ closeButton: true, maxWidth: 'none', className: 'cluster-popup', offset: 20 })
-      .setLngLat(coords).setHTML(html).addTo(map);
-    _popup.getElement().addEventListener('click', (ev) => {
-      const th = ev.target.closest('.cp-thumb');
-      if (!th) return;
-      showPhotoPopup(items[Number(th.dataset.i)]);
-    });
+  function buildClusterLoadingHTML(total) {
+    return (
+      '<div class="cp-head"><span>附近有 ' + total + ' 张照片</span></div>' +
+      '<div class="cp-loading">' +
+        '<svg class="cp-spinner" viewBox="0 0 50 50" fill="none">' +
+          '<circle cx="25" cy="25" r="20" stroke="rgba(255,255,255,0.15)" stroke-width="4"/>' +
+          '<circle cx="25" cy="25" r="20" stroke="rgba(255,255,255,0.7)" stroke-width="4"' +
+          ' stroke-dasharray="60 66" stroke-linecap="round"/>' +
+        '</svg>' +
+      '</div>'
+    );
   }
 
   // ── 加载照片 + 聚合图层 ───────────────────────────────────────────────────────
@@ -195,17 +225,66 @@
           },
         });
 
-        // 单张点击 → 详情卡
-        map.on('click', 'photo-point', (e) => {
+        // ── 聚合圈 hover：立即弹出加载状态，异步填充缩略图 ─────────────────
+        map.on('mouseenter', 'clusters', (e) => {
+          map.getCanvas().style.cursor = 'pointer';
+          _hoverActive = true;
+          clearTimeout(_closeTimer);
+          const f = e.features[0];
+          const coords = f.geometry.coordinates;
+          const total = f.properties.point_count;
+          const clusterId = f.properties.cluster_id;
+          const myLoadId = ++_clusterLoadId;
+
+          // 立即弹出加载占位
+          closePopup();
+          _popup = new mapboxgl.Popup({
+            closeButton: true, maxWidth: 'none',
+            className: 'cluster-popup cluster-popup--loading', offset: 20,
+          })
+            .setLngLat(coords)
+            .setHTML(buildClusterLoadingHTML(total))
+            .addTo(map);
+          // 聚合弹窗点击（用事件委托，_clusterItems 后续更新后自动生效）
+          _popup.getElement().addEventListener('click', (ev) => {
+            const th = ev.target.closest('.cp-thumb');
+            if (!th || !_clusterItems) return;
+            showPhotoPopup(_clusterItems[Number(th.dataset.i)], { navigate: true });
+          });
+          trackPopupHover();
+
+          // 异步获取叶子节点，更新弹窗内容
+          map.getSource('photos').getClusterLeaves(clusterId, 24, 0, (err, leaves) => {
+            if (err || myLoadId !== _clusterLoadId || !_popup) return;
+            _clusterItems = leaves.map(l => l.properties);
+            _popup.setHTML(buildClusterHTML(total, _clusterItems));
+            _popup.getElement().classList.remove('cluster-popup--loading');
+          });
+        });
+
+        map.on('mouseleave', 'clusters', () => {
+          map.getCanvas().style.cursor = '';
+          _hoverActive = false;
+          scheduleClose();
+        });
+
+        // ── 单张点 hover：立即弹出详情卡（不平移地图）────────────────────
+        map.on('mouseenter', 'photo-point', (e) => {
+          map.getCanvas().style.cursor = 'pointer';
+          _hoverActive = true;
+          clearTimeout(_closeTimer);
           showPhotoPopup(e.features[0].properties);
         });
-        // 聚合点击 → 照片组弹窗；双击 → 放大展开
-        map.on('click', 'clusters', (e) => {
-          const f = e.features[0];
-          map.getSource('photos').getClusterLeaves(f.properties.cluster_id, 24, 0, (err, leaves) => {
-            if (err) return;
-            showClusterPopup(f.geometry.coordinates, f.properties.point_count, leaves.map(l => l.properties));
-          });
+
+        map.on('mouseleave', 'photo-point', () => {
+          map.getCanvas().style.cursor = '';
+          _hoverActive = false;
+          scheduleClose();
+        });
+
+        // 点击：聚合双击展开；单张点击平移地图
+        map.on('click', 'photo-point', (e) => {
+          showPhotoPopup(e.features[0].properties, { navigate: true });
         });
         map.on('dblclick', 'clusters', (e) => {
           e.preventDefault();
@@ -220,10 +299,6 @@
         map.on('click', (e) => {
           const fs = map.queryRenderedFeatures(e.point, { layers: ['clusters', 'photo-point'] });
           if (!fs.length) closePopup();
-        });
-        ['clusters', 'photo-point'].forEach((layer) => {
-          map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
-          map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
         });
 
         // 视野：单天模式贴近看；全量模式收进所有点但保持地球感
