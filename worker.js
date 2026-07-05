@@ -115,6 +115,10 @@ export default {
       return handleNote(request, env, url);
     }
 
+    if (url.pathname === "/api/album-browse") {
+      return handleAlbumBrowse(request, env, url);
+    }
+
     // ── 相簿 API ──────────────────────────────────────────────────────────────
     if (url.pathname === "/api/albums" || url.pathname === "/api/albums/") {
       return handleAlbums(request, env, url);
@@ -129,13 +133,11 @@ export default {
     }
 
     if (url.pathname === "/admin/albums") {
-      return handleAdminAlbums(request, env, url);
+      return env.ASSETS.fetch(new Request(new URL("/admin-albums.html", request.url), request));
     }
 
     if (url.pathname === "/loved") {
-      return new Response(LOVED_HTML, {
-        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
-      });
+      return env.ASSETS.fetch(new Request(new URL("/loved.html", request.url), request));
     }
 
     if (url.pathname === "/api/recap") {
@@ -143,9 +145,7 @@ export default {
     }
 
     if (url.pathname === "/recap") {
-      return new Response(RECAP_HTML, {
-        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
-      });
+      return env.ASSETS.fetch(new Request(new URL("/recap.html", request.url), request));
     }
 
     if (url.pathname === "/api/poem") {
@@ -160,10 +160,16 @@ export default {
       return handleUploadHeicPreview(request, env, url);
     }
 
+    // 静态 map.html 启动时先来这里取 Mapbox public token（pk. 开头，本来就发给浏览器，不是 secret）
+    if (url.pathname === "/api/map-config") {
+      return Response.json(
+        { mapboxToken: env.MAPBOX_PUBLIC_TOKEN || "" },
+        { headers: { "cache-control": "public, max-age=3600" } },
+      );
+    }
+
     if (url.pathname === "/map") {
-      return new Response(MAP_HTML(env.MAPBOX_PUBLIC_TOKEN || ""), {
-        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
-      });
+      return env.ASSETS.fetch(new Request(new URL("/map.html", request.url), request));
     }
 
     // 实时共享房间：每个日期一个 Durable Object，家人同时在线时看到彼此人数 + 实时点赞
@@ -647,13 +653,6 @@ async function handleAlbumBySlug(request, env, url) {
   return new Response("Method Not Allowed", { status: 405 });
 }
 
-// ── 相簿管理后台 HTML ──────────────────────────────────────────────────────────
-function handleAdminAlbums(request, env, url) {
-  return new Response(ADMIN_ALBUMS_HTML(url.searchParams.get("token")), {
-    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
-  });
-}
-
 // 北京时间（UTC+8）的今天，返回 { month: "MM", day: "DD" }
 function bjToday() {
   const bj = new Date(Date.now() + 8 * 60 * 60 * 1000);
@@ -803,471 +802,6 @@ async function handleRecap(request, env, url) {
   return response;
 }
 
-function ADMIN_ALBUMS_HTML(token) {
-  const t = JSON.stringify(token || "");
-  return `<!doctype html>
-<html lang="zh">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>相簿管理 · 那年今日</title>
-<style>
-:root{color-scheme:dark}*{box-sizing:border-box}
-body{margin:0;background:#0a0a0e;color:#f5f5f7;font-family:"SF Pro Display",-apple-system,"PingFang SC",sans-serif;padding:1.5rem}
-h1{font-size:1.4rem;font-weight:700;margin:0 0 1.5rem}
-.card{background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:1.2rem;margin-bottom:1rem}
-label{display:block;font-size:.75rem;color:#8a8a8f;margin-bottom:.3rem}
-input,textarea,select{width:100%;background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:.55rem .75rem;color:#f5f5f7;font-size:.88rem;outline:none;margin-bottom:.8rem}
-input:focus,textarea:focus{border-color:rgba(255,255,255,0.35)}
-textarea{resize:vertical;min-height:70px}
-button{padding:.5rem 1.1rem;border-radius:8px;border:none;cursor:pointer;font-size:.85rem;font-weight:600}
-.btn-primary{background:#3a82f7;color:#fff}
-.btn-danger{background:rgba(255,59,48,0.8);color:#fff;float:right}
-.btn-sm{padding:.3rem .7rem;font-size:.75rem;border-radius:6px;background:rgba(255,255,255,0.1);color:#f5f5f7;margin-left:.4rem}
-.album-row{display:flex;align-items:center;gap:.8rem;padding:.7rem .9rem;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);border-radius:10px;margin-bottom:.5rem}
-.album-thumb{width:52px;height:52px;border-radius:8px;object-fit:cover;background:#111;flex-shrink:0}
-.album-info{flex:1;min-width:0}
-.album-title{font-weight:600;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.album-meta{font-size:.7rem;color:#8a8a8f;margin-top:.15rem}
-.tag{display:inline-block;padding:.1rem .5rem;border-radius:999px;font-size:.65rem;background:rgba(255,255,255,0.1);margin-right:.3rem}
-.tag.private{background:rgba(255,180,0,0.2);color:#ffbb33}
-.section{margin-bottom:1.5rem}
-h2{font-size:1rem;font-weight:600;margin:0 0 .8rem;color:#c7c7cc}
-.field-row{display:grid;grid-template-columns:1fr 1fr;gap:.8rem}
-@media(max-width:600px){.field-row{grid-template-columns:1fr}}
-.msg{padding:.5rem .9rem;border-radius:8px;font-size:.82rem;margin-bottom:.8rem;display:none}
-.msg.ok{background:rgba(52,199,89,0.18);color:#34c759;display:block}
-.msg.err{background:rgba(255,59,48,0.18);color:#ff3b30;display:block}
-#albums-list{min-height:40px}
-.detail-panel{display:none;margin-top:1rem;padding:1rem;background:rgba(0,0,0,0.3);border-radius:10px;border:1px solid rgba(255,255,255,0.07)}
-.detail-panel.open{display:block}
-</style>
-</head>
-<body>
-<h1>📁 相簿管理</h1>
-
-<div class="section">
-  <h2>新建相簿</h2>
-  <div class="card">
-    <div id="createMsg" class="msg"></div>
-    <div class="field-row">
-      <div>
-        <label>标题 *</label>
-        <input id="newTitle" placeholder="夏天的旅行" />
-      </div>
-      <div>
-        <label>标识符 (slug) * <span style="font-weight:400;color:#8a8a8f">（英文/数字/连字符）</span></label>
-        <input id="newSlug" placeholder="summer-trip" />
-      </div>
-    </div>
-    <label>简介</label>
-    <textarea id="newDesc" placeholder="可选"></textarea>
-    <div class="field-row">
-      <div>
-        <label>是否私密</label>
-        <select id="newPrivate"><option value="0">公开</option><option value="1">私密（需密码）</option></select>
-      </div>
-      <div>
-        <label>密码（私密时必填）</label>
-        <input id="newPw" type="password" placeholder="可选" />
-      </div>
-    </div>
-    <button class="btn-primary" type="button" onclick="createAlbum()">创建</button>
-  </div>
-</div>
-
-<div class="section">
-  <h2>已有相簿</h2>
-  <div id="albums-list"><div style="color:#8a8a8f;font-size:.85rem">加载中…</div></div>
-</div>
-
-<!-- 编辑 / 加照片面板（动态填充） -->
-<div id="detailPanel" class="detail-panel">
-  <h2 id="dpTitle"></h2>
-  <div id="dpMsg" class="msg"></div>
-
-  <div style="margin-bottom:1rem">
-    <h3 style="font-size:.85rem;font-weight:600;color:#c7c7cc;margin:0 0 .6rem">修改信息</h3>
-    <div class="field-row">
-      <div><label>标题</label><input id="dpEditTitle" /></div>
-      <div><label>简介</label><input id="dpEditDesc" /></div>
-    </div>
-    <div class="field-row">
-      <div>
-        <label>密码（留空不修改）</label>
-        <input id="dpEditPw" type="password" placeholder="留空=不修改" />
-      </div>
-      <div>
-        <label>是否私密</label>
-        <select id="dpEditPrivate"><option value="0">公开</option><option value="1">私密</option></select>
-      </div>
-    </div>
-    <button class="btn-primary btn-sm" type="button" onclick="saveAlbum()">保存</button>
-    <button class="btn-danger btn-sm" type="button" onclick="deleteAlbum()">删除相簿</button>
-  </div>
-
-  <hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:1rem 0" />
-
-  <div style="margin-bottom:1rem">
-    <h3 style="font-size:.85rem;font-weight:600;color:#c7c7cc;margin:0 0 .6rem">添加照片 — 手动指定 Key</h3>
-    <textarea id="dpKeys" placeholder="每行一个 photo key，例如：&#10;Photos/MobileBackup/iPhone/2023/07/IMG_1234.JPG" style="min-height:90px"></textarea>
-    <button class="btn-sm btn-primary" type="button" onclick="addByKeys()">添加</button>
-  </div>
-
-  <div>
-    <h3 style="font-size:.85rem;font-weight:600;color:#c7c7cc;margin:0 0 .6rem">添加照片 — 日期范围（YYYY-MM-DD）</h3>
-    <div class="field-row">
-      <div><label>开始日期</label><input type="date" id="dpDateFrom" /></div>
-      <div><label>结束日期</label><input type="date" id="dpDateTo" /></div>
-    </div>
-    <button class="btn-sm btn-primary" type="button" onclick="addByDateRange()">添加范围内所有照片</button>
-  </div>
-
-  <div id="dpPhotosWrap" style="margin-top:1rem"></div>
-</div>
-
-<script>
-var TOKEN = ${t};
-var currentSlug = null;
-
-function apiHeaders() {
-  return { 'content-type': 'application/json', 'x-admin-token': TOKEN };
-}
-
-function showMsg(el, type, text) {
-  el.className = 'msg ' + type;
-  el.textContent = text;
-  setTimeout(function() { el.className = 'msg'; }, 4000);
-}
-
-function loadAlbums() {
-  fetch('/api/albums').then(function(r){ return r.json(); }).then(function(data) {
-    var list = document.getElementById('albums-list');
-    if (!data.albums.length) { list.innerHTML = '<div style="color:#8a8a8f;font-size:.85rem">还没有相簿</div>'; return; }
-    list.innerHTML = data.albums.map(function(a) {
-      var thumb = a.coverUrl ? '<img class="album-thumb" src="'+a.coverUrl+'" />' : '<div class="album-thumb"></div>';
-      var tags = (a.isPrivate ? '<span class="tag private">🔒 私密</span>' : '<span class="tag">公开</span>');
-      return '<div class="album-row" onclick="openAlbum('+JSON.stringify(a.slug)+')" style="cursor:pointer">' +
-        thumb +
-        '<div class="album-info"><div class="album-title">'+a.title+'</div>' +
-        '<div class="album-meta">'+tags+' '+a.slug+'</div></div>' +
-        '</div>';
-    }).join('');
-  }).catch(function(e){ document.getElementById('albums-list').innerHTML = '<div style="color:#ff3b30">加载失败</div>'; });
-}
-
-function toSlug(str) {
-  return str.toLowerCase()
-    .replace(/[\\s_]+/g, '-')
-    .replace(/[^a-z0-9-]/g, '')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-}
-
-(function() {
-  var titleEl = document.getElementById('newTitle');
-  var slugEl = document.getElementById('newSlug');
-  titleEl.addEventListener('input', function() {
-    if (!slugEl._touched) slugEl.value = toSlug(titleEl.value);
-  });
-  slugEl.addEventListener('input', function() {
-    slugEl._touched = slugEl.value !== '';
-  });
-  slugEl.addEventListener('blur', function() {
-    var clean = toSlug(slugEl.value);
-    if (clean !== slugEl.value) slugEl.value = clean;
-    slugEl._touched = clean !== '';
-  });
-})();
-
-function createAlbum() {
-  var title = document.getElementById('newTitle').value.trim();
-  var rawSlug = document.getElementById('newSlug').value.trim();
-  var slug = toSlug(rawSlug);
-  var desc = document.getElementById('newDesc').value.trim();
-  var isPrivate = document.getElementById('newPrivate').value === '1';
-  var pw = document.getElementById('newPw').value;
-  var msg = document.getElementById('createMsg');
-  if (!title) { showMsg(msg, 'err', '请填写相簿标题'); return; }
-  if (!slug) { showMsg(msg, 'err', 'slug 只能含英文字母、数字和连字符，请改用英文'); return; }
-  document.getElementById('newSlug').value = slug;
-  fetch('/api/albums', {
-    method: 'POST',
-    headers: apiHeaders(),
-    body: JSON.stringify({ title: title, slug: slug, description: desc, is_private: isPrivate, password: pw })
-  }).then(function(r){ return r.json(); }).then(function(d) {
-    if (d.ok) {
-      showMsg(msg, 'ok', '创建成功！');
-      document.getElementById('newTitle').value = '';
-      document.getElementById('newSlug').value = '';
-      document.getElementById('newSlug')._touched = false;
-      document.getElementById('newDesc').value = '';
-      document.getElementById('newPw').value = '';
-      loadAlbums();
-    } else {
-      showMsg(msg, 'err', d.error || '创建失败');
-    }
-  }).catch(function() { showMsg(msg, 'err', '网络错误，请重试'); });
-}
-
-function openAlbum(slug) {
-  currentSlug = slug;
-  var panel = document.getElementById('detailPanel');
-  panel.classList.add('open');
-  document.getElementById('dpTitle').textContent = '编辑：' + slug;
-  document.getElementById('dpMsg').className = 'msg';
-  document.getElementById('dpPhotosWrap').innerHTML = '<div style="color:#8a8a8f;font-size:.82rem">加载照片列表…</div>';
-
-  fetch('/api/albums/' + slug, { headers: { 'x-admin-token': TOKEN } })
-    .then(function(r){ return r.json(); })
-    .then(function(d) {
-      document.getElementById('dpEditTitle').value = d.title || '';
-      document.getElementById('dpEditDesc').value = d.description || '';
-      document.getElementById('dpEditPrivate').value = d.isPrivate ? '1' : '0';
-      renderPhotos(d.photos || []);
-    })
-    .catch(function() { document.getElementById('dpPhotosWrap').innerHTML = '<div style="color:#ff3b30">加载失败</div>'; });
-
-  panel.scrollIntoView({ behavior: 'smooth' });
-}
-
-function renderPhotos(photos) {
-  var wrap = document.getElementById('dpPhotosWrap');
-  if (!photos.length) { wrap.innerHTML = '<div style="color:#8a8a8f;font-size:.82rem">暂无照片</div>'; return; }
-  wrap.innerHTML = '<div style="font-size:.8rem;color:#8a8a8f;margin-bottom:.5rem">' + photos.length + ' 张照片：</div>' +
-    '<div style="display:flex;flex-wrap:wrap;gap:6px">' +
-    photos.map(function(p) {
-      return '<div style="position:relative;width:72px;height:72px">' +
-        '<img src="/thumb/'+encodeURIComponent(p.key)+'?w=144&q=70" style="width:72px;height:72px;object-fit:cover;border-radius:6px;background:#111" />' +
-        '<button onclick="removePhoto('+JSON.stringify(p.key)+')" style="position:absolute;top:2px;right:2px;background:rgba(0,0,0,.7);color:#fff;border:none;border-radius:50%;width:18px;height:18px;font-size:10px;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center">×</button>' +
-        '</div>';
-    }).join('') + '</div>';
-}
-
-function removePhoto(key) {
-  if (!currentSlug || !confirm('从相簿中移除这张照片？')) return;
-  fetch('/api/albums/' + currentSlug + '/photos', {
-    method: 'DELETE',
-    headers: apiHeaders(),
-    body: JSON.stringify({ key: key })
-  }).then(function(r){ return r.json(); }).then(function(d) {
-    if (d.ok) openAlbum(currentSlug);
-  });
-}
-
-function saveAlbum() {
-  if (!currentSlug) return;
-  var body = {
-    title: document.getElementById('dpEditTitle').value.trim(),
-    description: document.getElementById('dpEditDesc').value.trim(),
-    is_private: document.getElementById('dpEditPrivate').value === '1',
-  };
-  var pw = document.getElementById('dpEditPw').value;
-  if (pw) body.password = pw;
-  var msg = document.getElementById('dpMsg');
-  fetch('/api/albums/' + currentSlug, { method: 'PATCH', headers: apiHeaders(), body: JSON.stringify(body) })
-    .then(function(r){ return r.json(); })
-    .then(function(d){ if (d.ok) { showMsg(msg, 'ok', '已保存'); loadAlbums(); } else showMsg(msg, 'err', d.error || '失败'); })
-    .catch(function(){ showMsg(msg, 'err', '请求失败'); });
-}
-
-function deleteAlbum() {
-  if (!currentSlug || !confirm('确认删除相簿「' + currentSlug + '」？照片不会被删除，只是移出相簿。')) return;
-  fetch('/api/albums/' + currentSlug, { method: 'DELETE', headers: apiHeaders() })
-    .then(function(r){ return r.json(); })
-    .then(function(d) {
-      if (d.ok) {
-        document.getElementById('detailPanel').classList.remove('open');
-        currentSlug = null;
-        loadAlbums();
-      }
-    });
-}
-
-function addByKeys() {
-  if (!currentSlug) return;
-  var keys = document.getElementById('dpKeys').value.trim().split(/\\n+/).map(function(k){ return k.trim(); }).filter(Boolean);
-  var msg = document.getElementById('dpMsg');
-  if (!keys.length) { showMsg(msg, 'err', '请填写至少一个 key'); return; }
-  fetch('/api/albums/' + currentSlug + '/photos', { method: 'POST', headers: apiHeaders(), body: JSON.stringify({ keys: keys }) })
-    .then(function(r){ return r.json(); })
-    .then(function(d){ if (d.ok) { showMsg(msg, 'ok', '已添加 '+d.added+' 张'); document.getElementById('dpKeys').value = ''; openAlbum(currentSlug); } else showMsg(msg, 'err', d.error || '失败'); })
-    .catch(function(){ showMsg(msg, 'err', '请求失败'); });
-}
-
-function addByDateRange() {
-  if (!currentSlug) return;
-  var from = document.getElementById('dpDateFrom').value;
-  var to = document.getElementById('dpDateTo').value;
-  var msg = document.getElementById('dpMsg');
-  if (!from || !to) { showMsg(msg, 'err', '请填写开始和结束日期'); return; }
-  fetch('/api/albums/' + currentSlug + '/photos', { method: 'POST', headers: apiHeaders(), body: JSON.stringify({ date_from: from, date_to: to }) })
-    .then(function(r){ return r.json(); })
-    .then(function(d){ if (d.ok) { showMsg(msg, 'ok', '已添加 '+d.added+' 张'); openAlbum(currentSlug); } else showMsg(msg, 'err', d.error || '失败'); })
-    .catch(function(){ showMsg(msg, 'err', '请求失败'); });
-}
-
-document.addEventListener('DOMContentLoaded', loadAlbums);
-</script>
-</body>
-</html>`;
-}
-
-const RECAP_HTML = `<!doctype html>
-<html lang="zh">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-<title>年度回忆 · 那年今日</title>
-<link rel="icon" type="image/x-icon" href="/favicon.ico" />
-<style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
-  body {
-    margin: 0; background: #000; color: #fff; overflow: hidden;
-    height: 100dvh; font-family: "SF Pro Display", -apple-system, "PingFang SC", sans-serif;
-  }
-  #stage { position: fixed; inset: 0; }
-  #stage img {
-    position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
-    opacity: 0; transition: opacity 1.1s ease;
-  }
-  #stage img.on { opacity: 1; }
-  #stage img.kb { animation: kenburns 6s ease-out forwards; }
-  @keyframes kenburns { from { transform: scale(1); } to { transform: scale(1.07); } }
-  #intro {
-    position: fixed; inset: 0; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: 0.6rem;
-    background: #000; z-index: 5; transition: opacity 1s ease;
-  }
-  #intro.hide { opacity: 0; pointer-events: none; }
-  #intro .y { font-size: clamp(3rem, 12vw, 6rem); font-weight: 700; letter-spacing: 0.02em; }
-  #intro .t { color: #8a8a8f; font-size: 0.95rem; letter-spacing: 0.35em; text-transform: uppercase; }
-  #caption {
-    position: fixed; left: max(1.4rem, env(safe-area-inset-left)); bottom: max(1.6rem, env(safe-area-inset-bottom));
-    z-index: 3; max-width: 72vw; text-shadow: 0 1px 10px rgba(0,0,0,0.8);
-  }
-  #caption .d { font-size: 1.25rem; font-weight: 700; margin-bottom: 0.25rem; }
-  #caption .c { font-size: 0.8rem; color: rgba(255,255,255,0.75); line-height: 1.5; }
-  #bar { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 4; background: rgba(255,255,255,0.14); }
-  #bar i { display: block; height: 100%; width: 0; background: #fff; transition: width 0.2s linear; }
-  .btn {
-    position: fixed; z-index: 6; width: 38px; height: 38px; border-radius: 50%;
-    border: none; display: flex; align-items: center; justify-content: center;
-    background: rgba(255,255,255,0.12); backdrop-filter: blur(12px); color: #fff;
-    cursor: pointer; text-decoration: none; font-size: 0.9rem;
-  }
-  #back { top: max(1rem, env(safe-area-inset-top)); left: max(1rem, env(safe-area-inset-left)); }
-  #music { top: max(1rem, env(safe-area-inset-top)); right: max(1rem, env(safe-area-inset-right)); }
-  #yearNav {
-    position: fixed; bottom: max(1.5rem, env(safe-area-inset-bottom)); right: max(1.2rem, env(safe-area-inset-right));
-    z-index: 6; display: flex; gap: 0.4rem;
-  }
-  #yearNav a {
-    color: rgba(255,255,255,0.55); text-decoration: none; font-size: 0.78rem;
-    padding: 0.25rem 0.6rem; border-radius: 999px; background: rgba(0,0,0,0.35); backdrop-filter: blur(8px);
-  }
-  #yearNav a.cur { color: #000; background: rgba(255,255,255,0.9); font-weight: 600; }
-  #empty { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; color: #6e6e73; z-index: 5; }
-  svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-</style>
-</head>
-<body>
-  <div id="stage"><img id="imgA" /><img id="imgB" /></div>
-  <div id="intro"><div class="t">Year in Review</div><div class="y" id="introYear"></div></div>
-  <div id="bar"><i id="barFill"></i></div>
-  <div id="caption"><div class="d" id="capDate"></div><div class="c" id="capText"></div></div>
-  <a class="btn" id="back" href="/" title="回到今天"><svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg></a>
-  <button class="btn" id="music" title="背景音乐"><svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></button>
-  <div id="yearNav"></div>
-  <div id="empty">这一年还没有打过分的照片</div>
-  <audio id="bgm" loop preload="none"><source src="https://image.cuijianzhuang.com/forest.mp3" type="audio/mpeg" /></audio>
-<script>
-  var params = new URLSearchParams(location.search);
-  var qs = params.get('year') ? '?year=' + encodeURIComponent(params.get('year')) : '';
-  var photos = [], idx = -1, timer = null, paused = false, useA = true;
-  var DURATION = 5000;
-  var imgA = document.getElementById('imgA'), imgB = document.getElementById('imgB');
-  var barFill = document.getElementById('barFill');
-
-  function thumbOf(p) { return p.url.replace('/img/', '/thumb/') + '?w=1600&q=85&fit=scale-down'; }
-
-  fetch('/api/recap' + qs).then(function (r) { return r.json(); }).then(function (data) {
-    document.getElementById('introYear').textContent = data.year;
-    var nav = document.getElementById('yearNav');
-    nav.innerHTML = (data.years || []).map(function (y) {
-      return '<a href="/recap?year=' + y + '"' + (y === data.year ? ' class="cur"' : '') + '>' + y + '</a>';
-    }).join('');
-    photos = data.photos || [];
-    if (!photos.length) {
-      document.getElementById('intro').classList.add('hide');
-      document.getElementById('empty').style.display = 'flex';
-      return;
-    }
-    setTimeout(function () {
-      document.getElementById('intro').classList.add('hide');
-      next();
-    }, 1800);
-  });
-
-  function show(i) {
-    idx = (i + photos.length) % photos.length;
-    var p = photos[idx];
-    var incoming = useA ? imgA : imgB;
-    var outgoing = useA ? imgB : imgA;
-    useA = !useA;
-    incoming.classList.remove('on', 'kb');
-    incoming.src = thumbOf(p);
-    var reveal = function () {
-      incoming.classList.add('on', 'kb');
-      outgoing.classList.remove('on');
-      document.getElementById('capDate').textContent = parseInt(p.month) + ' 月 ' + parseInt(p.day) + ' 日';
-      document.getElementById('capText').textContent = [p.caption, p.place].filter(Boolean).join(' · ');
-      barFill.style.width = ((idx + 1) / photos.length * 100) + '%';
-      // 预加载下一张
-      var nx = new Image(); nx.src = thumbOf(photos[(idx + 1) % photos.length]);
-      schedule();
-    };
-    if (incoming.complete && incoming.naturalWidth) reveal();
-    else { incoming.onload = reveal; incoming.onerror = function () { schedule(); }; }
-  }
-
-  function schedule() {
-    clearTimeout(timer);
-    if (!paused) timer = setTimeout(next, DURATION);
-  }
-  function next() { show(idx + 1); }
-  function prev() { show(idx - 1); }
-
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); clearTimeout(timer); next(); }
-    if (e.key === 'ArrowLeft') { clearTimeout(timer); prev(); }
-    if (e.key === 'Escape') location.href = '/';
-  });
-  // 点击：左 1/3 上一张，右 2/3 下一张；长按暂停由 pointerdown/up 控制
-  var pressTimer = null;
-  document.getElementById('stage').addEventListener('pointerdown', function () {
-    pressTimer = setTimeout(function () { paused = true; clearTimeout(timer); pressTimer = null; }, 350);
-  });
-  document.getElementById('stage').addEventListener('pointerup', function (e) {
-    if (pressTimer) {
-      clearTimeout(pressTimer); pressTimer = null;
-      clearTimeout(timer);
-      if (e.clientX < window.innerWidth / 3) prev(); else next();
-    } else if (paused) {
-      paused = false; schedule();
-    }
-  });
-
-  var bgm = document.getElementById('bgm'), musicOn = false;
-  document.getElementById('music').onclick = function () {
-    musicOn = !musicOn;
-    this.style.opacity = musicOn ? 1 : 0.55;
-    if (musicOn) { bgm.volume = 0.4; bgm.play().catch(function () {}); } else bgm.pause();
-  };
-</script>
-</body>
-</html>`;
 
 // ── 照片手记 ──────────────────────────────────────────────────────────────────
 // 家人给照片写的文字注解（谁拍的、当时发生了什么）。站点面向家庭成员公开，
@@ -1311,6 +845,41 @@ async function handleNote(request, env, url) {
   return new Response("Method Not Allowed", { status: 405 });
 }
 
+// ── 相簿管理：浏览照片选择器 ──────────────────────────────────────────────────
+async function handleAlbumBrowse(request, env, url) {
+  const from = url.searchParams.get("from");
+  const to = url.searchParams.get("to");
+  const offset = Math.max(0, parseInt(url.searchParams.get("offset")) || 0);
+  const limit = Math.min(200, Math.max(1, parseInt(url.searchParams.get("limit")) || 100));
+
+  if (!from || !to || !/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    return Response.json({ error: "from/to required, format YYYY-MM-DD" }, { status: 400 });
+  }
+
+  const { results } = await env.DB.prepare(
+    `SELECT pi.key, pi.year, pi.month, pi.day, pi.type, ps.caption, pp.name AS place
+     FROM photos_index pi
+     LEFT JOIN photo_scores ps ON ps.key = pi.key
+     LEFT JOIN photo_places pp ON pp.key = pi.key
+     WHERE pi.type = 'image' AND (pi.year || '-' || pi.month || '-' || pi.day) BETWEEN ?1 AND ?2
+     ORDER BY pi.year DESC, pi.month DESC, pi.day DESC, pi.key
+     LIMIT ?3 OFFSET ?4`
+  ).bind(from, to, limit + 1, offset).all();
+
+  const hasMore = results.length > limit;
+  const photos = results.slice(0, limit).map((r) => ({
+    key: r.key,
+    thumb: `/thumb/${encodeURIComponent(r.key)}?w=200&h=200&q=70&fit=cover`,
+    year: r.year,
+    month: r.month,
+    day: r.day,
+    caption: r.caption || "",
+    place: r.place || "",
+  }));
+
+  return Response.json({ photos, hasMore, offset, limit });
+}
+
 // ── 照片搜索 ──────────────────────────────────────────────────────────────────
 // 搜 AI 生成的中文说明（photo_scores.caption）和拍摄地名（photo_places.name）。
 // 用 LIKE 子串匹配而不是 FTS5——FTS5 默认分词器不吃中文（要 trigram 扩展），
@@ -1352,70 +921,6 @@ async function handleSearch(request, env, url) {
   });
 }
 
-const LOVED_HTML = `<!doctype html>
-<html lang="zh">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>全家最爱 · 那年今日</title>
-<link rel="icon" type="image/x-icon" href="/favicon.ico" />
-<style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: #000; color: #f5f5f7; min-height: 100vh;
-    font-family: "SF Pro Display", -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
-    padding: 3.5rem 1.2rem 4rem;
-  }
-  .back {
-    position: fixed; top: max(1rem, env(safe-area-inset-top)); left: max(1rem, env(safe-area-inset-left));
-    width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
-    background: rgba(255,255,255,0.1); backdrop-filter: blur(10px); color: #fff; text-decoration: none; z-index: 5;
-  }
-  h1 { text-align: center; font-size: 1.5rem; margin: 1rem 0 0.3rem; letter-spacing: -0.01em; }
-  .sub { text-align: center; color: #8a8a8f; font-size: 0.82rem; margin-bottom: 2rem; }
-  .grid { max-width: 1000px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 14px; }
-  @media (max-width: 640px) { .grid { grid-template-columns: repeat(2, 1fr); gap: 10px; } }
-  .card {
-    position: relative; border-radius: 10px; overflow: hidden; display: block;
-    background: #1c1c1e; aspect-ratio: 1; text-decoration: none;
-  }
-  .card img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity 0.35s ease; }
-  .card img.loaded { opacity: 1; }
-  .badge {
-    position: absolute; left: 8px; bottom: 8px; display: flex; align-items: center; gap: 4px;
-    background: rgba(0,0,0,0.55); backdrop-filter: blur(8px); border-radius: 999px;
-    padding: 3px 9px; color: #fff; font-size: 0.72rem; font-weight: 600;
-  }
-  .date { position: absolute; right: 8px; bottom: 8px; color: rgba(255,255,255,0.85); font-size: 0.66rem;
-    background: rgba(0,0,0,0.45); backdrop-filter: blur(8px); border-radius: 999px; padding: 3px 8px; }
-  .empty { text-align: center; color: #6e6e73; padding: 5rem 1rem; line-height: 1.7; }
-</style>
-</head>
-<body>
-  <a class="back" href="/" title="回到今天">
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-  </a>
-  <h1>❤️ 全家最爱</h1>
-  <div class="sub">被表态最多的照片</div>
-  <div class="grid" id="grid"></div>
-  <div class="empty" id="empty" style="display:none">还没有人表态过<br>去照片里点一个 ❤️ 吧</div>
-<script>
-  fetch('/api/top-loved').then(function (r) { return r.json(); }).then(function (data) {
-    var photos = data.photos || [];
-    if (!photos.length) { document.getElementById('empty').style.display = 'block'; return; }
-    document.getElementById('grid').innerHTML = photos.map(function (p) {
-      var thumb = p.url.replace('/img/', '/thumb/') + '?w=400&h=400&q=75&fit=cover';
-      var dateTxt = p.year + '/' + p.month + '/' + p.day;
-      var href = '/?month=' + p.month + '&day=' + p.day;
-      return '<a class="card" href="' + href + '">' +
-        '<img src="' + thumb.replace(/"/g, '&quot;') + '" loading="lazy" onload="this.classList.add(\\'loaded\\')" />' +
-        '<span class="badge">❤️ ' + p.total + '</span><span class="date">' + dateTxt + '</span></a>';
-    }).join('');
-  });
-</script>
-</body>
-</html>`;
 
 // ── PWA 应用图标 ──────────────────────────────────────────────────────────────
 // 用全库 AI 评分最高的照片裁成方形做安装图标（PWA manifest + apple-touch-icon），
@@ -3691,118 +3196,6 @@ async function handleOnThisDay(request, env, url) {
   }
 }
 
-// ---------- 地图页用的数据接口：把所有查到过经纬度的照片列出来，给前端打点 ----------
-// 地图只展示某一天（默认今天）匹配到的照片，不是整个照片库——
-// 跟 /api/memories 共用同一套日期匹配逻辑（matchPhotosForDay），并且同样做边缘缓存
-async function handleMapPhotos(request, env, url) {
-  const month = url.searchParams.get("month");
-  const day = url.searchParams.get("day");
-
-  // 不带 month/day = 全量模式：地球视角一次拿到所有带定位的照片（聚合渲染交给前端）
-  if (!month && !day) {
-    const cache = caches.default;
-    const cacheKey = new Request(url.toString());
-    const cachedResp = await cache.match(cacheKey);
-    if (cachedResp) return cachedResp;
-
-    const { results } = await env.DB.prepare(
-      `SELECT pp.key AS key, pp.lat, pp.lon, pp.name, pi.year, pi.month, pi.day, pi.type
-       FROM photo_places pp
-       JOIN photos_index pi ON pi.key = pp.key
-       WHERE pp.lat IS NOT NULL`
-    ).all();
-    const photos = results.map((r) => ({
-      key: r.key,
-      url: `/img/${encodeURIComponent(r.key)}`,
-      type: r.type,
-      lat: r.lat,
-      lon: r.lon,
-      name: r.name || "",
-      year: r.year,
-      month: r.month,
-      day: r.day,
-    }));
-    const response = new Response(JSON.stringify({ photos }), {
-      headers: {
-        "content-type": "application/json; charset=utf-8",
-        "cache-control": "public, max-age=1800",
-      },
-    });
-    await cache.put(cacheKey, response.clone());
-    return response;
-  }
-
-  if (!/^\d{2}$/.test(month || "") || !/^\d{2}$/.test(day || "")) {
-    return new Response(JSON.stringify({ error: "month/day required, format MM/DD" }), {
-      status: 400,
-      headers: { "content-type": "application/json; charset=utf-8" },
-    });
-  }
-
-  const cache = caches.default;
-  const cacheKey = new Request(url.toString());
-  const cachedResp = await cache.match(cacheKey);
-  if (cachedResp) return cachedResp;
-
-  const matchedByYear = await matchPhotosForDay(env, month, day);
-  const matchedKeys = matchedByYear.flatMap((y) => y.photos.map((p) => p.key));
-  const places = await loadPlacesForKeys(env, matchedKeys);
-
-  const photos = matchedByYear
-    .flatMap((y) => y.photos)
-    .map((p) => {
-      const entry = places[p.key];
-      if (!entry || typeof entry !== "object" || typeof entry.lat !== "number") return null;
-      return {
-        key: p.key,
-        url: p.url,
-        type: p.type,
-        lat: entry.lat,
-        lon: entry.lon,
-        name: entry.name || "",
-        year: p.year,
-        // 跟全量模式对齐：详情卡的日期展示和"去看这一天"链接都要用到
-        month,
-        day,
-      };
-    })
-    .filter(Boolean);
-
-  const response = new Response(JSON.stringify({ month, day, photos }), {
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "public, max-age=1800",
-    },
-  });
-  await cache.put(cacheKey, response.clone());
-  return response;
-}
-
-// ---------- 地图页：把所有带 GPS 的照片打点在地图上 ----------
-// 这里用的 token 必须是 public token（pk. 开头），跟服务端反向地理编码用的 secret token 是两个东西，
-// 因为这段代码会原样发到浏览器执行，secret token 绝对不能出现在这里
-const MAP_HTML = (mapboxPublicToken) => `<!doctype html>
-<html lang="zh">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-<title>足迹 · 那年今日</title>
-<link rel="icon" type="image/x-icon" href="/favicon.ico" />
-<link href="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.css" rel="stylesheet" />
-<script src="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.js"></script>
-<link rel="stylesheet" href="/map.css" />
-</head>
-<body>
-  <a class="back-btn" href="/" title="回到回忆墙">
-    <svg viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
-  </a>
-  <div id="map"></div>
-  <div class="map-empty" id="mapEmpty">还没有带定位信息的照片<br />等后台任务慢慢解析，或跑一次 /admin/locate-photos</div>
-
-<script>window.MAPBOX_TOKEN = ${JSON.stringify(mapboxPublicToken).replace(/<\//g, '<\\/')};</script>
-<script src="/map.js" defer></script>
-</body>
-</html>`;
 
 // ── Durable Object：实时共享房间 ─────────────────────────────────────────────────
 // 每个日期（"MM-DD"）对应一个 DO 实例。家人同时打开同一天的回忆时：
