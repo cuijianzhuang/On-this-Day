@@ -92,28 +92,6 @@ h2{font-size:1rem;font-weight:600;margin:0 0 .8rem;color:#c7c7cc}
   <h2 id="dpTitle"></h2>
   <div id="dpMsg" class="msg"></div>
 
-  <div style="margin-bottom:1rem">
-    <h3 style="font-size:.85rem;font-weight:600;color:#c7c7cc;margin:0 0 .6rem">修改信息</h3>
-    <div class="field-row">
-      <div><label>标题</label><input id="dpEditTitle" /></div>
-      <div><label>简介</label><input id="dpEditDesc" /></div>
-    </div>
-    <div class="field-row">
-      <div>
-        <label>密码（留空不修改）</label>
-        <input id="dpEditPw" type="password" placeholder="留空=不修改" />
-      </div>
-      <div>
-        <label>是否私密</label>
-        <select id="dpEditPrivate"><option value="0">公开</option><option value="1">私密</option></select>
-      </div>
-    </div>
-    <button class="btn-primary btn-sm" type="button" onclick="saveAlbum()">保存</button>
-    <button class="btn-danger btn-sm" type="button" onclick="deleteAlbum()">删除相簿</button>
-  </div>
-
-  <hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:1rem 0" />
-
   <div>
     <h3 style="font-size:.85rem;font-weight:600;color:#c7c7cc;margin:0 0 .6rem">添加照片</h3>
     <div class="picker-bar">
@@ -137,6 +115,28 @@ h2{font-size:1rem;font-weight:600;margin:0 0 .8rem;color:#c7c7cc}
     <h3 style="font-size:.85rem;font-weight:600;color:#c7c7cc;margin:0 0 .6rem">已有照片</h3>
     <div id="dpPhotosWrap"></div>
   </div>
+
+  <hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:1rem 0" />
+
+  <details style="margin-bottom:1rem">
+    <summary style="font-size:.85rem;font-weight:600;color:#8a8a8f;cursor:pointer;margin-bottom:.6rem">修改相簿信息</summary>
+    <div class="field-row">
+      <div><label>标题</label><input id="dpEditTitle" /></div>
+      <div><label>简介</label><input id="dpEditDesc" /></div>
+    </div>
+    <div class="field-row">
+      <div>
+        <label>密码（留空不修改）</label>
+        <input id="dpEditPw" type="password" placeholder="留空=不修改" />
+      </div>
+      <div>
+        <label>是否私密</label>
+        <select id="dpEditPrivate"><option value="0">公开</option><option value="1">私密</option></select>
+      </div>
+    </div>
+    <button class="btn-primary btn-sm" type="button" onclick="saveAlbum()">保存</button>
+    <button class="btn-danger btn-sm" type="button" onclick="deleteAlbum()">删除相簿</button>
+  </details>
 </div>
 
 <script>
