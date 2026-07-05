@@ -115,29 +115,10 @@ export default {
       return handleNote(request, env, url);
     }
 
-    if (url.pathname === "/api/album-browse") {
-      return handleAlbumBrowse(request, env, url);
-    }
-
-    // ── 相簿 API ──────────────────────────────────────────────────────────────
-    if (url.pathname === "/api/albums" || url.pathname === "/api/albums/") {
-      return handleAlbums(request, env, url);
-    }
-    if (url.pathname.startsWith("/api/albums/")) {
-      return handleAlbumBySlug(request, env, url);
-    }
-
-    if (url.pathname === "/albums") {
-      const assetResp = await env.ASSETS.fetch(new Request(new URL("/albums.html", request.url), request));
-      return assetResp;
-    }
-
-    if (url.pathname === "/admin/albums") {
-      return env.ASSETS.fetch(new Request(new URL("/admin-albums.html", request.url), request));
-    }
-
     if (url.pathname === "/loved") {
-      return env.ASSETS.fetch(new Request(new URL("/loved.html", request.url), request));
+      return new Response(LOVED_HTML, {
+        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+      });
     }
 
     if (url.pathname === "/api/recap") {
@@ -145,7 +126,9 @@ export default {
     }
 
     if (url.pathname === "/recap") {
-      return env.ASSETS.fetch(new Request(new URL("/recap.html", request.url), request));
+      return new Response(RECAP_HTML, {
+        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+      });
     }
 
     if (url.pathname === "/api/poem") {
@@ -160,16 +143,10 @@ export default {
       return handleUploadHeicPreview(request, env, url);
     }
 
-    // 静态 map.html 启动时先来这里取 Mapbox public token（pk. 开头，本来就发给浏览器，不是 secret）
-    if (url.pathname === "/api/map-config") {
-      return Response.json(
-        { mapboxToken: env.MAPBOX_PUBLIC_TOKEN || "" },
-        { headers: { "cache-control": "public, max-age=3600" } },
-      );
-    }
-
     if (url.pathname === "/map") {
-      return env.ASSETS.fetch(new Request(new URL("/map.html", request.url), request));
+      return new Response(MAP_HTML(env.MAPBOX_PUBLIC_TOKEN || ""), {
+        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+      });
     }
 
     // 实时共享房间：每个日期一个 Durable Object，家人同时在线时看到彼此人数 + 实时点赞
@@ -391,268 +368,6 @@ async function ensureAuxTables(env) {
   _auxTablesReady = true;
 }
 
-let _albumTablesReady = false;
-async function ensureAlbumTables(env) {
-  if (_albumTablesReady) return;
-  await env.DB.batch([
-    env.DB.prepare(
-      "CREATE TABLE IF NOT EXISTS albums (" +
-      "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
-      "slug TEXT NOT NULL UNIQUE, " +
-      "title TEXT NOT NULL, " +
-      "description TEXT, " +
-      "cover_key TEXT, " +
-      "is_private INTEGER NOT NULL DEFAULT 0, " +
-      "password_hash TEXT, " +
-      "created_at TEXT NOT NULL, " +
-      "updated_at TEXT NOT NULL)"
-    ),
-    env.DB.prepare(
-      "CREATE TABLE IF NOT EXISTS album_photos (" +
-      "album_id INTEGER NOT NULL REFERENCES albums(id) ON DELETE CASCADE, " +
-      "photo_key TEXT NOT NULL, " +
-      "sort_order INTEGER NOT NULL DEFAULT 0, " +
-      "added_at TEXT NOT NULL, " +
-      "PRIMARY KEY (album_id, photo_key))"
-    ),
-  ]);
-  _albumTablesReady = true;
-}
-
-async function sha256hex(text) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-function adminGuard(request, env) {
-  const token = new URL(request.url).searchParams.get("token")
-    || request.headers.get("x-admin-token");
-  if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
-    return new Response(JSON.stringify({ error: "Forbidden" }), {
-      status: 403, headers: { "content-type": "application/json; charset=utf-8" },
-    });
-  }
-  return null;
-}
-
-// 从 photos_index + photo_scores + photo_places 组装相簿的照片列表
-// 仿照 handleMemories 的 enrich 逻辑，返回与前端 grid 兼容的格式
-async function buildAlbumPhotos(env, photoKeys) {
-  if (!photoKeys.length) return [];
-  const placeholders = photoKeys.map(() => "?").join(",");
-  const { results: rows } = await env.DB.prepare(
-    `SELECT pi.key, pi.year, pi.month, pi.day, pi.type
-     FROM photos_index pi WHERE pi.key IN (${placeholders})`
-  ).bind(...photoKeys).all();
-
-  const scores = await loadScoresForKeys(env, photoKeys);
-  const places = await loadPlacesForKeys(env, photoKeys);
-
-  const orderMap = Object.fromEntries(photoKeys.map((k, i) => [k, i]));
-  return rows
-    .sort((a, b) => (orderMap[a.key] ?? 999) - (orderMap[b.key] ?? 999))
-    .map((r) => {
-      const { score, hasFace, caption } = scoreInfoOf(scores[r.key]);
-      return {
-        key: r.key,
-        url: `/img/${encodeURIComponent(r.key)}`,
-        thumbUrl: `/thumb/${encodeURIComponent(r.key)}`,
-        type: r.type,
-        year: r.year,
-        month: r.month,
-        day: r.day,
-        score,
-        hasFace,
-        caption,
-        place: placeNameOf(places[r.key]),
-      };
-    });
-}
-
-// ── 相簿列表 / 创建 ────────────────────────────────────────────────────────────
-async function handleAlbums(request, env, url) {
-  await ensureAlbumTables(env);
-
-  if (request.method === "GET") {
-    const { results } = await env.DB.prepare(
-      "SELECT id, slug, title, description, cover_key, is_private, created_at FROM albums ORDER BY id DESC"
-    ).all();
-    const albums = results.map((r) => ({
-      slug: r.slug,
-      title: r.title,
-      description: r.description || "",
-      coverUrl: r.cover_key ? `/thumb/${encodeURIComponent(r.cover_key)}?w=600&q=80` : null,
-      isPrivate: !!r.is_private,
-      createdAt: r.created_at,
-    }));
-    return new Response(JSON.stringify({ albums }), {
-      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
-    });
-  }
-
-  if (request.method === "POST") {
-    let body;
-    try { body = await request.json(); } catch { return new Response("Bad Request", { status: 400 }); }
-    const title = (body.title || "").trim();
-    const slug = (body.slug || "").trim().toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
-    if (!title || !slug) return new Response(JSON.stringify({ error: "title and slug required" }), { status: 400, headers: { "content-type": "application/json; charset=utf-8" } });
-    const isPrivate = body.is_private ? 1 : 0;
-    const passwordHash = (isPrivate && body.password) ? await sha256hex(body.password) : null;
-    const now = new Date().toISOString();
-    try {
-      const { meta } = await env.DB.prepare(
-        "INSERT INTO albums (slug, title, description, cover_key, is_private, password_hash, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)"
-      ).bind(slug, title, body.description || null, body.cover_key || null, isPrivate, passwordHash, now, now).run();
-      return new Response(JSON.stringify({ ok: true, slug, id: meta.last_row_id }), {
-        status: 201, headers: { "content-type": "application/json; charset=utf-8" },
-      });
-    } catch (e) {
-      if (String(e).includes("UNIQUE")) return new Response(JSON.stringify({ error: "slug already taken" }), { status: 409, headers: { "content-type": "application/json; charset=utf-8" } });
-      throw e;
-    }
-  }
-
-  return new Response("Method Not Allowed", { status: 405 });
-}
-
-// ── 相簿详情 / 修改 / 删除 / 照片管理 ─────────────────────────────────────────
-async function handleAlbumBySlug(request, env, url) {
-  await ensureAlbumTables(env);
-  // URL: /api/albums/:slug  or  /api/albums/:slug/photos
-  const rest = url.pathname.slice("/api/albums/".length); // "my-slug" or "my-slug/photos"
-  const slashPos = rest.indexOf("/");
-  const slug = slashPos === -1 ? rest : rest.slice(0, slashPos);
-  const subPath = slashPos === -1 ? "" : rest.slice(slashPos + 1);
-
-  if (!slug) return new Response("Not Found", { status: 404 });
-
-  const album = await env.DB.prepare("SELECT * FROM albums WHERE slug = ?").bind(slug).first();
-  if (!album) return new Response(JSON.stringify({ error: "Album not found" }), { status: 404, headers: { "content-type": "application/json; charset=utf-8" } });
-
-  // ── /api/albums/:slug/photos ────────────────────────────────────────────────
-  if (subPath === "photos") {
-    if (request.method === "POST") {
-      let body;
-      try { body = await request.json(); } catch { return new Response("Bad Request", { status: 400 }); }
-      const now = new Date().toISOString();
-      let keys = [];
-
-      if (Array.isArray(body.keys) && body.keys.length > 0) {
-        // 手动指定 key 列表
-        keys = body.keys.map((k) => String(k)).filter(Boolean);
-      } else if (body.date_from && body.date_to) {
-        // 日期范围批量：查 photos_index，只取图片
-        const { results } = await env.DB.prepare(
-          "SELECT key FROM photos_index WHERE (year || '-' || month || '-' || day) BETWEEN ? AND ? ORDER BY year, month, day"
-        ).bind(body.date_from, body.date_to).all();
-        keys = results.map((r) => r.key);
-      } else {
-        return new Response(JSON.stringify({ error: "keys array or date_from/date_to required" }), { status: 400, headers: { "content-type": "application/json; charset=utf-8" } });
-      }
-
-      if (!keys.length) return new Response(JSON.stringify({ ok: true, added: 0 }), { headers: { "content-type": "application/json; charset=utf-8" } });
-
-      // 查现有最大 sort_order
-      const { results: sortRows } = await env.DB.prepare(
-        "SELECT MAX(sort_order) AS mx FROM album_photos WHERE album_id = ?"
-      ).bind(album.id).all();
-      let sortBase = (sortRows[0]?.mx ?? -1) + 1;
-
-      const stmts = keys.map((k, i) =>
-        env.DB.prepare("INSERT OR IGNORE INTO album_photos (album_id, photo_key, sort_order, added_at) VALUES (?,?,?,?)")
-          .bind(album.id, k, sortBase + i, now)
-      );
-      // 批量写入，100 条一批
-      for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
-
-      // 如果还没设封面，取第一张图片作封面
-      if (!album.cover_key) {
-        const first = await env.DB.prepare(
-          "SELECT ap.photo_key FROM album_photos ap JOIN photos_index pi ON pi.key = ap.photo_key WHERE ap.album_id = ? AND pi.type = 'image' ORDER BY ap.sort_order LIMIT 1"
-        ).bind(album.id).first();
-        if (first) {
-          await env.DB.prepare("UPDATE albums SET cover_key = ?, updated_at = ? WHERE id = ?")
-            .bind(first.photo_key, now, album.id).run();
-        }
-      }
-      return new Response(JSON.stringify({ ok: true, added: keys.length }), { headers: { "content-type": "application/json; charset=utf-8" } });
-    }
-
-    if (request.method === "DELETE") {
-      let body;
-      try { body = await request.json(); } catch { return new Response("Bad Request", { status: 400 }); }
-      const key = String(body.key || "");
-      if (!key) return new Response("Bad Request", { status: 400 });
-      await env.DB.prepare("DELETE FROM album_photos WHERE album_id = ? AND photo_key = ?").bind(album.id, key).run();
-      return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json; charset=utf-8" } });
-    }
-
-    return new Response("Method Not Allowed", { status: 405 });
-  }
-
-  // ── /api/albums/:slug ────────────────────────────────────────────────────────
-  if (request.method === "GET") {
-    // 密码验证
-    if (album.is_private) {
-      const suppliedPw = request.headers.get("x-album-password") || url.searchParams.get("pw") || "";
-      const suppliedHash = suppliedPw ? await sha256hex(suppliedPw) : "";
-      const adminToken = url.searchParams.get("token") || request.headers.get("x-admin-token");
-      const isAdmin = env.ADMIN_TOKEN && adminToken === env.ADMIN_TOKEN;
-      if (!isAdmin && suppliedHash !== album.password_hash) {
-        return new Response(JSON.stringify({ error: "password_required" }), {
-          status: 401, headers: { "content-type": "application/json; charset=utf-8" },
-        });
-      }
-    }
-
-    const { results: apRows } = await env.DB.prepare(
-      "SELECT photo_key FROM album_photos WHERE album_id = ? ORDER BY sort_order, added_at"
-    ).bind(album.id).all();
-    const photoKeys = apRows.map((r) => r.photo_key);
-    const photos = await buildAlbumPhotos(env, photoKeys);
-
-    return new Response(JSON.stringify({
-      slug: album.slug,
-      title: album.title,
-      description: album.description || "",
-      coverUrl: album.cover_key ? `/thumb/${encodeURIComponent(album.cover_key)}?w=600&q=80` : null,
-      isPrivate: !!album.is_private,
-      createdAt: album.created_at,
-      photos,
-    }), { headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
-  }
-
-  if (request.method === "PATCH") {
-    let body;
-    try { body = await request.json(); } catch { return new Response("Bad Request", { status: 400 }); }
-    const now = new Date().toISOString();
-    const updates = [];
-    const binds = [];
-    if (typeof body.title === "string") { updates.push("title = ?"); binds.push(body.title.trim()); }
-    if (typeof body.description === "string") { updates.push("description = ?"); binds.push(body.description || null); }
-    if (typeof body.cover_key === "string") { updates.push("cover_key = ?"); binds.push(body.cover_key || null); }
-    if (typeof body.is_private === "boolean") {
-      updates.push("is_private = ?"); binds.push(body.is_private ? 1 : 0);
-      if (body.is_private && body.password) {
-        updates.push("password_hash = ?"); binds.push(await sha256hex(body.password));
-      } else if (!body.is_private) {
-        updates.push("password_hash = ?"); binds.push(null);
-      }
-    }
-    if (!updates.length) return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json; charset=utf-8" } });
-    updates.push("updated_at = ?"); binds.push(now); binds.push(album.id);
-    await env.DB.prepare(`UPDATE albums SET ${updates.join(", ")} WHERE id = ?`).bind(...binds).run();
-    return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json; charset=utf-8" } });
-  }
-
-  if (request.method === "DELETE") {
-    await env.DB.prepare("DELETE FROM albums WHERE id = ?").bind(album.id).run();
-    return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json; charset=utf-8" } });
-  }
-
-  return new Response("Method Not Allowed", { status: 405 });
-}
-
 // 北京时间（UTC+8）的今天，返回 { month: "MM", day: "DD" }
 function bjToday() {
   const bj = new Date(Date.now() + 8 * 60 * 60 * 1000);
@@ -802,6 +517,161 @@ async function handleRecap(request, env, url) {
   return response;
 }
 
+const RECAP_HTML = `<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>年度回忆 · 那年今日</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico" />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+  body {
+    margin: 0; background: #000; color: #fff; overflow: hidden;
+    height: 100dvh; font-family: "SF Pro Display", -apple-system, "PingFang SC", sans-serif;
+  }
+  #stage { position: fixed; inset: 0; }
+  #stage img {
+    position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+    opacity: 0; transition: opacity 1.1s ease;
+  }
+  #stage img.on { opacity: 1; }
+  #stage img.kb { animation: kenburns 6s ease-out forwards; }
+  @keyframes kenburns { from { transform: scale(1); } to { transform: scale(1.07); } }
+  #intro {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 0.6rem;
+    background: #000; z-index: 5; transition: opacity 1s ease;
+  }
+  #intro.hide { opacity: 0; pointer-events: none; }
+  #intro .y { font-size: clamp(3rem, 12vw, 6rem); font-weight: 700; letter-spacing: 0.02em; }
+  #intro .t { color: #8a8a8f; font-size: 0.95rem; letter-spacing: 0.35em; text-transform: uppercase; }
+  #caption {
+    position: fixed; left: max(1.4rem, env(safe-area-inset-left)); bottom: max(1.6rem, env(safe-area-inset-bottom));
+    z-index: 3; max-width: 72vw; text-shadow: 0 1px 10px rgba(0,0,0,0.8);
+  }
+  #caption .d { font-size: 1.25rem; font-weight: 700; margin-bottom: 0.25rem; }
+  #caption .c { font-size: 0.8rem; color: rgba(255,255,255,0.75); line-height: 1.5; }
+  #bar { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 4; background: rgba(255,255,255,0.14); }
+  #bar i { display: block; height: 100%; width: 0; background: #fff; transition: width 0.2s linear; }
+  .btn {
+    position: fixed; z-index: 6; width: 38px; height: 38px; border-radius: 50%;
+    border: none; display: flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,0.12); backdrop-filter: blur(12px); color: #fff;
+    cursor: pointer; text-decoration: none; font-size: 0.9rem;
+  }
+  #back { top: max(1rem, env(safe-area-inset-top)); left: max(1rem, env(safe-area-inset-left)); }
+  #music { top: max(1rem, env(safe-area-inset-top)); right: max(1rem, env(safe-area-inset-right)); }
+  #yearNav {
+    position: fixed; bottom: max(1.5rem, env(safe-area-inset-bottom)); right: max(1.2rem, env(safe-area-inset-right));
+    z-index: 6; display: flex; gap: 0.4rem;
+  }
+  #yearNav a {
+    color: rgba(255,255,255,0.55); text-decoration: none; font-size: 0.78rem;
+    padding: 0.25rem 0.6rem; border-radius: 999px; background: rgba(0,0,0,0.35); backdrop-filter: blur(8px);
+  }
+  #yearNav a.cur { color: #000; background: rgba(255,255,255,0.9); font-weight: 600; }
+  #empty { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; color: #6e6e73; z-index: 5; }
+  svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+</style>
+</head>
+<body>
+  <div id="stage"><img id="imgA" /><img id="imgB" /></div>
+  <div id="intro"><div class="t">Year in Review</div><div class="y" id="introYear"></div></div>
+  <div id="bar"><i id="barFill"></i></div>
+  <div id="caption"><div class="d" id="capDate"></div><div class="c" id="capText"></div></div>
+  <a class="btn" id="back" href="/" title="回到今天"><svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg></a>
+  <button class="btn" id="music" title="背景音乐"><svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></button>
+  <div id="yearNav"></div>
+  <div id="empty">这一年还没有打过分的照片</div>
+  <audio id="bgm" loop preload="none"><source src="https://image.cuijianzhuang.com/forest.mp3" type="audio/mpeg" /></audio>
+<script>
+  var params = new URLSearchParams(location.search);
+  var qs = params.get('year') ? '?year=' + encodeURIComponent(params.get('year')) : '';
+  var photos = [], idx = -1, timer = null, paused = false, useA = true;
+  var DURATION = 5000;
+  var imgA = document.getElementById('imgA'), imgB = document.getElementById('imgB');
+  var barFill = document.getElementById('barFill');
+
+  function thumbOf(p) { return p.url.replace('/img/', '/thumb/') + '?w=1600&q=85&fit=scale-down'; }
+
+  fetch('/api/recap' + qs).then(function (r) { return r.json(); }).then(function (data) {
+    document.getElementById('introYear').textContent = data.year;
+    var nav = document.getElementById('yearNav');
+    nav.innerHTML = (data.years || []).map(function (y) {
+      return '<a href="/recap?year=' + y + '"' + (y === data.year ? ' class="cur"' : '') + '>' + y + '</a>';
+    }).join('');
+    photos = data.photos || [];
+    if (!photos.length) {
+      document.getElementById('intro').classList.add('hide');
+      document.getElementById('empty').style.display = 'flex';
+      return;
+    }
+    setTimeout(function () {
+      document.getElementById('intro').classList.add('hide');
+      next();
+    }, 1800);
+  });
+
+  function show(i) {
+    idx = (i + photos.length) % photos.length;
+    var p = photos[idx];
+    var incoming = useA ? imgA : imgB;
+    var outgoing = useA ? imgB : imgA;
+    useA = !useA;
+    incoming.classList.remove('on', 'kb');
+    incoming.src = thumbOf(p);
+    var reveal = function () {
+      incoming.classList.add('on', 'kb');
+      outgoing.classList.remove('on');
+      document.getElementById('capDate').textContent = parseInt(p.month) + ' 月 ' + parseInt(p.day) + ' 日';
+      document.getElementById('capText').textContent = [p.caption, p.place].filter(Boolean).join(' · ');
+      barFill.style.width = ((idx + 1) / photos.length * 100) + '%';
+      // 预加载下一张
+      var nx = new Image(); nx.src = thumbOf(photos[(idx + 1) % photos.length]);
+      schedule();
+    };
+    if (incoming.complete && incoming.naturalWidth) reveal();
+    else { incoming.onload = reveal; incoming.onerror = function () { schedule(); }; }
+  }
+
+  function schedule() {
+    clearTimeout(timer);
+    if (!paused) timer = setTimeout(next, DURATION);
+  }
+  function next() { show(idx + 1); }
+  function prev() { show(idx - 1); }
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); clearTimeout(timer); next(); }
+    if (e.key === 'ArrowLeft') { clearTimeout(timer); prev(); }
+    if (e.key === 'Escape') location.href = '/';
+  });
+  // 点击：左 1/3 上一张，右 2/3 下一张；长按暂停由 pointerdown/up 控制
+  var pressTimer = null;
+  document.getElementById('stage').addEventListener('pointerdown', function () {
+    pressTimer = setTimeout(function () { paused = true; clearTimeout(timer); pressTimer = null; }, 350);
+  });
+  document.getElementById('stage').addEventListener('pointerup', function (e) {
+    if (pressTimer) {
+      clearTimeout(pressTimer); pressTimer = null;
+      clearTimeout(timer);
+      if (e.clientX < window.innerWidth / 3) prev(); else next();
+    } else if (paused) {
+      paused = false; schedule();
+    }
+  });
+
+  var bgm = document.getElementById('bgm'), musicOn = false;
+  document.getElementById('music').onclick = function () {
+    musicOn = !musicOn;
+    this.style.opacity = musicOn ? 1 : 0.55;
+    if (musicOn) { bgm.volume = 0.4; bgm.play().catch(function () {}); } else bgm.pause();
+  };
+</script>
+</body>
+</html>`;
 
 // ── 照片手记 ──────────────────────────────────────────────────────────────────
 // 家人给照片写的文字注解（谁拍的、当时发生了什么）。站点面向家庭成员公开，
@@ -845,41 +715,6 @@ async function handleNote(request, env, url) {
   return new Response("Method Not Allowed", { status: 405 });
 }
 
-// ── 相簿管理：浏览照片选择器 ──────────────────────────────────────────────────
-async function handleAlbumBrowse(request, env, url) {
-  const from = url.searchParams.get("from");
-  const to = url.searchParams.get("to");
-  const offset = Math.max(0, parseInt(url.searchParams.get("offset")) || 0);
-  const limit = Math.min(200, Math.max(1, parseInt(url.searchParams.get("limit")) || 100));
-
-  if (!from || !to || !/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
-    return Response.json({ error: "from/to required, format YYYY-MM-DD" }, { status: 400 });
-  }
-
-  const { results } = await env.DB.prepare(
-    `SELECT pi.key, pi.year, pi.month, pi.day, pi.type, ps.caption, pp.name AS place
-     FROM photos_index pi
-     LEFT JOIN photo_scores ps ON ps.key = pi.key
-     LEFT JOIN photo_places pp ON pp.key = pi.key
-     WHERE pi.type = 'image' AND (pi.year || '-' || pi.month || '-' || pi.day) BETWEEN ?1 AND ?2
-     ORDER BY pi.year DESC, pi.month DESC, pi.day DESC, pi.key
-     LIMIT ?3 OFFSET ?4`
-  ).bind(from, to, limit + 1, offset).all();
-
-  const hasMore = results.length > limit;
-  const photos = results.slice(0, limit).map((r) => ({
-    key: r.key,
-    thumb: `/thumb/${encodeURIComponent(r.key)}?w=200&h=200&q=70&fit=cover`,
-    year: r.year,
-    month: r.month,
-    day: r.day,
-    caption: r.caption || "",
-    place: r.place || "",
-  }));
-
-  return Response.json({ photos, hasMore, offset, limit });
-}
-
 // ── 照片搜索 ──────────────────────────────────────────────────────────────────
 // 搜 AI 生成的中文说明（photo_scores.caption）和拍摄地名（photo_places.name）。
 // 用 LIKE 子串匹配而不是 FTS5——FTS5 默认分词器不吃中文（要 trigram 扩展），
@@ -921,6 +756,70 @@ async function handleSearch(request, env, url) {
   });
 }
 
+const LOVED_HTML = `<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>全家最爱 · 那年今日</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico" />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #000; color: #f5f5f7; min-height: 100vh;
+    font-family: "SF Pro Display", -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    padding: 3.5rem 1.2rem 4rem;
+  }
+  .back {
+    position: fixed; top: max(1rem, env(safe-area-inset-top)); left: max(1rem, env(safe-area-inset-left));
+    width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,0.1); backdrop-filter: blur(10px); color: #fff; text-decoration: none; z-index: 5;
+  }
+  h1 { text-align: center; font-size: 1.5rem; margin: 1rem 0 0.3rem; letter-spacing: -0.01em; }
+  .sub { text-align: center; color: #8a8a8f; font-size: 0.82rem; margin-bottom: 2rem; }
+  .grid { max-width: 1000px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 14px; }
+  @media (max-width: 640px) { .grid { grid-template-columns: repeat(2, 1fr); gap: 10px; } }
+  .card {
+    position: relative; border-radius: 10px; overflow: hidden; display: block;
+    background: #1c1c1e; aspect-ratio: 1; text-decoration: none;
+  }
+  .card img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity 0.35s ease; }
+  .card img.loaded { opacity: 1; }
+  .badge {
+    position: absolute; left: 8px; bottom: 8px; display: flex; align-items: center; gap: 4px;
+    background: rgba(0,0,0,0.55); backdrop-filter: blur(8px); border-radius: 999px;
+    padding: 3px 9px; color: #fff; font-size: 0.72rem; font-weight: 600;
+  }
+  .date { position: absolute; right: 8px; bottom: 8px; color: rgba(255,255,255,0.85); font-size: 0.66rem;
+    background: rgba(0,0,0,0.45); backdrop-filter: blur(8px); border-radius: 999px; padding: 3px 8px; }
+  .empty { text-align: center; color: #6e6e73; padding: 5rem 1rem; line-height: 1.7; }
+</style>
+</head>
+<body>
+  <a class="back" href="/" title="回到今天">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+  </a>
+  <h1>❤️ 全家最爱</h1>
+  <div class="sub">被表态最多的照片</div>
+  <div class="grid" id="grid"></div>
+  <div class="empty" id="empty" style="display:none">还没有人表态过<br>去照片里点一个 ❤️ 吧</div>
+<script>
+  fetch('/api/top-loved').then(function (r) { return r.json(); }).then(function (data) {
+    var photos = data.photos || [];
+    if (!photos.length) { document.getElementById('empty').style.display = 'block'; return; }
+    document.getElementById('grid').innerHTML = photos.map(function (p) {
+      var thumb = p.url.replace('/img/', '/thumb/') + '?w=400&h=400&q=75&fit=cover';
+      var dateTxt = p.year + '/' + p.month + '/' + p.day;
+      var href = '/?month=' + p.month + '&day=' + p.day;
+      return '<a class="card" href="' + href + '">' +
+        '<img src="' + thumb.replace(/"/g, '&quot;') + '" loading="lazy" onload="this.classList.add(\\'loaded\\')" />' +
+        '<span class="badge">❤️ ' + p.total + '</span><span class="date">' + dateTxt + '</span></a>';
+    }).join('');
+  });
+</script>
+</body>
+</html>`;
 
 // ── PWA 应用图标 ──────────────────────────────────────────────────────────────
 // 用全库 AI 评分最高的照片裁成方形做安装图标（PWA manifest + apple-touch-icon），
@@ -3196,6 +3095,118 @@ async function handleOnThisDay(request, env, url) {
   }
 }
 
+// ---------- 地图页用的数据接口：把所有查到过经纬度的照片列出来，给前端打点 ----------
+// 地图只展示某一天（默认今天）匹配到的照片，不是整个照片库——
+// 跟 /api/memories 共用同一套日期匹配逻辑（matchPhotosForDay），并且同样做边缘缓存
+async function handleMapPhotos(request, env, url) {
+  const month = url.searchParams.get("month");
+  const day = url.searchParams.get("day");
+
+  // 不带 month/day = 全量模式：地球视角一次拿到所有带定位的照片（聚合渲染交给前端）
+  if (!month && !day) {
+    const cache = caches.default;
+    const cacheKey = new Request(url.toString());
+    const cachedResp = await cache.match(cacheKey);
+    if (cachedResp) return cachedResp;
+
+    const { results } = await env.DB.prepare(
+      `SELECT pp.key AS key, pp.lat, pp.lon, pp.name, pi.year, pi.month, pi.day, pi.type
+       FROM photo_places pp
+       JOIN photos_index pi ON pi.key = pp.key
+       WHERE pp.lat IS NOT NULL`
+    ).all();
+    const photos = results.map((r) => ({
+      key: r.key,
+      url: `/img/${encodeURIComponent(r.key)}`,
+      type: r.type,
+      lat: r.lat,
+      lon: r.lon,
+      name: r.name || "",
+      year: r.year,
+      month: r.month,
+      day: r.day,
+    }));
+    const response = new Response(JSON.stringify({ photos }), {
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "public, max-age=1800",
+      },
+    });
+    await cache.put(cacheKey, response.clone());
+    return response;
+  }
+
+  if (!/^\d{2}$/.test(month || "") || !/^\d{2}$/.test(day || "")) {
+    return new Response(JSON.stringify({ error: "month/day required, format MM/DD" }), {
+      status: 400,
+      headers: { "content-type": "application/json; charset=utf-8" },
+    });
+  }
+
+  const cache = caches.default;
+  const cacheKey = new Request(url.toString());
+  const cachedResp = await cache.match(cacheKey);
+  if (cachedResp) return cachedResp;
+
+  const matchedByYear = await matchPhotosForDay(env, month, day);
+  const matchedKeys = matchedByYear.flatMap((y) => y.photos.map((p) => p.key));
+  const places = await loadPlacesForKeys(env, matchedKeys);
+
+  const photos = matchedByYear
+    .flatMap((y) => y.photos)
+    .map((p) => {
+      const entry = places[p.key];
+      if (!entry || typeof entry !== "object" || typeof entry.lat !== "number") return null;
+      return {
+        key: p.key,
+        url: p.url,
+        type: p.type,
+        lat: entry.lat,
+        lon: entry.lon,
+        name: entry.name || "",
+        year: p.year,
+        // 跟全量模式对齐：详情卡的日期展示和"去看这一天"链接都要用到
+        month,
+        day,
+      };
+    })
+    .filter(Boolean);
+
+  const response = new Response(JSON.stringify({ month, day, photos }), {
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "public, max-age=1800",
+    },
+  });
+  await cache.put(cacheKey, response.clone());
+  return response;
+}
+
+// ---------- 地图页：把所有带 GPS 的照片打点在地图上 ----------
+// 这里用的 token 必须是 public token（pk. 开头），跟服务端反向地理编码用的 secret token 是两个东西，
+// 因为这段代码会原样发到浏览器执行，secret token 绝对不能出现在这里
+const MAP_HTML = (mapboxPublicToken) => `<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>足迹 · 那年今日</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico" />
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.css" rel="stylesheet" />
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.js"></script>
+<link rel="stylesheet" href="/map.css" />
+</head>
+<body>
+  <a class="back-btn" href="/" title="回到回忆墙">
+    <svg viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+  </a>
+  <div id="map"></div>
+  <div class="map-empty" id="mapEmpty">还没有带定位信息的照片<br />等后台任务慢慢解析，或跑一次 /admin/locate-photos</div>
+
+<script>window.MAPBOX_TOKEN = ${JSON.stringify(mapboxPublicToken).replace(/<\//g, '<\\/')};</script>
+<script src="/map.js" defer></script>
+</body>
+</html>`;
 
 // ── Durable Object：实时共享房间 ─────────────────────────────────────────────────
 // 每个日期（"MM-DD"）对应一个 DO 实例。家人同时打开同一天的回忆时：
