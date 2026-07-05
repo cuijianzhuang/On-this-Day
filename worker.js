@@ -958,7 +958,7 @@ function loadAlbums() {
 
 function toSlug(str) {
   return str.toLowerCase()
-    .replace(/[\s_]+/g, '-')
+    .replace(/[\\s_]+/g, '-')
     .replace(/[^a-z0-9-]/g, '')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '');
@@ -1086,7 +1086,7 @@ function deleteAlbum() {
 
 function addByKeys() {
   if (!currentSlug) return;
-  var keys = document.getElementById('dpKeys').value.trim().split(/\n+/).map(function(k){ return k.trim(); }).filter(Boolean);
+  var keys = document.getElementById('dpKeys').value.trim().split(/\\n+/).map(function(k){ return k.trim(); }).filter(Boolean);
   var msg = document.getElementById('dpMsg');
   if (!keys.length) { showMsg(msg, 'err', '请填写至少一个 key'); return; }
   fetch('/api/albums/' + currentSlug + '/photos', { method: 'POST', headers: apiHeaders(), body: JSON.stringify({ keys: keys }) })
