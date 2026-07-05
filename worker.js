@@ -115,6 +115,10 @@ export default {
       return handleNote(request, env, url);
     }
 
+    if (url.pathname === "/api/album-browse") {
+      return handleAlbumBrowse(request, env, url);
+    }
+
     // ── 相簿 API ──────────────────────────────────────────────────────────────
     if (url.pathname === "/api/albums" || url.pathname === "/api/albums/") {
       return handleAlbums(request, env, url);
@@ -839,6 +843,41 @@ async function handleNote(request, env, url) {
   }
 
   return new Response("Method Not Allowed", { status: 405 });
+}
+
+// ── 相簿管理：浏览照片选择器 ──────────────────────────────────────────────────
+async function handleAlbumBrowse(request, env, url) {
+  const from = url.searchParams.get("from");
+  const to = url.searchParams.get("to");
+  const offset = Math.max(0, parseInt(url.searchParams.get("offset")) || 0);
+  const limit = Math.min(200, Math.max(1, parseInt(url.searchParams.get("limit")) || 100));
+
+  if (!from || !to || !/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    return Response.json({ error: "from/to required, format YYYY-MM-DD" }, { status: 400 });
+  }
+
+  const { results } = await env.DB.prepare(
+    `SELECT pi.key, pi.year, pi.month, pi.day, pi.type, ps.caption, pp.name AS place
+     FROM photos_index pi
+     LEFT JOIN photo_scores ps ON ps.key = pi.key
+     LEFT JOIN photo_places pp ON pp.key = pi.key
+     WHERE pi.type = 'image' AND (pi.year || '-' || pi.month || '-' || pi.day) BETWEEN ?1 AND ?2
+     ORDER BY pi.year DESC, pi.month DESC, pi.day DESC, pi.key
+     LIMIT ?3 OFFSET ?4`
+  ).bind(from, to, limit + 1, offset).all();
+
+  const hasMore = results.length > limit;
+  const photos = results.slice(0, limit).map((r) => ({
+    key: r.key,
+    thumb: `/thumb/${encodeURIComponent(r.key)}?w=200&h=200&q=70&fit=cover`,
+    year: r.year,
+    month: r.month,
+    day: r.day,
+    caption: r.caption || "",
+    place: r.place || "",
+  }));
+
+  return Response.json({ photos, hasMore, offset, limit });
 }
 
 // ── 照片搜索 ──────────────────────────────────────────────────────────────────
