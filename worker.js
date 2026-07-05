@@ -856,7 +856,7 @@ h2{font-size:1rem;font-weight:600;margin:0 0 .8rem;color:#c7c7cc}
         <input id="newTitle" placeholder="夏天的旅行" />
       </div>
       <div>
-        <label>标识符 (slug) *</label>
+        <label>标识符 (slug) * <span style="font-weight:400;color:#8a8a8f">（英文/数字/连字符）</span></label>
         <input id="newSlug" placeholder="summer-trip" />
       </div>
     </div>
@@ -872,7 +872,7 @@ h2{font-size:1rem;font-weight:600;margin:0 0 .8rem;color:#c7c7cc}
         <input id="newPw" type="password" placeholder="可选" />
       </div>
     </div>
-    <button class="btn-primary" onclick="createAlbum()">创建</button>
+    <button class="btn-primary" type="button" onclick="createAlbum()">创建</button>
   </div>
 </div>
 
@@ -902,8 +902,8 @@ h2{font-size:1rem;font-weight:600;margin:0 0 .8rem;color:#c7c7cc}
         <select id="dpEditPrivate"><option value="0">公开</option><option value="1">私密</option></select>
       </div>
     </div>
-    <button class="btn-primary btn-sm" onclick="saveAlbum()">保存</button>
-    <button class="btn-danger btn-sm" onclick="deleteAlbum()">删除相簿</button>
+    <button class="btn-primary btn-sm" type="button" onclick="saveAlbum()">保存</button>
+    <button class="btn-danger btn-sm" type="button" onclick="deleteAlbum()">删除相簿</button>
   </div>
 
   <hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:1rem 0" />
@@ -911,7 +911,7 @@ h2{font-size:1rem;font-weight:600;margin:0 0 .8rem;color:#c7c7cc}
   <div style="margin-bottom:1rem">
     <h3 style="font-size:.85rem;font-weight:600;color:#c7c7cc;margin:0 0 .6rem">添加照片 — 手动指定 Key</h3>
     <textarea id="dpKeys" placeholder="每行一个 photo key，例如：&#10;Photos/MobileBackup/iPhone/2023/07/IMG_1234.JPG" style="min-height:90px"></textarea>
-    <button class="btn-sm btn-primary" onclick="addByKeys()">添加</button>
+    <button class="btn-sm btn-primary" type="button" onclick="addByKeys()">添加</button>
   </div>
 
   <div>
@@ -920,7 +920,7 @@ h2{font-size:1rem;font-weight:600;margin:0 0 .8rem;color:#c7c7cc}
       <div><label>开始日期</label><input type="date" id="dpDateFrom" /></div>
       <div><label>结束日期</label><input type="date" id="dpDateTo" /></div>
     </div>
-    <button class="btn-sm btn-primary" onclick="addByDateRange()">添加范围内所有照片</button>
+    <button class="btn-sm btn-primary" type="button" onclick="addByDateRange()">添加范围内所有照片</button>
   </div>
 
   <div id="dpPhotosWrap" style="margin-top:1rem"></div>
@@ -956,22 +956,58 @@ function loadAlbums() {
   }).catch(function(e){ document.getElementById('albums-list').innerHTML = '<div style="color:#ff3b30">加载失败</div>'; });
 }
 
+function toSlug(str) {
+  return str.toLowerCase()
+    .replace(/[\s_]+/g, '-')
+    .replace(/[^a-z0-9-]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+(function() {
+  var titleEl = document.getElementById('newTitle');
+  var slugEl = document.getElementById('newSlug');
+  titleEl.addEventListener('input', function() {
+    if (!slugEl._touched) slugEl.value = toSlug(titleEl.value);
+  });
+  slugEl.addEventListener('input', function() {
+    slugEl._touched = slugEl.value !== '';
+  });
+  slugEl.addEventListener('blur', function() {
+    var clean = toSlug(slugEl.value);
+    if (clean !== slugEl.value) slugEl.value = clean;
+    slugEl._touched = clean !== '';
+  });
+})();
+
 function createAlbum() {
   var title = document.getElementById('newTitle').value.trim();
-  var slug = document.getElementById('newSlug').value.trim();
+  var rawSlug = document.getElementById('newSlug').value.trim();
+  var slug = toSlug(rawSlug);
   var desc = document.getElementById('newDesc').value.trim();
   var isPrivate = document.getElementById('newPrivate').value === '1';
   var pw = document.getElementById('newPw').value;
   var msg = document.getElementById('createMsg');
-  if (!title || !slug) { showMsg(msg, 'err', 'title 和 slug 必填'); return; }
+  if (!title) { showMsg(msg, 'err', '请填写相簿标题'); return; }
+  if (!slug) { showMsg(msg, 'err', 'slug 只能含英文字母、数字和连字符，请改用英文'); return; }
+  document.getElementById('newSlug').value = slug;
   fetch('/api/albums', {
     method: 'POST',
     headers: apiHeaders(),
     body: JSON.stringify({ title: title, slug: slug, description: desc, is_private: isPrivate, password: pw })
   }).then(function(r){ return r.json(); }).then(function(d) {
-    if (d.ok) { showMsg(msg, 'ok', '创建成功！'); loadAlbums(); }
-    else showMsg(msg, 'err', d.error || '创建失败');
-  }).catch(function() { showMsg(msg, 'err', '请求失败'); });
+    if (d.ok) {
+      showMsg(msg, 'ok', '创建成功！');
+      document.getElementById('newTitle').value = '';
+      document.getElementById('newSlug').value = '';
+      document.getElementById('newSlug')._touched = false;
+      document.getElementById('newDesc').value = '';
+      document.getElementById('newPw').value = '';
+      loadAlbums();
+    } else {
+      showMsg(msg, 'err', d.error || '创建失败');
+    }
+  }).catch(function() { showMsg(msg, 'err', '网络错误，请重试'); });
 }
 
 function openAlbum(slug) {
