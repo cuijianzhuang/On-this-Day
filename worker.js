@@ -485,8 +485,6 @@ async function handleAlbums(request, env, url) {
   }
 
   if (request.method === "POST") {
-    const denied = adminGuard(request, env);
-    if (denied) return denied;
     let body;
     try { body = await request.json(); } catch { return new Response("Bad Request", { status: 400 }); }
     const title = (body.title || "").trim();
@@ -527,9 +525,6 @@ async function handleAlbumBySlug(request, env, url) {
 
   // ── /api/albums/:slug/photos ────────────────────────────────────────────────
   if (subPath === "photos") {
-    const denied = adminGuard(request, env);
-    if (denied) return denied;
-
     if (request.method === "POST") {
       let body;
       try { body = await request.json(); } catch { return new Response("Bad Request", { status: 400 }); }
@@ -622,8 +617,6 @@ async function handleAlbumBySlug(request, env, url) {
   }
 
   if (request.method === "PATCH") {
-    const denied = adminGuard(request, env);
-    if (denied) return denied;
     let body;
     try { body = await request.json(); } catch { return new Response("Bad Request", { status: 400 }); }
     const now = new Date().toISOString();
@@ -647,8 +640,6 @@ async function handleAlbumBySlug(request, env, url) {
   }
 
   if (request.method === "DELETE") {
-    const denied = adminGuard(request, env);
-    if (denied) return denied;
     await env.DB.prepare("DELETE FROM albums WHERE id = ?").bind(album.id).run();
     return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json; charset=utf-8" } });
   }
@@ -657,9 +648,7 @@ async function handleAlbumBySlug(request, env, url) {
 }
 
 // ── 相簿管理后台 HTML ──────────────────────────────────────────────────────────
-async function handleAdminAlbums(request, env, url) {
-  const denied = adminGuard(request, env);
-  if (denied) return new Response("Forbidden — ?token=ADMIN_TOKEN required", { status: 403, headers: { "content-type": "text/plain; charset=utf-8" } });
+function handleAdminAlbums(request, env, url) {
   return new Response(ADMIN_ALBUMS_HTML(url.searchParams.get("token")), {
     headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
   });
