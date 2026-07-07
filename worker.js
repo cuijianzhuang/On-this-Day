@@ -364,6 +364,10 @@ async function ensureAuxTables(env) {
     env.DB.prepare(
       "CREATE TABLE IF NOT EXISTS photo_notes (key TEXT PRIMARY KEY, note TEXT NOT NULL, updated_at TEXT)"
     ),
+    // /api/recap 按年查询用；索引是库级别的，任何一条请求创建过一次之后永久生效
+    env.DB.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_photos_index_year ON photos_index(year)"
+    ),
   ]);
   _auxTablesReady = true;
 }
@@ -2390,19 +2394,21 @@ async function handleThumb(request, env, url) {
     if (/\.heic$/i.test(origKey)) {
       const previewKey = await findHeicPreviewKey(env, origKey);
       if (previewKey) {
-        return thumbRedirect(`${env.PREVIEWS_PUBLIC_URL}/${previewKey.split("/").map(encodeURIComponent).join("/")}`);
+        return thumbRedirect(`${env.PREVIEWS_PUBLIC_URL}/${previewKey.split("/").map(encodeURIComponent).join("/")}`, "public, max-age=3600");
       }
     }
     return handleImage(request, env, new URL(url.toString().replace("/thumb/", "/img/")));
   }
 }
 
-function thumbRedirect(publicUrl) {
+// 正式缩略图的 key 含尺寸、内容不可变，302 直接给一年 immutable，省掉每天每节点一次回源；
+// HEIC 预览兜底那条传短时限——那是变换额度用尽时的临时指路，额度恢复后要能换回正式缩略图
+function thumbRedirect(publicUrl, cacheControl = "public, max-age=31536000, immutable") {
   return new Response(null, {
     status: 302,
     headers: {
       "location": publicUrl,
-      "cache-control": "public, max-age=86400",
+      "cache-control": cacheControl,
     },
   });
 }
