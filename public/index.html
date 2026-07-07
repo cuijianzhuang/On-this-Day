@@ -16,6 +16,9 @@
 <!-- 字体自托管（可变字体一个文件覆盖 400-600 字重）；heic2any 也不再页面加载时引入，
      app.js 里第一次需要浏览器端解码 HEIC 时才动态注入——国内访问不再依赖 Google/jsDelivr 两个不稳的境外 CDN -->
 <link rel="preload" href="/vendor/space-grotesk-latin.woff2" as="font" type="font/woff2" crossorigin />
+<!-- 缩略图全部 302 跳到 previews 域、背景视频/音频在 image 域——提前握手，首屏图片省一次 DNS+TLS 往返 -->
+<link rel="preconnect" href="https://previews.cuijianzhuang.com" />
+<link rel="preconnect" href="https://image.cuijianzhuang.com" />
 <link rel="stylesheet" href="/app.css" />
 </head>
 <body>
