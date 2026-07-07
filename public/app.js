@@ -668,13 +668,17 @@
   ambientAudio.play().catch(() => {});
 
   // 背景叶影视频：iOS 低电量模式禁止 autoplay 且会画系统 ▶ 按钮。播放失败就把视频藏掉
-  // （光斑 glow 层照常，氛围不塌），等用户第一次触摸/点击（此时允许播放了）再恢复
+  // （光斑 glow 层照常，氛围不塌），等用户第一次触摸/点击（此时允许播放了）再恢复。
+  // src 不在 HTML 里直接给——整段 mp4 会跟首屏缩略图抢带宽，等首屏数据到了（见 loadMemories）
+  // 或用户先交互了再挂上开始加载，氛围层晚一两秒出现无感知，照片墙快很多
   const leafVideo = document.getElementById('leafVideo');
+  let startLeafVideo = () => {};
   if (leafVideo) {
     const tryPlayLeaf = () => {
+      if (!leafVideo.src) leafVideo.src = leafVideo.dataset.src;
       leafVideo.play().then(() => { leafVideo.style.display = ''; }).catch(() => { leafVideo.style.display = 'none'; });
     };
-    tryPlayLeaf();
+    startLeafVideo = tryPlayLeaf;
     window.addEventListener('touchend', tryPlayLeaf, { once: true, passive: true });
     window.addEventListener('click', tryPlayLeaf, { once: true });
   }
@@ -1925,6 +1929,9 @@
         fadeIn();
       };
 
+      // 首屏数据已到、缩略图马上开始加载——再等一小拍才启动背景叶影视频的下载，不抢首屏带宽
+      if (isFirst) setTimeout(startLeafVideo, 800);
+
       // 首次加载（骨架屏是 SSR 直出的）或者确实画出过骨架屏，这时候内容区域当前还显示着骨架屏，
       // 要先淡出再换真实内容；网络够快、上面跳过了骨架屏绘制的情况，内容这时候已经是淡出状态了
       // （进 loadMemories 时就 fadeOut 过一次），不用再多走一轮，直接换内容更快也不会有额外的视觉跳动
@@ -1939,6 +1946,7 @@
     }).catch((err) => {
       if (seq !== _memSeq) return; // 已经被新的切换顶替，不用管这次失败
       console.error('loadMemories failed', err);
+      if (isFirst) startLeafVideo(); // 数据没加载出来也别让氛围层一起缺席
       const showError = () => {
         subtitle.textContent = '加载失败，请稍后重试';
         content.innerHTML = '<div class="empty">这天的回忆没能加载出来，请检查网络后重试</div>';

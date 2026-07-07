@@ -16,15 +16,17 @@
 <!-- 字体自托管（可变字体一个文件覆盖 400-600 字重）；heic2any 也不再页面加载时引入，
      app.js 里第一次需要浏览器端解码 HEIC 时才动态注入——国内访问不再依赖 Google/jsDelivr 两个不稳的境外 CDN -->
 <link rel="preload" href="/vendor/space-grotesk-latin.woff2" as="font" type="font/woff2" crossorigin />
+<!-- 缩略图全部 302 跳到 previews 域、背景视频/音频在 image 域——提前握手，首屏图片省一次 DNS+TLS 往返 -->
+<link rel="preconnect" href="https://previews.cuijianzhuang.com" />
+<link rel="preconnect" href="https://image.cuijianzhuang.com" />
 <link rel="stylesheet" href="/app.css" />
 </head>
 <body>
   <div class="sunlight">
     <div class="glow"></div>
     <div class="video-layer">
-      <video id="leafVideo" autoplay muted loop playsinline>
-        <source src="https://image.cuijianzhuang.com/leaves.mp4" type="video/mp4" />
-      </video>
+      <!-- 不再 autoplay 全量下载：src 由 app.js 在首屏照片开始加载后再挂上，不跟缩略图抢首屏带宽 -->
+      <video id="leafVideo" muted loop playsinline preload="none" data-src="https://image.cuijianzhuang.com/leaves.mp4"></video>
     </div>
   </div>
   <div class="sun-sweep" id="sunSweep"></div>

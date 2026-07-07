@@ -364,6 +364,10 @@ async function ensureAuxTables(env) {
     env.DB.prepare(
       "CREATE TABLE IF NOT EXISTS photo_notes (key TEXT PRIMARY KEY, note TEXT NOT NULL, updated_at TEXT)"
     ),
+    // /api/recap 按年查询用；索引是库级别的，任何一条请求创建过一次之后永久生效
+    env.DB.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_photos_index_year ON photos_index(year)"
+    ),
   ]);
   _auxTablesReady = true;
 }
@@ -2028,6 +2032,13 @@ async function handleExif(request, env, url) {
   const key = url.searchParams.get("key");
   if (!key || key.length > 500) return new Response("Bad Request", { status: 400 });
 
+  // EXIF 是照片自带的不变元数据，解析一次全网复用——尤其 HEIC 要走一整套
+  // ISOBMFF box 查找 + TIFF 解析，之前只有浏览器缓存头，每个访问者都重复解析一遍
+  const cache = caches.default;
+  const cacheKey = new Request(url.toString());
+  const cachedResp = await cache.match(cacheKey);
+  if (cachedResp) return cachedResp;
+
   let obj = null;
   let exif = {};
   if (/\.heic$/i.test(key)) {
@@ -2043,13 +2054,15 @@ async function handleExif(request, env, url) {
   }
   if (!obj) return new Response("Not Found", { status: 404 });
   if (obj.size) exif.fileSize = obj.size;
-  return new Response(JSON.stringify(exif), {
+  const response = new Response(JSON.stringify(exif), {
     headers: {
       "content-type": "application/json",
       "cache-control": "public, max-age=86400, stale-while-revalidate=604800",
       "access-control-allow-origin": "*",
     },
   });
+  await cache.put(cacheKey, response.clone());
+  return response;
 }
 
 async function handleStaticMap(request, env, url) {
@@ -2381,19 +2394,21 @@ async function handleThumb(request, env, url) {
     if (/\.heic$/i.test(origKey)) {
       const previewKey = await findHeicPreviewKey(env, origKey);
       if (previewKey) {
-        return thumbRedirect(`${env.PREVIEWS_PUBLIC_URL}/${previewKey.split("/").map(encodeURIComponent).join("/")}`);
+        return thumbRedirect(`${env.PREVIEWS_PUBLIC_URL}/${previewKey.split("/").map(encodeURIComponent).join("/")}`, "public, max-age=3600");
       }
     }
     return handleImage(request, env, new URL(url.toString().replace("/thumb/", "/img/")));
   }
 }
 
-function thumbRedirect(publicUrl) {
+// 正式缩略图的 key 含尺寸、内容不可变，302 直接给一年 immutable，省掉每天每节点一次回源；
+// HEIC 预览兜底那条传短时限——那是变换额度用尽时的临时指路，额度恢复后要能换回正式缩略图
+function thumbRedirect(publicUrl, cacheControl = "public, max-age=31536000, immutable") {
   return new Response(null, {
     status: 302,
     headers: {
       "location": publicUrl,
-      "cache-control": "public, max-age=86400",
+      "cache-control": cacheControl,
     },
   });
 }
@@ -2418,8 +2433,10 @@ async function loadScoresForKeys(env, keys) {
   const batches = await Promise.all(
     chunkArray(keys, 100).map((batch) => {
       const placeholders = batch.map(() => "?").join(",");
+      // 不查 raw_response——那是 AI 原始响应全文（每行几百字节到几 KB），只在 saveScore 时
+      // 写入留档，这里的调用方（/api/memories、打分候选筛选）都只用 score/has_face/caption
       return env.DB.prepare(
-        `SELECT key, score, has_face, caption, raw_response, updated_at FROM photo_scores WHERE key IN (${placeholders})`
+        `SELECT key, score, has_face, caption, updated_at FROM photo_scores WHERE key IN (${placeholders})`
       )
         .bind(...batch)
         .all();
@@ -2432,7 +2449,6 @@ async function loadScoresForKeys(env, keys) {
         score: row.score,
         hasFace: !!row.has_face,
         caption: row.caption || "",
-        rawResponse: row.raw_response || "",
         updatedAt: row.updated_at || "",
       };
     }
@@ -2519,7 +2535,7 @@ async function scoreOnePhoto(env, key) {
 
 // key 还没打过分时 loadScores() 返回的对象里没有这一项，统一给个默认值方便调用方直接解构
 function scoreInfoOf(entry) {
-  return entry || { score: null, hasFace: false, caption: "", rawResponse: "", updatedAt: "" };
+  return entry || { score: null, hasFace: false, caption: "", updatedAt: "" };
 }
 
 // 之前打过分但还没补上 AI 文案的（caption 字段加得比打分晚），或者文案是翻译功能上线前
@@ -2832,8 +2848,12 @@ const SITE_ORIGIN = "https://memories.cuijianzhuang.com";
 
 async function purgeDayCache(month, day) {
   const cache = caches.default;
+  // 前端请求永远显式带 lunar=0 / lunar=1（见 app.js loadMemories），边缘缓存按完整 URL 做 key，
+  // 三个变体都要清——之前漏了 lunar=0，公历模式（最常用）的缓存一直清不掉，
+  // 新照片上传后要干等边缘缓存自然过期（最长 30 分钟）才出现
   const targets = [
     `${SITE_ORIGIN}/api/memories?month=${month}&day=${day}`,
+    `${SITE_ORIGIN}/api/memories?month=${month}&day=${day}&lunar=0`,
     `${SITE_ORIGIN}/api/memories?month=${month}&day=${day}&lunar=1`,
     `${SITE_ORIGIN}/api/map-photos?month=${month}&day=${day}`,
   ];
