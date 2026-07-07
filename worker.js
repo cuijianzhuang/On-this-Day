@@ -2028,6 +2028,13 @@ async function handleExif(request, env, url) {
   const key = url.searchParams.get("key");
   if (!key || key.length > 500) return new Response("Bad Request", { status: 400 });
 
+  // EXIF 是照片自带的不变元数据，解析一次全网复用——尤其 HEIC 要走一整套
+  // ISOBMFF box 查找 + TIFF 解析，之前只有浏览器缓存头，每个访问者都重复解析一遍
+  const cache = caches.default;
+  const cacheKey = new Request(url.toString());
+  const cachedResp = await cache.match(cacheKey);
+  if (cachedResp) return cachedResp;
+
   let obj = null;
   let exif = {};
   if (/\.heic$/i.test(key)) {
@@ -2043,13 +2050,15 @@ async function handleExif(request, env, url) {
   }
   if (!obj) return new Response("Not Found", { status: 404 });
   if (obj.size) exif.fileSize = obj.size;
-  return new Response(JSON.stringify(exif), {
+  const response = new Response(JSON.stringify(exif), {
     headers: {
       "content-type": "application/json",
       "cache-control": "public, max-age=86400, stale-while-revalidate=604800",
       "access-control-allow-origin": "*",
     },
   });
+  await cache.put(cacheKey, response.clone());
+  return response;
 }
 
 async function handleStaticMap(request, env, url) {
