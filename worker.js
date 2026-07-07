@@ -2832,8 +2832,12 @@ const SITE_ORIGIN = "https://memories.cuijianzhuang.com";
 
 async function purgeDayCache(month, day) {
   const cache = caches.default;
+  // 前端请求永远显式带 lunar=0 / lunar=1（见 app.js loadMemories），边缘缓存按完整 URL 做 key，
+  // 三个变体都要清——之前漏了 lunar=0，公历模式（最常用）的缓存一直清不掉，
+  // 新照片上传后要干等边缘缓存自然过期（最长 30 分钟）才出现
   const targets = [
     `${SITE_ORIGIN}/api/memories?month=${month}&day=${day}`,
+    `${SITE_ORIGIN}/api/memories?month=${month}&day=${day}&lunar=0`,
     `${SITE_ORIGIN}/api/memories?month=${month}&day=${day}&lunar=1`,
     `${SITE_ORIGIN}/api/map-photos?month=${month}&day=${day}`,
   ];
