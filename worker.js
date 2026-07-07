@@ -2418,8 +2418,10 @@ async function loadScoresForKeys(env, keys) {
   const batches = await Promise.all(
     chunkArray(keys, 100).map((batch) => {
       const placeholders = batch.map(() => "?").join(",");
+      // 不查 raw_response——那是 AI 原始响应全文（每行几百字节到几 KB），只在 saveScore 时
+      // 写入留档，这里的调用方（/api/memories、打分候选筛选）都只用 score/has_face/caption
       return env.DB.prepare(
-        `SELECT key, score, has_face, caption, raw_response, updated_at FROM photo_scores WHERE key IN (${placeholders})`
+        `SELECT key, score, has_face, caption, updated_at FROM photo_scores WHERE key IN (${placeholders})`
       )
         .bind(...batch)
         .all();
@@ -2432,7 +2434,6 @@ async function loadScoresForKeys(env, keys) {
         score: row.score,
         hasFace: !!row.has_face,
         caption: row.caption || "",
-        rawResponse: row.raw_response || "",
         updatedAt: row.updated_at || "",
       };
     }
@@ -2519,7 +2520,7 @@ async function scoreOnePhoto(env, key) {
 
 // key 还没打过分时 loadScores() 返回的对象里没有这一项，统一给个默认值方便调用方直接解构
 function scoreInfoOf(entry) {
-  return entry || { score: null, hasFace: false, caption: "", rawResponse: "", updatedAt: "" };
+  return entry || { score: null, hasFace: false, caption: "", updatedAt: "" };
 }
 
 // 之前打过分但还没补上 AI 文案的（caption 字段加得比打分晚），或者文案是翻译功能上线前
