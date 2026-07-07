@@ -84,11 +84,14 @@ crons = ["*/10 * * * *", "0 16 * * *"]
 enabled = false
 head_sampling_rate = 1
 
+# invocation_logs 关掉：那是每次请求自动记的一条事件，/img /thumb 一个页面就是几十上百次请求，
+# 日志量全靠它撑大（Workers Logs 免费额度 2000 万条/月，超出按量计费）。console.log/error 这类
+# 主动打的诊断日志不受影响，采样率保持 1.0 全量保留——排错全靠它们，不能丢
 [observability.logs]
 enabled = true
 head_sampling_rate = 1
 persist = true
-invocation_logs = true
+invocation_logs = false
 
 [observability.traces]
 enabled = false
