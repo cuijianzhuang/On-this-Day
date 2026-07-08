@@ -2766,19 +2766,27 @@ async function handleBackfillWorkflows(request, env, url) {
     "LIMIT ?"
   ).bind(limit).all();
 
+  // 用确定性实例 ID（基于 key）避免重复触发：Workflow 运行期间同一 ID 再次 create() 会抛错，
+  // catch 住跳过；Workflow 完成后 ID 释放，可重新触发（比如失败重试）。
+  // 这样批量循环调用时，已在跑的照片不会被重复触发，只有真正没有运行中 Workflow 的照片才计数。
+  let triggered = 0;
   for (const { key } of results) {
-    await env.PHOTO_WORKFLOW.create({ params: { key } });
+    const instanceId = ("bf-" + key).replace(/[^a-zA-Z0-9\-_]/g, "-").slice(0, 64);
+    try {
+      await env.PHOTO_WORKFLOW.create({ params: { key }, id: instanceId });
+      triggered++;
+    } catch {
+      // 已有运行中的 Workflow 实例，跳过
+    }
   }
 
-  // 计算剩余未处理数量（本批触发后还剩多少）
-  const { results: countRows } = await env.DB.prepare(
-    "SELECT COUNT(*) as cnt FROM photos_index pi " +
+  const remainRow = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM photos_index pi " +
     "LEFT JOIN photo_scores ps ON pi.key = ps.key " +
     "WHERE pi.type = 'image' AND ps.key IS NULL"
-  ).all();
-  const remaining = Math.max(0, (countRows[0]?.cnt ?? 0) - results.length);
+  ).first();
 
-  return Response.json({ triggered: results.length, remaining });
+  return Response.json({ triggered, remaining: remainRow.n });
 }
 
 // 管理端点：跟 /admin/score-photos 同样的批处理思路，把存量照片库的拍摄地点一次性查完。
