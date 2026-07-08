@@ -1023,8 +1023,10 @@ async function runBackgroundMaintenance(env) {
   // 整个 Cron 任务直接被杀掉，打分/查地点/HEIC 转码全都没跑成。改成查 photos_index 表，
   // 候选池准不准全看回填有没有跑完——没跑完之前只是子集，跑完之后这里的"今天优先"就是完整覆盖了
   // （matchPhotosForDay 现在也改查这张表了，两边口径一致）
-  const now = new Date();
-  const realToday = { month: String(now.getMonth() + 1).padStart(2, "0"), day: String(now.getDate()).padStart(2, "0") };
+  // 北京时间的"今天"——Workers 跑在 UTC，直接用 new Date() 的话北京 0 点到 8 点之间
+  // 算出来的是昨天，早上拍的照片要到 8 点后才能进优先打分/HEIC 转码队列；
+  // 推送和 Workflow 的 queue-notify 一直用的都是 bjToday()，这里对齐口径
+  const realToday = bjToday();
   const lastViewed = await getLastViewedDay(env);
 
   // 优先级最高的永远是服务器的"今天"——手机刚拍完传上来的照片不该因为有人在翻看某个历史日期
