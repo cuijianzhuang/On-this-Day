@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex" />
+<title>运维控制台 · 那年今日</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}
+body{margin:0;background:#0a0a0e;color:#f5f5f7;font-family:"SF Pro Display",-apple-system,"PingFang SC",sans-serif;padding:1.5rem;max-width:1080px;margin:0 auto}
+h1{font-size:1.4rem;font-weight:700;margin:0 0 1.2rem}
+h2{font-size:1rem;font-weight:600;margin:0 0 .8rem;color:#c7c7cc}
+.card{background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:1.2rem;margin-bottom:1.2rem}
+label{display:block;font-size:.75rem;color:#8a8a8f;margin-bottom:.3rem}
+input{background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:.5rem .7rem;color:#f5f5f7;font-size:.85rem;outline:none}
+input:focus{border-color:rgba(255,255,255,0.35)}
+button{padding:.45rem .95rem;border-radius:8px;border:none;cursor:pointer;font-size:.82rem;font-weight:600;background:rgba(255,255,255,0.1);color:#f5f5f7}
+button:hover{background:rgba(255,255,255,0.16)}
+button.primary{background:#3a82f7;color:#fff}
+button.danger{background:rgba(255,59,48,0.75);color:#fff}
+button:disabled{opacity:.45;cursor:default}
+.stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:.9rem}
+.stat{background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.07);border-radius:10px;padding:.7rem .85rem}
+.stat .v{font-size:1.35rem;font-weight:700;font-variant-numeric:tabular-nums}
+.stat .v.warn{color:#ffbb33}
+.stat .l{font-size:.68rem;color:#8a8a8f;margin-top:.15rem}
+.flags{font-size:.75rem;color:#a8a8ad;line-height:1.9}
+.flags b{color:#c7c7cc;font-weight:600}
+.btn-row{display:flex;flex-wrap:wrap;gap:.5rem;align-items:flex-end}
+.btn-row .field{display:flex;flex-direction:column}
+.btn-row input{width:90px}
+.hint{font-size:.7rem;color:#6e6e73;margin-top:.55rem;line-height:1.6}
+#log{background:rgba(0,0,0,0.45);border:1px solid rgba(255,255,255,0.07);border-radius:10px;padding:.8rem .95rem;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.72rem;line-height:1.65;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all;color:#a8d5a2}
+#log .err{color:#ff6b60}
+#log .t{color:#6e6e73}
+.search-row{display:flex;gap:.5rem;margin-bottom:.7rem}
+.search-row input{flex:1}
+.match{padding:.4rem .6rem;border-radius:8px;cursor:pointer;font-size:.75rem;font-family:ui-monospace,Menlo,monospace;color:#c7c7cc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.match:hover{background:rgba(255,255,255,0.08)}
+.detail{display:none;margin-top:.9rem;padding-top:.9rem;border-top:1px solid rgba(255,255,255,0.08)}
+.detail.open{display:block}
+.detail-head{display:flex;gap:.9rem;margin-bottom:.8rem}
+.detail-head img{width:96px;height:96px;object-fit:cover;border-radius:10px;background:#111;flex-shrink:0}
+.kv{font-size:.76rem;line-height:1.85;color:#c7c7cc;min-width:0}
+.kv b{color:#8a8a8f;font-weight:500;margin-right:.35rem}
+.kv .key{font-family:ui-monospace,Menlo,monospace;font-size:.7rem;word-break:break-all}
+.actions{display:flex;flex-wrap:wrap;gap:.5rem;align-items:flex-end;margin-top:.6rem}
+.badge{display:inline-block;padding:.05rem .5rem;border-radius:999px;font-size:.65rem;background:rgba(255,255,255,0.1);margin-left:.3rem}
+.badge.miss{background:rgba(255,59,48,0.2);color:#ff6b60}
+.recent{font-size:.72rem;font-family:ui-monospace,Menlo,monospace;color:#a8a8ad;line-height:1.8;overflow-x:auto;white-space:nowrap}
+</style>
+</head>
+<body>
+<h1>🛠 运维控制台</h1>
+
+<div class="card">
+  <div class="btn-row">
+    <div class="field" style="flex:1">
+      <label>ADMIN_TOKEN（保存在本机 localStorage，不入库）</label>
+      <input id="token" type="password" style="width:100%" placeholder="必填" />
+    </div>
+    <button class="primary" onclick="loadStatus()">刷新状态</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>系统状态</h2>
+  <div class="stats" id="stats"><div class="stat"><div class="v">—</div><div class="l">点击上方"刷新状态"</div></div></div>
+  <div class="flags" id="flags"></div>
+  <div class="recent" id="recent"></div>
+</div>
+
+<div class="card">
+  <h2>维护任务</h2>
+  <div class="btn-row">
+    <button onclick="run('backfill-photos-index', {limit:300})">索引回填一批</button>
+    <button onclick="run('score-photos', {limit:10})">AI 打分一批</button>
+    <button onclick="run('locate-photos', {})">查地点一批</button>
+    <button onclick="run('convert-heic-photos', {})">HEIC 转码一批</button>
+    <button onclick="run('backfill-workflows', {})">补触发流水线</button>
+    <button onclick="run('test-telegram', {})">测试 Telegram 推送</button>
+  </div>
+  <div class="btn-row" style="margin-top:.7rem">
+    <div class="field"><label>月 (MM)</label><input id="pgMonth" maxlength="2" placeholder="07" /></div>
+    <div class="field"><label>日 (DD)</label><input id="pgDay" maxlength="2" placeholder="08" /></div>
+    <button onclick="purgeDay()">清这一天的边缘缓存</button>
+    <button onclick="resetFlag('backfill')">重启索引回填</button>
+    <button onclick="resetFlag('reindex')">重跑日期重扫</button>
+  </div>
+  <div class="hint">批量任务每次只处理一小批（避免超时），反复点到 remaining 为 0；「重启/重跑」只是清掉 KV 完成标记，实际工作由 Cron 每 10 分钟自动推进。改数据后页面不刷新的，先怀疑边缘缓存。</div>
+</div>
+
+<div class="card">
+  <h2>照片数据修复</h2>
+  <div class="search-row">
+    <input id="q" placeholder="按 key 子串搜索，如 IMG_1234 / 2023/07" onkeydown="if(event.key==='Enter')searchPhoto()" />
+    <button class="primary" onclick="searchPhoto()">搜索</button>
+  </div>
+  <div id="matches"></div>
+
+  <div class="detail" id="detail">
+    <div class="detail-head">
+      <img id="dThumb" alt="" />
+      <div class="kv" id="dInfo"></div>
+    </div>
+    <div class="actions">
+      <div class="field"><label>年</label><input id="fxYear" maxlength="4" /></div>
+      <div class="field"><label>月</label><input id="fxMonth" maxlength="2" /></div>
+      <div class="field"><label>日</label><input id="fxDay" maxlength="2" /></div>
+      <button class="primary" onclick="fix('set-date')">改拍摄日期</button>
+    </div>
+    <div class="actions">
+      <div class="field"><label>地点名</label><input id="fxPlace" style="width:160px" /></div>
+      <button onclick="fix('set-place')">改地点名</button>
+      <button onclick="fix('relocate')">重查地点</button>
+      <button onclick="fix('rescore')">重新打分</button>
+      <button onclick="fix('clear-note')">删手记</button>
+      <button class="danger" onclick="fix('remove-index')">从索引移除</button>
+    </div>
+    <div class="hint">「改拍摄日期」会自动清新旧两天的缓存；注意文件名/EXIF 本身带日期的照片，之后重跑「日期重扫」会覆盖手动修改。「从索引移除」不删 R2 原图，只是让照片不再出现。</div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>操作日志</h2>
+  <div id="log"></div>
+</div>
+
+<script>
+var tokenEl = document.getElementById('token');
+tokenEl.value = new URLSearchParams(location.search).get('token') || localStorage.getItem('opsToken') || '';
+tokenEl.addEventListener('change', function(){ localStorage.setItem('opsToken', tokenEl.value); });
+if (tokenEl.value) localStorage.setItem('opsToken', tokenEl.value);
+var currentKey = null;
+
+function tk() { return encodeURIComponent(tokenEl.value.trim()); }
+
+function log(msg, isErr) {
+  var el = document.getElementById('log');
+  var line = document.createElement('div');
+  if (isErr) line.className = 'err';
+  var t = new Date().toTimeString().slice(0, 8);
+  line.innerHTML = '<span class="t">[' + t + ']</span> ';
+  line.appendChild(document.createTextNode(typeof msg === 'string' ? msg : JSON.stringify(msg)));
+  el.prepend(line);
+}
+
+function api(path, opts) {
+  if (!tokenEl.value.trim()) { log('请先填 ADMIN_TOKEN', true); return Promise.reject(new Error('no token')); }
+  return fetch(path + (path.indexOf('?') >= 0 ? '&' : '?') + 'token=' + tk(), opts).then(function(r) {
+    return r.text().then(function(text) {
+      var data; try { data = JSON.parse(text); } catch (_) { data = text; }
+      if (!r.ok) { log(path.split('?')[0] + ' → HTTP ' + r.status + ' ' + (typeof data === 'string' ? data : JSON.stringify(data)), true); throw new Error('http ' + r.status); }
+      return data;
+    });
+  });
+}
+
+// ── 系统状态 ────────────────────────────────────────────────────────────────
+function loadStatus() {
+  api('/admin/ops-status').then(function(d) {
+    var s = [];
+    function tile(v, l, warn) { s.push('<div class="stat"><div class="v' + (warn && v > 0 ? ' warn' : '') + '">' + v + '</div><div class="l">' + l + '</div></div>'); }
+    tile(d.index.total, '索引总数（图 ' + (d.index.byType.image || 0) + ' / 视频 ' + (d.index.byType.video || 0) + '）');
+    tile(d.unscored, '待 AI 打分', true);
+    tile(d.unlocated, '待查地点', true);
+    tile(d.pendingNotify, '待推送新照片', true);
+    tile(d.notes, '手记条数');
+    tile(d.reactions.total, '表态总数');
+    document.getElementById('stats').innerHTML = s.join('');
+    var f = d.flags;
+    document.getElementById('flags').innerHTML =
+      '<b>索引回填：</b>' + (f.backfill_done_at ? '已完成（' + f.backfill_done_at.slice(0, 16) + '，每天核对一次）' : '进行中/待跑') +
+      '　<b>日期重扫：</b>' + (f.reindex_dates_done_at ? '已完成' : (f.reindex_dates_offset ? '进行中 offset=' + f.reindex_dates_offset : '待跑')) +
+      '　<b>最近浏览：</b>' + (f.last_viewed_day ? f.last_viewed_day.month + '-' + f.last_viewed_day.day : '—') +
+      '　<b>北京今天：</b>' + d.bjToday.month + '-' + d.bjToday.day;
+    document.getElementById('recent').innerHTML = '最近索引：<br>' + (d.recentIndexed || []).map(function(r) {
+      return r.year + '/' + r.month + '/' + r.day + ' · ' + r.key;
+    }).join('<br>');
+    log('状态已刷新：索引 ' + d.index.total + '，待打分 ' + d.unscored + '，待查地点 ' + d.unlocated);
+  }).catch(function(){});
+}
+
+// ── 维护任务 ────────────────────────────────────────────────────────────────
+function run(endpoint, params) {
+  var qs = Object.keys(params).map(function(k){ return k + '=' + encodeURIComponent(params[k]); }).join('&');
+  log('执行 /admin/' + endpoint + (qs ? '?' + qs : '') + ' …');
+  api('/admin/' + endpoint + (qs ? '?' + qs : '')).then(function(d) {
+    log({ endpoint: endpoint, result: d });
+    loadStatus();
+  }).catch(function(){});
+}
+
+function purgeDay() {
+  var m = document.getElementById('pgMonth').value.trim().padStart(2, '0');
+  var d = document.getElementById('pgDay').value.trim().padStart(2, '0');
+  if (!/^\d{2}$/.test(m) || !/^\d{2}$/.test(d)) { log('月/日格式需为 MM / DD', true); return; }
+  run('purge-cache', { month: m, day: d });
+}
+
+function resetFlag(flag) {
+  if (!confirm(flag === 'backfill' ? '清掉回填完成标记，Cron 恢复每 20 分钟一批的索引回填？' : '清掉重扫标记，Cron 将重新全表扫描修正拍摄日期？')) return;
+  api('/admin/reset-flag', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ flag: flag }) })
+    .then(function(d) { log(d); loadStatus(); }).catch(function(){});
+}
+
+// ── 照片数据修复 ─────────────────────────────────────────────────────────────
+function searchPhoto() {
+  var q = document.getElementById('q').value.trim();
+  if (!q) return;
+  document.getElementById('detail').classList.remove('open');
+  api('/admin/photo-info?q=' + encodeURIComponent(q)).then(function(d) {
+    var ms = d.matches || [];
+    document.getElementById('matches').innerHTML = ms.length
+      ? ms.map(function(m) { return '<div class="match" data-key="' + m.key.replace(/"/g, '&quot;') + '">' + m.year + '/' + m.month + '/' + m.day + ' · ' + m.key + '</div>'; }).join('')
+      : '<div class="hint">没有匹配的照片（只搜已索引的）</div>';
+    document.querySelectorAll('.match').forEach(function(el) {
+      el.onclick = function() { openPhoto(el.dataset.key); };
+    });
+  }).catch(function(){});
+}
+
+function openPhoto(key) {
+  api('/admin/photo-info?key=' + encodeURIComponent(key)).then(function(d) {
+    currentKey = key;
+    var det = document.getElementById('detail');
+    det.classList.add('open');
+    document.getElementById('dThumb').src = '/thumb/' + encodeURIComponent(key) + '?w=192&h=192&q=70&fit=cover';
+    var i = d.index || {};
+    var rx = (d.reactions || []).map(function(r){ return r.emoji + r.count; }).join(' ');
+    document.getElementById('dInfo').innerHTML =
+      '<div class="key">' + key + (d.inR2 ? '<span class="badge">R2 ✓</span>' : '<span class="badge miss">R2 原图缺失</span>') + '</div>' +
+      '<div><b>日期</b>' + (i.year ? i.year + '/' + i.month + '/' + i.day : '未索引') + '　<b>类型</b>' + (i.type || '—') + '</div>' +
+      '<div><b>评分</b>' + (d.score ? d.score.score + (d.score.has_face ? ' · 有人脸' : '') : '未打分') + '　<b>地点</b>' + (d.place ? (d.place.name || '（无名）') : '未查') + '</div>' +
+      (d.score && d.score.caption ? '<div><b>文案</b>' + d.score.caption + '</div>' : '') +
+      (d.note ? '<div><b>手记</b>' + String(d.note.note).slice(0, 80) + '</div>' : '') +
+      (rx ? '<div><b>表态</b>' + rx + '</div>' : '');
+    document.getElementById('fxYear').value = i.year || '';
+    document.getElementById('fxMonth').value = i.month || '';
+    document.getElementById('fxDay').value = i.day || '';
+    document.getElementById('fxPlace').value = d.place ? (d.place.name || '') : '';
+  }).catch(function(){});
+}
+
+function fix(action) {
+  if (!currentKey) return;
+  var body = { key: currentKey, action: action };
+  if (action === 'set-date') {
+    body.year = document.getElementById('fxYear').value.trim();
+    body.month = document.getElementById('fxMonth').value.trim().padStart(2, '0');
+    body.day = document.getElementById('fxDay').value.trim().padStart(2, '0');
+  }
+  if (action === 'set-place') body.name = document.getElementById('fxPlace').value.trim();
+  if (action === 'remove-index' && !confirm('确认把这张照片从索引移除？R2 原图不受影响。')) return;
+  if (action === 'rescore') log('重新打分需要调用 AI 模型，可能要等几秒…');
+  api('/admin/photo-fix', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    .then(function(d) {
+      log({ action: action, key: currentKey, result: d });
+      if (action === 'remove-index') { document.getElementById('detail').classList.remove('open'); currentKey = null; }
+      else openPhoto(currentKey);
+    }).catch(function(){});
+}
+
+if (tokenEl.value) loadStatus();
+</script>
+</body>
+</html>
