@@ -1023,8 +1023,10 @@ async function runBackgroundMaintenance(env) {
   // 整个 Cron 任务直接被杀掉，打分/查地点/HEIC 转码全都没跑成。改成查 photos_index 表，
   // 候选池准不准全看回填有没有跑完——没跑完之前只是子集，跑完之后这里的"今天优先"就是完整覆盖了
   // （matchPhotosForDay 现在也改查这张表了，两边口径一致）
-  const now = new Date();
-  const realToday = { month: String(now.getMonth() + 1).padStart(2, "0"), day: String(now.getDate()).padStart(2, "0") };
+  // 北京时间的"今天"——Workers 跑在 UTC，直接用 new Date() 的话北京 0 点到 8 点之间
+  // 算出来的是昨天，早上拍的照片要到 8 点后才能进优先打分/HEIC 转码队列；
+  // 推送和 Workflow 的 queue-notify 一直用的都是 bjToday()，这里对齐口径
+  const realToday = bjToday();
   const lastViewed = await getLastViewedDay(env);
 
   // 优先级最高的永远是服务器的"今天"——手机刚拍完传上来的照片不该因为有人在翻看某个历史日期
@@ -1068,22 +1070,18 @@ async function runBackgroundMaintenance(env) {
   }
 }
 
-// 找出某个 month/day 匹配到的照片/视频（不含打分、地点等附加信息，那些是按场景分别合并的）。
-// handleMemories 和"地图只看当天"功能共用同一份匹配逻辑，避免逻辑分叉
-// 去掉扩展名的文件名，用来配对 Live Photo——iPhone 的 Live Photo 在 R2 里是两个独立文件，
-// 同目录、文件名（去掉扩展名）完全相同的一张 HEIC/JPEG + 一段 MOV，例如
-// IMG_1234.HEIC 配 IMG_1234.MOV
-function basenameNoExt(key) {
-  return key.split("/").pop().replace(/\.[^.]+$/, "");
-}
-
-// 把同一批文件（已经按 IMAGE_EXT/VIDEO_EXT 过滤过）按"去掉扩展名的文件名"分组，
+// Live Photo 配对：iPhone 的 Live Photo 在 R2 里是两个独立文件——同目录、文件名（去掉
+// 扩展名）完全相同的一张 HEIC/JPEG + 一段 MOV，例如 IMG_1234.HEIC 配 IMG_1234.MOV。
+// 把同一批文件（已经按 IMAGE_EXT/VIDEO_EXT 过滤过）按"完整 key 去扩展名"分组，
 // 配对成功的合并成一条 type: 'live' 记录（带 url 静态图 + videoUrl 配对视频），
 // 没配对到的图片/视频各自按原来的 image/video 类型展示，不受影响
 function pairLivePhotos(objs, year) {
   const byBase = new Map();
   for (const obj of objs) {
-    const base = basenameNoExt(obj.key);
+    // 分组键必须带目录（完整 key 去扩展名）：iPhone 的 IMG_XXXX 序号是循环重用的，
+    // 只按文件名分组时，同一天命中的两个不同目录的同名文件会互相顶掉（两张图只剩一张）
+    // 或把 A 目录的照片错配上 B 目录的视频当成假 Live Photo
+    const base = obj.key.replace(/\.[^.]+$/, "");
     const slot = byBase.get(base) || {};
     if (VIDEO_EXT.test(obj.key)) slot.video = obj;
     else slot.image = obj;
@@ -1501,7 +1499,11 @@ async function getCapturedMonthDay(bucket, key) {
   const cacheKey = new Request(`https://memories.internal/exif-cache/${encodeURIComponent(key)}`);
 
   const cached = await cache.match(cacheKey);
-  if (cached) return cached.json();
+  if (cached) {
+    const r = await cached.json();
+    // 老 bug 缓存过"只有 GPS、没有日期"的残缺条目（见下），这种当缓存未命中重算
+    if (r && r.month && r.day) return r;
+  }
 
   let result = null;
   if (/\.jpe?g$/i.test(key)) {
@@ -1514,11 +1516,15 @@ async function getCapturedMonthDay(bucket, key) {
       result = null;
     }
   }
-  if (!result) {
+  // 注意不能只判 !result：EXIF 里有 GPS 但没有拍摄时间的照片，parseExifTiff 返回
+  // 只带 {lat, lon} 的真值对象——之前这里因此跳过上传时间兜底，照片拿不到 month/day
+  // 就永远进不了 photos_index（页面上完全不可见），且残缺结果还被缓存一年
+  if (!result || !result.month || !result.day) {
     const head = await bucket.head(key);
     if (head && head.uploaded) {
       const d = new Date(head.uploaded);
       result = {
+        ...(result || {}),
         year: String(d.getFullYear()),
         month: String(d.getMonth() + 1).padStart(2, "0"),
         day: String(d.getDate()).padStart(2, "0"),
