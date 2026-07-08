@@ -346,12 +346,12 @@ input:focus { border-color: var(--border-focus); }
     <div class="task-label">一键全量处理（自动循环直到 remaining=0）</div>
     <div class="btn-row" style="flex-wrap:wrap;gap:.55rem">
       <div class="bulk-wrap">
-        <button class="primary" id="btn-bulk-workflow" onclick="bulkRun('workflow','backfill-workflows',{limit:50},'bulk-workflow-prog','bulk-workflow-stop')">🚀 全量触发 Workflow</button>
+        <button class="primary" id="btn-bulk-workflow" onclick="bulkRunWorkflow()">🚀 全量触发 Workflow</button>
         <button class="danger" id="bulk-workflow-stop" onclick="stopBulk('workflow','bulk-workflow-stop')" style="display:none">⏹ 停止</button>
         <span class="bulk-prog" id="bulk-workflow-prog"></span>
       </div>
       <div class="bulk-wrap">
-        <button id="btn-bulk-locate" onclick="bulkRun('locate','locate-photos',{limit:50},'bulk-locate-prog','bulk-locate-stop')">📍 全量查地点</button>
+        <button id="btn-bulk-locate" onclick="bulkRunLocate()">📍 全量查地点</button>
         <button class="danger" id="bulk-locate-stop" onclick="stopBulk('locate','bulk-locate-stop')" style="display:none">⏹ 停止</button>
         <span class="bulk-prog" id="bulk-locate-prog"></span>
       </div>
@@ -739,46 +739,63 @@ function fix(action) {
     });
 }
 
-// ── Bulk run (loop until remaining=0) ───────────────────────────────────────
+// ── Bulk run helpers ─────────────────────────────────────────────────────────
 var _bulkRunning = {};
 
-function bulkRun(id, endpoint, params, progId, stopId) {
+// 全量查地点：locate-photos 返回 { triggered, remaining }
+// 停止条件：remaining=0（全部查完）或 triggered=0（本批没有可处理的照片）
+function bulkRunLocate() {
+  var id = 'locate', stopId = 'bulk-locate-stop', progId = 'bulk-locate-prog';
   if (_bulkRunning[id]) return;
   _bulkRunning[id] = true;
   document.getElementById(stopId).style.display = '';
   var progEl = document.getElementById(progId);
-  var triggered = 0;
+  var total = 0;
 
   function tick() {
     if (!_bulkRunning[id]) return;
-    var qs = Object.keys(params).map(function(k){ return k + '=' + encodeURIComponent(params[k]); }).join('&');
-    api('/admin/' + endpoint + (qs ? '?' + qs : '')).then(function(d) {
-      var remaining = d.remaining !== undefined ? d.remaining : null;
-      var thisTriggered = (d.triggered || 0) + (d.processedCount || 0);
-      triggered += thisTriggered;
-      var prog = remaining !== null ? 'remaining ' + remaining : '';
-      if (triggered) prog += (prog ? ' · ' : '') + '已处理 ' + triggered;
-      progEl.textContent = prog;
-      // 停止条件：
-      //   locate-photos → remaining=0 表示全部查完
-      //   backfill-workflows → triggered=0 表示没有新照片要触发了（Workflow 在后台跑，remaining 不会立刻降）
-      var done = (remaining !== null && remaining <= 0) || thisTriggered === 0;
-      if (!done && _bulkRunning[id]) {
-        setTimeout(tick, 400);
-      } else {
-        _bulkRunning[id] = false;
-        document.getElementById(stopId).style.display = 'none';
-        toast(thisTriggered === 0 ? '已全部触发，Workflow 后台处理中' : '全量完成，remaining=' + remaining, 'ok');
-        progEl.textContent = '';
-        loadStatus();
-      }
-    }).catch(function() {
-      _bulkRunning[id] = false;
-      document.getElementById(stopId).style.display = 'none';
-      progEl.textContent = '';
-    });
+    api('/admin/locate-photos?limit=20').then(function(d) {
+      total += (d.triggered || 0);
+      progEl.textContent = 'remaining ' + d.remaining + (total ? ' · 已处理 ' + total : '');
+      var done = d.remaining <= 0 || d.triggered === 0;
+      if (!done && _bulkRunning[id]) { setTimeout(tick, 300); }
+      else { finishBulk(id, stopId, progEl, d.remaining <= 0 ? '全量查地点完成' : '已停止'); }
+    }).catch(function() { finishBulk(id, stopId, progEl, ''); });
   }
   tick();
+}
+
+// 全量触发 Workflow：backfill-workflows 返回 { triggered, attempted, remaining }
+// 用 offset 分页推进（ORDER BY key），停止条件：attempted=0（已翻过所有未打分照片）
+function bulkRunWorkflow() {
+  var id = 'workflow', stopId = 'bulk-workflow-stop', progId = 'bulk-workflow-prog';
+  if (_bulkRunning[id]) return;
+  _bulkRunning[id] = true;
+  document.getElementById(stopId).style.display = '';
+  var progEl = document.getElementById(progId);
+  var offset = 0, total = 0;
+  var LIMIT = 50;
+
+  function tick() {
+    if (!_bulkRunning[id]) return;
+    api('/admin/backfill-workflows?limit=' + LIMIT + '&offset=' + offset).then(function(d) {
+      total += (d.triggered || 0);
+      offset += (d.attempted || 0); // 每批推进实际取到的行数（不是 triggered，避免跳过已在跑的）
+      progEl.textContent = 'remaining ' + d.remaining + ' · 已触发 ' + total + ' · offset ' + offset;
+      var done = d.attempted === 0; // 这一页已无照片，全部触发完毕
+      if (!done && _bulkRunning[id]) { setTimeout(tick, 300); }
+      else { finishBulk(id, stopId, progEl, done ? '全部已触发，Workflow 后台处理中' : '已停止'); }
+    }).catch(function() { finishBulk(id, stopId, progEl, ''); });
+  }
+  tick();
+}
+
+function finishBulk(id, stopId, progEl, msg) {
+  _bulkRunning[id] = false;
+  document.getElementById(stopId).style.display = 'none';
+  progEl.textContent = '';
+  if (msg) toast(msg, 'ok');
+  loadStatus();
 }
 
 function stopBulk(id, stopId) {

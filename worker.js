@@ -2757,28 +2757,37 @@ async function handleScorePhotos(request, env, url) {
 // 每次调用触发 limit 张（默认 50，上限 200），多次调用直到 remaining=0
 async function handleBackfillWorkflows(request, env, url) {
   const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 200);
+  const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
 
-  // 找出 photos_index 里有记录、但 photo_scores 里还没有打分结果的图片
+  // ORDER BY pi.key 保证分页顺序稳定；OFFSET 由调用方递增，每批推进一页，
+  // 不受"照片是否已打完分"影响——循环的停止条件是"这一页已没有照片"而非 remaining=0。
   const { results } = await env.DB.prepare(
     "SELECT pi.key FROM photos_index pi " +
     "LEFT JOIN photo_scores ps ON pi.key = ps.key " +
     "WHERE pi.type = 'image' AND ps.key IS NULL " +
-    "LIMIT ?"
-  ).bind(limit).all();
+    "ORDER BY pi.key LIMIT ? OFFSET ?"
+  ).bind(limit, offset).all();
 
+  // 用确定性实例 ID 避免同一照片被重复触发；已有运行中 Workflow 的照片 catch 住跳过
+  let triggered = 0;
   for (const { key } of results) {
-    await env.PHOTO_WORKFLOW.create({ params: { key } });
+    const instanceId = ("bf-" + key).replace(/[^a-zA-Z0-9\-_]/g, "-").slice(0, 64);
+    try {
+      await env.PHOTO_WORKFLOW.create({ params: { key }, id: instanceId });
+      triggered++;
+    } catch {
+      // 已有运行中的 Workflow 实例，跳过
+    }
   }
 
-  // 计算剩余未处理数量（本批触发后还剩多少）
-  const { results: countRows } = await env.DB.prepare(
-    "SELECT COUNT(*) as cnt FROM photos_index pi " +
+  const remainRow = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM photos_index pi " +
     "LEFT JOIN photo_scores ps ON pi.key = ps.key " +
     "WHERE pi.type = 'image' AND ps.key IS NULL"
-  ).all();
-  const remaining = Math.max(0, (countRows[0]?.cnt ?? 0) - results.length);
+  ).first();
 
-  return Response.json({ triggered: results.length, remaining });
+  // attempted: 本页实际取到的行数，调用方用它判断是否已翻到末尾（=0 则全部触发完毕）
+  return Response.json({ triggered, attempted: results.length, remaining: remainRow.n });
 }
 
 // 管理端点：跟 /admin/score-photos 同样的批处理思路，把存量照片库的拍摄地点一次性查完。
@@ -2796,7 +2805,7 @@ async function handleLocatePhotos(request, env, url) {
 
   return new Response(
     JSON.stringify({
-      processedThisBatch: processedCount,
+      triggered: processedCount,
       remaining: remainRow.n,
       totalPhotos: totalRow.n,
     }),
