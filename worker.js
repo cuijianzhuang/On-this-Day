@@ -1062,8 +1062,15 @@ async function runBackgroundMaintenance(env) {
   const unscored = checked.filter(Boolean).slice(0, BATCH_SIZE);
   if (unscored.length > 0) await scoreKeys(env, unscored);
 
-  const unlocated = await collectCandidates(env, findUnlocatedKeys, priorityDays, BATCH_SIZE);
-  if (unlocated.length > 0) await enrichLocations(env, unlocated);
+  // 循环查地点直到全部完成或时间预算耗尽（每次 Cron 最多跑 24 秒用于地点查询）。
+  // 每张照片：R2 读 EXIF ~100ms + Mapbox API ~200ms，24s 内可处理约 80 张，
+  // 相比之前每次只处理 10 张快 8 倍；积压清完后每次 collectCandidates 返回空直接退出，几乎没有开销。
+  const locateDeadline = Date.now() + 24000;
+  while (Date.now() < locateDeadline) {
+    const unlocated = await collectCandidates(env, findUnlocatedKeys, priorityDays, BATCH_SIZE);
+    if (unlocated.length === 0) break;
+    await enrichLocations(env, unlocated);
+  }
 
   // HEIC 预览图只转"今天"（服务器真实今天）拍的——不像打分/查地点那样还顺带覆盖"最近浏览日期"
   // 或者存量库的其他照片。解码一张全尺寸 HEIC 到原始像素再编码成 JPEG，内存开销比打分/查地点都
