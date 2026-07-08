@@ -1501,7 +1501,11 @@ async function getCapturedMonthDay(bucket, key) {
   const cacheKey = new Request(`https://memories.internal/exif-cache/${encodeURIComponent(key)}`);
 
   const cached = await cache.match(cacheKey);
-  if (cached) return cached.json();
+  if (cached) {
+    const r = await cached.json();
+    // 老 bug 缓存过"只有 GPS、没有日期"的残缺条目（见下），这种当缓存未命中重算
+    if (r && r.month && r.day) return r;
+  }
 
   let result = null;
   if (/\.jpe?g$/i.test(key)) {
@@ -1514,11 +1518,15 @@ async function getCapturedMonthDay(bucket, key) {
       result = null;
     }
   }
-  if (!result) {
+  // 注意不能只判 !result：EXIF 里有 GPS 但没有拍摄时间的照片，parseExifTiff 返回
+  // 只带 {lat, lon} 的真值对象——之前这里因此跳过上传时间兜底，照片拿不到 month/day
+  // 就永远进不了 photos_index（页面上完全不可见），且残缺结果还被缓存一年
+  if (!result || !result.month || !result.day) {
     const head = await bucket.head(key);
     if (head && head.uploaded) {
       const d = new Date(head.uploaded);
       result = {
+        ...(result || {}),
         year: String(d.getFullYear()),
         month: String(d.getMonth() + 1).padStart(2, "0"),
         day: String(d.getDate()).padStart(2, "0"),
