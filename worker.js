@@ -1070,22 +1070,18 @@ async function runBackgroundMaintenance(env) {
   }
 }
 
-// 找出某个 month/day 匹配到的照片/视频（不含打分、地点等附加信息，那些是按场景分别合并的）。
-// handleMemories 和"地图只看当天"功能共用同一份匹配逻辑，避免逻辑分叉
-// 去掉扩展名的文件名，用来配对 Live Photo——iPhone 的 Live Photo 在 R2 里是两个独立文件，
-// 同目录、文件名（去掉扩展名）完全相同的一张 HEIC/JPEG + 一段 MOV，例如
-// IMG_1234.HEIC 配 IMG_1234.MOV
-function basenameNoExt(key) {
-  return key.split("/").pop().replace(/\.[^.]+$/, "");
-}
-
-// 把同一批文件（已经按 IMAGE_EXT/VIDEO_EXT 过滤过）按"去掉扩展名的文件名"分组，
+// Live Photo 配对：iPhone 的 Live Photo 在 R2 里是两个独立文件——同目录、文件名（去掉
+// 扩展名）完全相同的一张 HEIC/JPEG + 一段 MOV，例如 IMG_1234.HEIC 配 IMG_1234.MOV。
+// 把同一批文件（已经按 IMAGE_EXT/VIDEO_EXT 过滤过）按"完整 key 去扩展名"分组，
 // 配对成功的合并成一条 type: 'live' 记录（带 url 静态图 + videoUrl 配对视频），
 // 没配对到的图片/视频各自按原来的 image/video 类型展示，不受影响
 function pairLivePhotos(objs, year) {
   const byBase = new Map();
   for (const obj of objs) {
-    const base = basenameNoExt(obj.key);
+    // 分组键必须带目录（完整 key 去扩展名）：iPhone 的 IMG_XXXX 序号是循环重用的，
+    // 只按文件名分组时，同一天命中的两个不同目录的同名文件会互相顶掉（两张图只剩一张）
+    // 或把 A 目录的照片错配上 B 目录的视频当成假 Live Photo
+    const base = obj.key.replace(/\.[^.]+$/, "");
     const slot = byBase.get(base) || {};
     if (VIDEO_EXT.test(obj.key)) slot.video = obj;
     else slot.image = obj;
