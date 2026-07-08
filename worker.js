@@ -83,6 +83,23 @@ export default {
       }
     }
 
+    // ── 运维控制台：页面本身是静态资源，数据接口全部走 ADMIN_TOKEN 校验 ──────
+    if (url.pathname === "/admin/ops") {
+      return env.ASSETS.fetch(new Request(new URL("/admin-ops.html", request.url), request));
+    }
+    if (url.pathname === "/admin/ops-status") {
+      return handleOpsStatus(request, env, url);
+    }
+    if (url.pathname === "/admin/photo-info") {
+      return handlePhotoInfo(request, env, url);
+    }
+    if (url.pathname === "/admin/photo-fix" && request.method === "POST") {
+      return handlePhotoFix(request, env, url);
+    }
+    if (url.pathname === "/admin/reset-flag" && request.method === "POST") {
+      return handleResetFlag(request, env, url);
+    }
+
     if (url.pathname === "/api/map-photos") {
       return handleMapPhotos(request, env, url);
     }
@@ -2994,6 +3011,189 @@ async function handleBackfillPhotosIndex(request, env, url) {
   return new Response(JSON.stringify(result), {
     headers: { "content-type": "application/json; charset=utf-8" },
   });
+}
+
+// ---------- 运维控制台 API：状态总览 / 照片查询 / 数据修复 ----------
+// 控制台页面在 public/admin-ops.html（/admin/ops 路由直出），下面的接口全部要 ?token=ADMIN_TOKEN
+
+function opsGuard(env, url) {
+  const token = url.searchParams.get("token");
+  if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
+    return new Response("Forbidden", { status: 403 });
+  }
+  return null;
+}
+
+// 系统状态总览：索引量、待打分/待查地点积压、推送队列、后台任务标记位
+async function handleOpsStatus(request, env, url) {
+  const denied = opsGuard(env, url);
+  if (denied) return denied;
+  await ensureAuxTables(env);
+
+  const [typeRows, unscored, unlocated, pendingNotify, notes, reactions, recent] = await Promise.all([
+    env.DB.prepare("SELECT type, COUNT(*) AS c FROM photos_index GROUP BY type").all(),
+    env.DB.prepare(
+      `SELECT COUNT(*) AS c FROM photos_index i LEFT JOIN photo_scores s ON s.key = i.key WHERE i.type = 'image' AND ${NEEDS_SCORE_SQL}`
+    ).first(),
+    env.DB.prepare(
+      "SELECT COUNT(*) AS c FROM photos_index i LEFT JOIN photo_places p ON p.key = i.key WHERE i.type = 'image' AND p.key IS NULL"
+    ).first(),
+    env.DB.prepare("SELECT COUNT(*) AS c FROM meta WHERE key LIKE 'notify:%'").first(),
+    env.DB.prepare("SELECT COUNT(*) AS c FROM photo_notes").first(),
+    env.DB.prepare("SELECT COUNT(*) AS c, COALESCE(SUM(count), 0) AS total FROM photo_reactions").first(),
+    env.DB.prepare("SELECT key, year, month, day, type, updated_at FROM photos_index ORDER BY updated_at DESC LIMIT 8").all(),
+  ]);
+
+  const [backfillDoneAt, reindexDoneAt, reindexOffset, lastViewed] = await Promise.all([
+    env.KV.get("backfill_done_at"),
+    env.KV.get("reindex_dates_done_at"),
+    env.KV.get("reindex_dates_offset"),
+    getLastViewedDay(env),
+  ]);
+
+  const byType = {};
+  for (const r of typeRows.results) byType[r.type] = r.c;
+
+  return Response.json({
+    now: new Date().toISOString(),
+    bjToday: bjToday(),
+    index: { total: Object.values(byType).reduce((a, b) => a + b, 0), byType },
+    unscored: unscored?.c ?? 0,
+    unlocated: unlocated?.c ?? 0,
+    pendingNotify: pendingNotify?.c ?? 0,
+    notes: notes?.c ?? 0,
+    reactions: { rows: reactions?.c ?? 0, total: reactions?.total ?? 0 },
+    flags: {
+      backfill_done_at: backfillDoneAt || null,
+      reindex_dates_done_at: reindexDoneAt || null,
+      reindex_dates_offset: reindexOffset || null,
+      last_viewed_day: lastViewed || null,
+    },
+    recentIndexed: recent.results,
+  });
+}
+
+// GET ?q=子串   → 按 key 模糊搜索，最多 20 条
+// GET ?key=完整key → 单张照片的全量数据（索引 / 打分 / 地点 / 手记 / 表态 / 原图是否还在 R2）
+async function handlePhotoInfo(request, env, url) {
+  const denied = opsGuard(env, url);
+  if (denied) return denied;
+  await ensureAuxTables(env);
+
+  const q = (url.searchParams.get("q") || "").trim();
+  const key = url.searchParams.get("key");
+
+  if (!key) {
+    if (!q) return Response.json({ error: "q or key required" }, { status: 400 });
+    const like = "%" + q.replace(/[\\%_]/g, (m) => "\\" + m) + "%";
+    const { results } = await env.DB.prepare(
+      "SELECT key, type, year, month, day FROM photos_index WHERE key LIKE ?1 ESCAPE '\\' ORDER BY year DESC, month DESC, day DESC LIMIT 20"
+    ).bind(like).all();
+    return Response.json({ matches: results });
+  }
+
+  const [index, score, place, note, reactions] = await Promise.all([
+    env.DB.prepare("SELECT * FROM photos_index WHERE key = ?").bind(key).first(),
+    env.DB.prepare("SELECT score, has_face, caption, updated_at FROM photo_scores WHERE key = ?").bind(key).first(),
+    env.DB.prepare("SELECT lat, lon, name FROM photo_places WHERE key = ?").bind(key).first(),
+    env.DB.prepare("SELECT note, updated_at FROM photo_notes WHERE key = ?").bind(key).first(),
+    env.DB.prepare("SELECT emoji, count FROM photo_reactions WHERE key = ? AND count > 0").bind(key).all(),
+  ]);
+  const inR2 = !!(await env.PHOTOS.head(key));
+  return Response.json({ key, inR2, index, score, place, note, reactions: reactions.results });
+}
+
+// POST body: { key, action, ... }。动作：
+//   set-date  {year, month, day}  改拍摄日期（自动清新旧两天的边缘缓存）
+//   rescore                        删打分并立即重打（AI 文案/评分不满意时用）
+//   relocate                       删地点并立即重查（EXIF GPS → Mapbox 地名）
+//   set-place {name}               手动改地点名（保留已有经纬度）
+//   clear-note                     删手记
+//   remove-index                   从索引移除（原图已删但索引残留、或不想展示这张时用）
+async function handlePhotoFix(request, env, url) {
+  const denied = opsGuard(env, url);
+  if (denied) return denied;
+  await ensureAuxTables(env);
+
+  let body;
+  try { body = await request.json(); } catch { return Response.json({ error: "bad json" }, { status: 400 }); }
+  const key = typeof body.key === "string" ? body.key : "";
+  if (!key) return Response.json({ error: "key required" }, { status: 400 });
+
+  const row = await env.DB.prepare("SELECT year, month, day FROM photos_index WHERE key = ?").bind(key).first();
+
+  if (body.action === "set-date") {
+    if (!row) return Response.json({ error: "key not in index" }, { status: 404 });
+    const { year, month, day } = body;
+    if (!/^\d{4}$/.test(year || "") || !/^\d{2}$/.test(month || "") || !/^\d{2}$/.test(day || "")) {
+      return Response.json({ error: "year/month/day required, format YYYY/MM/DD" }, { status: 400 });
+    }
+    await env.DB.prepare("UPDATE photos_index SET year = ?, month = ?, day = ?, updated_at = ? WHERE key = ?")
+      .bind(year, month, day, new Date().toISOString(), key).run();
+    await purgeDayCache(row.month, row.day);
+    await purgeDayCache(month, day);
+    // 注意：文件名/EXIF 本身带日期的照片，之后若重跑"日期重扫"会按解析结果覆盖这次手动修改
+    return Response.json({ ok: true, from: `${row.year}/${row.month}/${row.day}`, to: `${year}/${month}/${day}` });
+  }
+
+  if (body.action === "rescore") {
+    await env.DB.prepare("DELETE FROM photo_scores WHERE key = ?").bind(key).run();
+    let error = null;
+    try { await scoreKeys(env, [key]); } catch (err) { error = String((err && err.message) || err); }
+    const score = await env.DB.prepare("SELECT score, caption FROM photo_scores WHERE key = ?").bind(key).first();
+    if (row) await purgeDayCache(row.month, row.day);
+    // score 为空 + error 为空 = AI 没跑成但没抛错（比如 HEIC 还没有预览图），留给 Cron 兜底重试
+    return Response.json({ ok: true, score, error });
+  }
+
+  if (body.action === "relocate") {
+    await env.DB.prepare("DELETE FROM photo_places WHERE key = ?").bind(key).run();
+    await enrichLocations(env, [key]);
+    const place = await env.DB.prepare("SELECT lat, lon, name FROM photo_places WHERE key = ?").bind(key).first();
+    if (row) await purgeDayCache(row.month, row.day);
+    return Response.json({ ok: true, place });
+  }
+
+  if (body.action === "set-place") {
+    const name = typeof body.name === "string" ? body.name.trim().slice(0, 60) : "";
+    await env.DB.prepare(
+      "INSERT INTO photo_places (key, lat, lon, name) VALUES (?, NULL, NULL, ?) ON CONFLICT(key) DO UPDATE SET name = excluded.name"
+    ).bind(key, name).run();
+    if (row) await purgeDayCache(row.month, row.day);
+    return Response.json({ ok: true, name });
+  }
+
+  if (body.action === "clear-note") {
+    await env.DB.prepare("DELETE FROM photo_notes WHERE key = ?").bind(key).run();
+    return Response.json({ ok: true });
+  }
+
+  if (body.action === "remove-index") {
+    const removed = await removePhotoIndex(env, key);
+    if (removed) await purgeDayCache(removed.month, removed.day);
+    return Response.json({ ok: true, removed });
+  }
+
+  return Response.json({ error: "unknown action" }, { status: 400 });
+}
+
+// POST body: { flag: "backfill" | "reindex" }——删掉 KV 完成标记，
+// 让 Cron 恢复对应的追赶任务（索引回填 / 日期重扫）
+async function handleResetFlag(request, env, url) {
+  const denied = opsGuard(env, url);
+  if (denied) return denied;
+  let body;
+  try { body = await request.json(); } catch { return Response.json({ error: "bad json" }, { status: 400 }); }
+  if (body.flag === "backfill") {
+    await env.KV.delete("backfill_done_at");
+    return Response.json({ ok: true, cleared: ["backfill_done_at"] });
+  }
+  if (body.flag === "reindex") {
+    await env.KV.delete("reindex_dates_done_at");
+    await env.KV.delete("reindex_dates_offset");
+    return Response.json({ ok: true, cleared: ["reindex_dates_done_at", "reindex_dates_offset"] });
+  }
+  return Response.json({ error: "unknown flag" }, { status: 400 });
 }
 
 // ---------- 今日诗词：每天在页面上配一句应景的古诗词（jinrishici.com），跟"那年今日"主题搭一块 ----------
