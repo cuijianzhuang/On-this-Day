@@ -6,227 +6,696 @@
 <meta name="robots" content="noindex" />
 <title>运维控制台 · 那年今日</title>
 <style>
-:root{color-scheme:dark}*{box-sizing:border-box}
-body{margin:0;background:#0a0a0e;color:#f5f5f7;font-family:"SF Pro Display",-apple-system,"PingFang SC",sans-serif;padding:1.5rem;max-width:1080px;margin:0 auto}
-h1{font-size:1.4rem;font-weight:700;margin:0 0 1.2rem}
-h2{font-size:1rem;font-weight:600;margin:0 0 .8rem;color:#c7c7cc}
-.card{background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:1.2rem;margin-bottom:1.2rem}
-label{display:block;font-size:.75rem;color:#8a8a8f;margin-bottom:.3rem}
-input{background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:.5rem .7rem;color:#f5f5f7;font-size:.85rem;outline:none}
-input:focus{border-color:rgba(255,255,255,0.35)}
-button{padding:.45rem .95rem;border-radius:8px;border:none;cursor:pointer;font-size:.82rem;font-weight:600;background:rgba(255,255,255,0.1);color:#f5f5f7}
-button:hover{background:rgba(255,255,255,0.16)}
-button.primary{background:#3a82f7;color:#fff}
-button.danger{background:rgba(255,59,48,0.75);color:#fff}
-button:disabled{opacity:.45;cursor:default}
-.stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:.9rem}
-.stat{background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.07);border-radius:10px;padding:.7rem .85rem}
-.stat .v{font-size:1.35rem;font-weight:700;font-variant-numeric:tabular-nums}
-.stat .v.warn{color:#ffbb33}
-.stat .l{font-size:.68rem;color:#8a8a8f;margin-top:.15rem}
-.flags{font-size:.75rem;color:#a8a8ad;line-height:1.9}
-.flags b{color:#c7c7cc;font-weight:600}
-.btn-row{display:flex;flex-wrap:wrap;gap:.5rem;align-items:flex-end}
-.btn-row .field{display:flex;flex-direction:column}
-.btn-row input{width:90px}
-.hint{font-size:.7rem;color:#6e6e73;margin-top:.55rem;line-height:1.6}
-#log{background:rgba(0,0,0,0.45);border:1px solid rgba(255,255,255,0.07);border-radius:10px;padding:.8rem .95rem;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.72rem;line-height:1.65;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all;color:#a8d5a2}
-#log .err{color:#ff6b60}
-#log .t{color:#6e6e73}
-.search-row{display:flex;gap:.5rem;margin-bottom:.7rem}
-.search-row input{flex:1}
-.match{padding:.4rem .6rem;border-radius:8px;cursor:pointer;font-size:.75rem;font-family:ui-monospace,Menlo,monospace;color:#c7c7cc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.match:hover{background:rgba(255,255,255,0.08)}
-.detail{display:none;margin-top:.9rem;padding-top:.9rem;border-top:1px solid rgba(255,255,255,0.08)}
-.detail.open{display:block}
-.detail-head{display:flex;gap:.9rem;margin-bottom:.8rem}
-.detail-head img{width:96px;height:96px;object-fit:cover;border-radius:10px;background:#111;flex-shrink:0}
-.kv{font-size:.76rem;line-height:1.85;color:#c7c7cc;min-width:0}
-.kv b{color:#8a8a8f;font-weight:500;margin-right:.35rem}
-.kv .key{font-family:ui-monospace,Menlo,monospace;font-size:.7rem;word-break:break-all}
-.actions{display:flex;flex-wrap:wrap;gap:.5rem;align-items:flex-end;margin-top:.6rem}
-.badge{display:inline-block;padding:.05rem .5rem;border-radius:999px;font-size:.65rem;background:rgba(255,255,255,0.1);margin-left:.3rem}
-.badge.miss{background:rgba(255,59,48,0.2);color:#ff6b60}
-.recent{font-size:.72rem;font-family:ui-monospace,Menlo,monospace;color:#a8a8ad;line-height:1.8;overflow-x:auto;white-space:nowrap}
+:root {
+  color-scheme: dark;
+  --bg: #08080d;
+  --surface: rgba(255,255,255,0.04);
+  --surface-hover: rgba(255,255,255,0.07);
+  --border: rgba(255,255,255,0.08);
+  --border-focus: rgba(255,255,255,0.28);
+  --text: #f0f0f3;
+  --text-sub: #8a8a90;
+  --text-dim: #5a5a62;
+  --blue: #4f8ef7;
+  --blue-dim: rgba(79,142,247,0.15);
+  --green: #34c759;
+  --green-dim: rgba(52,199,89,0.14);
+  --amber: #f5a623;
+  --amber-dim: rgba(245,166,35,0.14);
+  --red: #ff453a;
+  --red-dim: rgba(255,69,58,0.14);
+  --purple: #bf5af2;
+  --purple-dim: rgba(191,90,242,0.14);
+  --radius: 14px;
+  --radius-sm: 9px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "SF Pro Display", -apple-system, "PingFang SC", sans-serif;
+  font-size: 14px;
+  min-height: 100vh;
+  padding-bottom: 4rem;
+}
+/* ── Header ── */
+.topbar {
+  position: sticky; top: 0; z-index: 100;
+  display: flex; align-items: center; gap: .75rem;
+  padding: .9rem 1.4rem;
+  background: rgba(8,8,13,.85);
+  backdrop-filter: blur(18px) saturate(180%);
+  border-bottom: 1px solid var(--border);
+}
+.topbar-logo { font-size: 1.1rem; font-weight: 700; }
+.topbar-title { font-size: .9rem; color: var(--text-sub); flex: 1; }
+.topbar-home {
+  display: flex; align-items: center; gap: .35rem;
+  text-decoration: none; color: var(--text-sub);
+  font-size: .78rem; padding: .28rem .65rem;
+  border: 1px solid var(--border); border-radius: 999px;
+  transition: color .15s, border-color .15s;
+}
+.topbar-home:hover { color: var(--text); border-color: var(--border-focus); }
+.topbar-home svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; }
+#liveTime {
+  font-size: .78rem; font-variant-numeric: tabular-nums;
+  color: var(--text-dim); letter-spacing: .02em;
+  padding: .28rem .65rem;
+  border: 1px solid var(--border); border-radius: 999px;
+}
+.auto-refresh-wrap {
+  display: flex; align-items: center; gap: .4rem;
+  font-size: .75rem; color: var(--text-sub);
+}
+.toggle-switch {
+  position: relative; width: 30px; height: 17px; cursor: pointer;
+}
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-track {
+  position: absolute; inset: 0;
+  background: rgba(255,255,255,.12); border-radius: 999px;
+  transition: background .2s;
+}
+.toggle-switch input:checked + .toggle-track { background: var(--blue); }
+.toggle-knob {
+  position: absolute; left: 2px; top: 2px;
+  width: 13px; height: 13px; border-radius: 50%;
+  background: #fff; transition: transform .2s;
+  pointer-events: none;
+}
+.toggle-switch input:checked ~ .toggle-knob { transform: translateX(13px); }
+/* ── Layout ── */
+.page { max-width: 1100px; margin: 0 auto; padding: 1.4rem 1.4rem 0; }
+/* ── Card ── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.1rem 1.2rem;
+  margin-bottom: 1.1rem;
+}
+.card-head {
+  display: flex; align-items: center; gap: .5rem;
+  margin-bottom: .85rem;
+}
+.card-icon {
+  width: 30px; height: 30px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1rem; flex-shrink: 0;
+}
+.card-head h2 { font-size: .95rem; font-weight: 600; flex: 1; }
+/* ── Stat tiles ── */
+.stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(145px, 1fr)); gap: 9px; }
+.stat {
+  background: rgba(0,0,0,.3);
+  border: 1px solid var(--border);
+  border-radius: 11px; padding: .8rem .9rem;
+  transition: border-color .15s;
+}
+.stat.ok { border-color: rgba(52,199,89,.22); }
+.stat.warn { border-color: rgba(245,166,35,.3); }
+.stat.danger { border-color: rgba(255,69,58,.3); }
+.stat-icon { font-size: .95rem; margin-bottom: .3rem; }
+.stat .v {
+  font-size: 1.5rem; font-weight: 700;
+  font-variant-numeric: tabular-nums; line-height: 1;
+}
+.stat.ok .v { color: var(--green); }
+.stat.warn .v { color: var(--amber); }
+.stat.danger .v { color: var(--red); }
+.stat .l { font-size: .65rem; color: var(--text-sub); margin-top: .25rem; line-height: 1.4; }
+/* ── Flag pills ── */
+.flags { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .8rem; }
+.pill {
+  display: inline-flex; align-items: center; gap: .3rem;
+  padding: .22rem .65rem; border-radius: 999px; font-size: .7rem;
+  border: 1px solid var(--border); color: var(--text-sub);
+}
+.pill.ok { background: var(--green-dim); border-color: rgba(52,199,89,.25); color: var(--green); }
+.pill.warn { background: var(--amber-dim); border-color: rgba(245,166,35,.3); color: var(--amber); }
+/* ── Recent indexed ── */
+.recent-list {
+  margin-top: .8rem; padding-top: .75rem;
+  border-top: 1px solid var(--border);
+  font-size: .7rem; font-family: ui-monospace, Menlo, Consolas, monospace;
+  color: var(--text-sub); line-height: 1.9; overflow-x: auto; white-space: nowrap;
+}
+/* ── Buttons ── */
+button {
+  display: inline-flex; align-items: center; gap: .35rem;
+  padding: .42rem .85rem; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); cursor: pointer;
+  font-size: .78rem; font-weight: 600;
+  background: var(--surface); color: var(--text);
+  transition: background .14s, border-color .14s, opacity .14s;
+  white-space: nowrap;
+}
+button:hover { background: var(--surface-hover); border-color: var(--border-focus); }
+button.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+button.primary:hover { background: #6ba0f9; border-color: #6ba0f9; }
+button.success { background: var(--green-dim); border-color: rgba(52,199,89,.35); color: var(--green); }
+button.danger { background: var(--red-dim); border-color: rgba(255,69,58,.35); color: var(--red); }
+button.danger:hover { background: rgba(255,69,58,.25); }
+button:disabled { opacity: .38; cursor: default; pointer-events: none; }
+button.loading { opacity: .6; pointer-events: none; }
+button.loading::after {
+  content: ''; display: inline-block; width: 11px; height: 11px;
+  border: 2px solid currentColor; border-top-color: transparent;
+  border-radius: 50%; animation: spin .6s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+/* ── Task groups ── */
+.task-section { margin-bottom: .75rem; }
+.task-label { font-size: .68rem; color: var(--text-dim); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; margin-bottom: .45rem; }
+.btn-row { display: flex; flex-wrap: wrap; gap: .45rem; align-items: flex-end; }
+.field { display: flex; flex-direction: column; gap: .25rem; }
+.field label { font-size: .68rem; color: var(--text-sub); }
+input[type="text"], input[type="search"], input:not([type]) {
+  background: rgba(0,0,0,.4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: .42rem .7rem;
+  color: var(--text); font-size: .8rem; outline: none;
+  transition: border-color .14s;
+}
+input:focus { border-color: var(--border-focus); }
+.hint { font-size: .68rem; color: var(--text-dim); margin-top: .6rem; line-height: 1.7; }
+/* ── Photo search ── */
+.search-row { display: flex; gap: .5rem; margin-bottom: .75rem; }
+.search-row input { flex: 1; }
+/* Search result grid */
+.match-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+.match-card {
+  background: rgba(0,0,0,.3); border: 1px solid var(--border);
+  border-radius: 10px; overflow: hidden; cursor: pointer;
+  transition: border-color .14s, transform .1s;
+}
+.match-card:hover { border-color: var(--blue); transform: translateY(-1px); }
+.match-card.active { border-color: var(--blue); background: var(--blue-dim); }
+.match-thumb {
+  width: 100%; aspect-ratio: 1; object-fit: cover;
+  background: rgba(255,255,255,.04); display: block;
+}
+.match-caption {
+  padding: .3rem .45rem;
+  font-size: .63rem; font-family: ui-monospace, Menlo, monospace;
+  color: var(--text-sub); line-height: 1.4;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Photo detail */
+.detail { display: none; margin-top: .9rem; padding-top: .9rem; border-top: 1px solid var(--border); }
+.detail.open { display: block; }
+.detail-head { display: flex; gap: 1rem; margin-bottom: .85rem; }
+.detail-thumb-wrap { position: relative; flex-shrink: 0; }
+.detail-thumb {
+  width: 110px; height: 110px; object-fit: cover;
+  border-radius: 11px; background: rgba(255,255,255,.06); display: block;
+}
+.detail-r2-badge {
+  position: absolute; bottom: 5px; right: 5px;
+  font-size: .58rem; padding: .1rem .35rem; border-radius: 4px;
+  font-weight: 700;
+}
+.detail-r2-badge.ok { background: var(--green-dim); color: var(--green); }
+.detail-r2-badge.miss { background: var(--red-dim); color: var(--red); }
+.kv { font-size: .76rem; line-height: 2; color: var(--text); flex: 1; min-width: 0; }
+.kv-row { display: flex; gap: .4rem; align-items: baseline; overflow: hidden; }
+.kv-k { font-size: .67rem; color: var(--text-sub); font-weight: 500; flex-shrink: 0; }
+.kv-v { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .76rem; }
+.kv-key { font-family: ui-monospace, Menlo, monospace; font-size: .7rem; word-break: break-all; color: var(--text-sub); }
+.copy-btn {
+  font-size: .6rem; padding: .1rem .35rem; border-radius: 4px; margin-left: .3rem;
+  border: 1px solid var(--border); background: none; color: var(--text-dim); cursor: pointer; font-weight: 400;
+}
+.copy-btn:hover { color: var(--text); border-color: var(--border-focus); }
+/* Fix actions */
+.fix-section { margin-top: .7rem; padding-top: .65rem; border-top: 1px solid var(--border); }
+.fix-label { font-size: .68rem; color: var(--text-dim); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; margin-bottom: .45rem; }
+.actions { display: flex; flex-wrap: wrap; gap: .45rem; align-items: flex-end; margin-bottom: .45rem; }
+/* ── Log ── */
+.log-wrap {
+  background: rgba(0,0,0,.5);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: .7rem .85rem;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: .71rem; line-height: 1.7;
+  max-height: 240px; overflow: auto;
+}
+.log-entry { display: flex; gap: .5rem; }
+.log-entry + .log-entry { border-top: 1px solid rgba(255,255,255,.04); padding-top: .15rem; margin-top: .15rem; }
+.log-t { color: var(--text-dim); flex-shrink: 0; }
+.log-msg { color: #a0d8a0; flex: 1; word-break: break-all; }
+.log-msg.err { color: #ff7066; }
+/* ── Toast ── */
+.toasts {
+  position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 9999;
+  display: flex; flex-direction: column; gap: .5rem; pointer-events: none;
+}
+.toast-item {
+  display: flex; align-items: center; gap: .55rem;
+  padding: .6rem 1rem; border-radius: 10px;
+  font-size: .8rem; font-weight: 500;
+  background: rgba(30,30,36,.95);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(10px);
+  animation: slideUp .22s ease;
+  pointer-events: auto;
+  max-width: 320px;
+}
+.toast-item.ok { border-color: rgba(52,199,89,.35); }
+.toast-item.err { border-color: rgba(255,69,58,.35); }
+.toast-item.info { border-color: rgba(79,142,247,.35); }
+@keyframes slideUp { from { opacity: 0; transform: translateY(10px); } }
+/* ── Custom confirm modal ── */
+.modal-backdrop {
+  display: none; position: fixed; inset: 0; z-index: 1000;
+  background: rgba(0,0,0,.65); backdrop-filter: blur(4px);
+  align-items: center; justify-content: center;
+}
+.modal-backdrop.open { display: flex; }
+.modal {
+  background: #141418; border: 1px solid rgba(255,255,255,.12);
+  border-radius: var(--radius); padding: 1.4rem 1.5rem;
+  max-width: 360px; width: 90%; animation: modalIn .18s ease;
+}
+@keyframes modalIn { from { opacity: 0; transform: scale(.96); } }
+.modal-title { font-size: .95rem; font-weight: 700; margin-bottom: .55rem; }
+.modal-msg { font-size: .82rem; color: var(--text-sub); line-height: 1.6; margin-bottom: 1.1rem; }
+.modal-btns { display: flex; gap: .5rem; justify-content: flex-end; }
+/* ── Responsive ── */
+@media (max-width: 600px) {
+  .topbar { padding: .75rem 1rem; }
+  .page { padding: 1rem 1rem 0; }
+  .stats { grid-template-columns: repeat(3, 1fr); }
+  .match-grid { grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); }
+  .detail-head { flex-direction: column; }
+  .detail-thumb { width: 100%; height: 160px; }
+  #liveTime { display: none; }
+}
 </style>
 </head>
 <body>
-<h1>🛠 运维控制台</h1>
 
+<!-- Top bar -->
+<div class="topbar">
+  <div class="topbar-logo">🛠</div>
+  <div class="topbar-title">运维控制台</div>
+  <div class="auto-refresh-wrap">
+    <span>自动刷新</span>
+    <label class="toggle-switch">
+      <input type="checkbox" id="autoRefresh" />
+      <div class="toggle-track"></div>
+      <div class="toggle-knob"></div>
+    </label>
+  </div>
+  <div id="liveTime">—</div>
+  <a class="topbar-home" href="/">
+    <svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+    回首页
+  </a>
+</div>
+
+<div class="page">
+
+<!-- System Status -->
 <div class="card">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.8rem"><h2 style="margin:0">系统状态</h2><button class="primary" onclick="loadStatus()">刷新</button></div>
-  <div class="stats" id="stats"><div class="stat"><div class="v">—</div><div class="l">加载中…</div></div></div>
+  <div class="card-head">
+    <div class="card-icon" style="background:var(--blue-dim);font-size:.9rem">📊</div>
+    <h2>系统状态</h2>
+    <button onclick="loadStatus()" id="btnRefresh">刷新</button>
+  </div>
+  <div class="stats" id="stats">
+    <div class="stat"><div class="stat-icon">⏳</div><div class="v" style="color:var(--text-dim)">—</div><div class="l">加载中…</div></div>
+  </div>
   <div class="flags" id="flags"></div>
-  <div class="recent" id="recent"></div>
+  <div class="recent-list" id="recent"></div>
 </div>
 
+<!-- Maintenance Tasks -->
 <div class="card">
-  <h2>维护任务</h2>
-  <div class="btn-row">
-    <button onclick="run('backfill-photos-index', {limit:300})">索引回填一批</button>
-    <button onclick="run('score-photos', {limit:10})">AI 打分一批</button>
-    <button onclick="run('locate-photos', {})">查地点一批</button>
-    <button onclick="run('convert-heic-photos', {})">HEIC 转码一批</button>
-    <button onclick="run('backfill-workflows', {})">补触发流水线</button>
-    <button onclick="run('test-telegram', {})">测试 Telegram 推送</button>
+  <div class="card-head">
+    <div class="card-icon" style="background:var(--purple-dim);font-size:.9rem">⚙️</div>
+    <h2>维护任务</h2>
   </div>
-  <div class="btn-row" style="margin-top:.7rem">
-    <div class="field"><label>月 (MM)</label><input id="pgMonth" maxlength="2" placeholder="07" /></div>
-    <div class="field"><label>日 (DD)</label><input id="pgDay" maxlength="2" placeholder="08" /></div>
-    <button onclick="purgeDay()">清这一天的边缘缓存</button>
-    <button onclick="resetFlag('backfill')">重启索引回填</button>
-    <button onclick="resetFlag('reindex')">重跑日期重扫</button>
+
+  <div class="task-section">
+    <div class="task-label">批量处理（每次一小批，反复点到 remaining=0）</div>
+    <div class="btn-row">
+      <button id="btn-backfill" onclick="runTask(this,'backfill-photos-index',{limit:300})">📥 索引回填一批</button>
+      <button id="btn-score" onclick="runTask(this,'score-photos',{limit:10})">🤖 AI 打分一批</button>
+      <button id="btn-locate" onclick="runTask(this,'locate-photos',{})">📍 查地点一批</button>
+      <button id="btn-heic" onclick="runTask(this,'convert-heic-photos',{})">🖼 HEIC 转码一批</button>
+      <button id="btn-workflow" onclick="runTask(this,'backfill-workflows',{})">🔄 补触发流水线</button>
+      <button id="btn-tg" onclick="runTask(this,'test-telegram',{})">✈️ 测试 Telegram</button>
+    </div>
   </div>
-  <div class="hint">批量任务每次只处理一小批（避免超时），反复点到 remaining 为 0；「重启/重跑」只是清掉 KV 完成标记，实际工作由 Cron 每 10 分钟自动推进。改数据后页面不刷新的，先怀疑边缘缓存。</div>
+
+  <div class="task-section">
+    <div class="task-label">缓存清除</div>
+    <div class="btn-row">
+      <div class="field"><label>月 MM</label><input id="pgMonth" style="width:64px" maxlength="2" placeholder="07" /></div>
+      <div class="field"><label>日 DD</label><input id="pgDay" style="width:64px" maxlength="2" placeholder="08" /></div>
+      <button id="btn-purge" onclick="purgeDay()">🗑 清这天边缘缓存</button>
+    </div>
+  </div>
+
+  <div class="task-section">
+    <div class="task-label">状态开关（清 KV 标记，Cron 自动推进）</div>
+    <div class="btn-row">
+      <button class="danger" onclick="confirmThen('重启索引回填？Cron 将恢复每 20 分钟一批补索引。','重启', function(){ resetFlag(\'backfill\'); })">↺ 重启索引回填</button>
+      <button class="danger" onclick="confirmThen('重跑日期重扫？Cron 将重新全表扫描修正拍摄日期，期间 offset 会递增。','重跑', function(){ resetFlag(\'reindex\'); })">↺ 重跑日期重扫</button>
+    </div>
+  </div>
+  <div class="hint">批量任务避免超时每次只处理一小批；改完数据页面不刷新先清边缘缓存；「重启/重跑」仅清 KV 完成标记。</div>
 </div>
 
+<!-- Photo Repair -->
 <div class="card">
-  <h2>照片数据修复</h2>
+  <div class="card-head">
+    <div class="card-icon" style="background:var(--amber-dim);font-size:.9rem">🔧</div>
+    <h2>照片数据修复</h2>
+    <span style="font-size:.68rem;color:var(--text-dim)">Ctrl+K 聚焦搜索</span>
+  </div>
   <div class="search-row">
-    <input id="q" placeholder="按 key 子串搜索，如 IMG_1234 / 2023/07" onkeydown="if(event.key==='Enter')searchPhoto()" />
+    <input id="q" placeholder="按 key 子串搜索：IMG_1234 / 2023/07 / 海边…" onkeydown="if(event.key==='Enter')searchPhoto()" />
     <button class="primary" onclick="searchPhoto()">搜索</button>
   </div>
   <div id="matches"></div>
 
   <div class="detail" id="detail">
     <div class="detail-head">
-      <img id="dThumb" alt="" />
+      <div class="detail-thumb-wrap">
+        <img class="detail-thumb" id="dThumb" alt="" />
+        <span class="detail-r2-badge ok" id="dR2Badge">R2 ✓</span>
+      </div>
       <div class="kv" id="dInfo"></div>
     </div>
-    <div class="actions">
-      <div class="field"><label>年</label><input id="fxYear" maxlength="4" /></div>
-      <div class="field"><label>月</label><input id="fxMonth" maxlength="2" /></div>
-      <div class="field"><label>日</label><input id="fxDay" maxlength="2" /></div>
-      <button class="primary" onclick="fix('set-date')">改拍摄日期</button>
+
+    <div class="fix-section">
+      <div class="fix-label">修改拍摄日期</div>
+      <div class="actions">
+        <div class="field"><label>年</label><input id="fxYear" style="width:68px" maxlength="4" /></div>
+        <div class="field"><label>月</label><input id="fxMonth" style="width:52px" maxlength="2" /></div>
+        <div class="field"><label>日</label><input id="fxDay" style="width:52px" maxlength="2" /></div>
+        <button class="primary" id="btn-set-date" onclick="fix('set-date')">保存日期</button>
+      </div>
     </div>
-    <div class="actions">
-      <div class="field"><label>地点名</label><input id="fxPlace" style="width:160px" /></div>
-      <button onclick="fix('set-place')">改地点名</button>
-      <button onclick="fix('relocate')">重查地点</button>
-      <button onclick="fix('rescore')">重新打分</button>
-      <button onclick="fix('clear-note')">删手记</button>
-      <button class="danger" onclick="fix('remove-index')">从索引移除</button>
+
+    <div class="fix-section">
+      <div class="fix-label">地点</div>
+      <div class="actions">
+        <div class="field"><label>地点名（留空=清除）</label><input id="fxPlace" style="width:180px" /></div>
+        <button id="btn-set-place" onclick="fix('set-place')">改地点名</button>
+        <button id="btn-relocate" onclick="fix('relocate')">重查地点</button>
+      </div>
     </div>
-    <div class="hint">「改拍摄日期」会自动清新旧两天的缓存；注意文件名/EXIF 本身带日期的照片，之后重跑「日期重扫」会覆盖手动修改。「从索引移除」不删 R2 原图，只是让照片不再出现。</div>
+
+    <div class="fix-section">
+      <div class="fix-label">其他</div>
+      <div class="actions">
+        <button id="btn-rescore" onclick="fix('rescore')">🤖 重新打分</button>
+        <button id="btn-clear-note" onclick="fix('clear-note')">📝 删手记</button>
+        <button class="danger" id="btn-remove-index" onclick="confirmThen('把这张照片从索引移除？R2 原图不受影响，照片将不再出现在页面。','确认移除', function(){ fix(\'remove-index\'); })">🗑 从索引移除</button>
+      </div>
+    </div>
+    <div class="hint">「改拍摄日期」自动清新旧两天缓存；文件名/EXIF 带日期的照片，重跑「日期重扫」会覆盖手动修改。「从索引移除」不删 R2 原图。</div>
   </div>
 </div>
 
+<!-- Log -->
 <div class="card">
-  <h2>操作日志</h2>
-  <div id="log"></div>
+  <div class="card-head">
+    <div class="card-icon" style="background:rgba(255,255,255,.05);font-size:.9rem">📋</div>
+    <h2>操作日志</h2>
+    <button onclick="document.getElementById('logWrap').innerHTML=''" style="font-size:.72rem">清除</button>
+  </div>
+  <div class="log-wrap" id="logWrap"></div>
+</div>
+
+</div><!-- /page -->
+
+<!-- Toast container -->
+<div class="toasts" id="toasts"></div>
+
+<!-- Custom confirm modal -->
+<div class="modal-backdrop" id="modalBg">
+  <div class="modal">
+    <div class="modal-title" id="modalTitle"></div>
+    <div class="modal-msg" id="modalMsg"></div>
+    <div class="modal-btns">
+      <button onclick="closeModal(false)">取消</button>
+      <button class="danger" id="modalOk" onclick="closeModal(true)"></button>
+    </div>
+  </div>
 </div>
 
 <script>
 var currentKey = null;
+var _modalCb = null;
+var _autoTimer = null;
 
-function log(msg, isErr) {
-  var el = document.getElementById('log');
-  var line = document.createElement('div');
-  if (isErr) line.className = 'err';
-  var t = new Date().toTimeString().slice(0, 8);
-  line.innerHTML = '<span class="t">[' + t + ']</span> ';
-  line.appendChild(document.createTextNode(typeof msg === 'string' ? msg : JSON.stringify(msg)));
-  el.prepend(line);
+// ── Live clock ──────────────────────────────────────────────────────────────
+function tickClock() {
+  var now = new Date(Date.now() + (8 * 60 - new Date().getTimezoneOffset()) * 60000);
+  var s = now.toISOString().replace('T', ' ').slice(0, 19) + ' CST';
+  document.getElementById('liveTime').textContent = s;
+}
+tickClock(); setInterval(tickClock, 1000);
+
+// ── Auto-refresh toggle ─────────────────────────────────────────────────────
+document.getElementById('autoRefresh').addEventListener('change', function() {
+  clearInterval(_autoTimer);
+  if (this.checked) { _autoTimer = setInterval(loadStatus, 30000); toast('每 30 秒自动刷新已开启', 'info'); }
+  else { toast('自动刷新已关闭', 'info'); }
+});
+
+// ── Keyboard shortcut ───────────────────────────────────────────────────────
+document.addEventListener('keydown', function(e) {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+    e.preventDefault();
+    var inp = document.getElementById('q');
+    inp.focus(); inp.select();
+  }
+  if (e.key === 'Escape') closeModal(false);
+});
+
+// ── Toast ───────────────────────────────────────────────────────────────────
+function toast(msg, type) {
+  type = type || 'ok';
+  var icon = type === 'ok' ? '✓' : type === 'err' ? '✕' : 'ℹ';
+  var el = document.createElement('div');
+  el.className = 'toast-item ' + type;
+  el.textContent = icon + '  ' + msg;
+  var box = document.getElementById('toasts');
+  box.appendChild(el);
+  setTimeout(function() { if (el.parentNode) el.parentNode.removeChild(el); }, 3200);
 }
 
+// ── Log ─────────────────────────────────────────────────────────────────────
+function addLog(msg, isErr) {
+  var wrap = document.getElementById('logWrap');
+  var row = document.createElement('div');
+  row.className = 'log-entry';
+  var t = new Date().toTimeString().slice(0, 8);
+  var txt = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 0);
+  row.innerHTML = '<span class="log-t">' + t + '</span><span class="log-msg' + (isErr ? ' err' : '') + '">' + escHtml(txt) + '</span>';
+  wrap.prepend(row);
+}
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── API helper ──────────────────────────────────────────────────────────────
 function api(path, opts) {
   return fetch(path, opts).then(function(r) {
     return r.text().then(function(text) {
       var data; try { data = JSON.parse(text); } catch (_) { data = text; }
-      if (!r.ok) { log(path.split('?')[0] + ' → HTTP ' + r.status + ' ' + (typeof data === 'string' ? data : JSON.stringify(data)), true); throw new Error('http ' + r.status); }
+      if (!r.ok) {
+        var errMsg = path.split('?')[0] + ' → HTTP ' + r.status + ' ' + (typeof data === 'string' ? data : JSON.stringify(data));
+        addLog(errMsg, true);
+        toast(errMsg.slice(0, 60), 'err');
+        throw new Error('http ' + r.status);
+      }
       return data;
     });
+  }).catch(function(e) {
+    if (!e.message.startsWith('http')) { addLog(e.message, true); toast(e.message, 'err'); }
+    throw e;
   });
 }
 
-// ── 系统状态 ────────────────────────────────────────────────────────────────
+// ── Confirm modal ────────────────────────────────────────────────────────────
+function confirmThen(msg, okLabel, cb) {
+  _modalCb = cb;
+  document.getElementById('modalTitle').textContent = '确认操作';
+  document.getElementById('modalMsg').textContent = msg;
+  document.getElementById('modalOk').textContent = okLabel || '确认';
+  document.getElementById('modalBg').classList.add('open');
+}
+function closeModal(yes) {
+  document.getElementById('modalBg').classList.remove('open');
+  if (yes && _modalCb) { var cb = _modalCb; _modalCb = null; cb(); }
+  else { _modalCb = null; }
+}
+document.getElementById('modalBg').addEventListener('click', function(e) {
+  if (e.target === this) closeModal(false);
+});
+
+// ── System status ────────────────────────────────────────────────────────────
 function loadStatus() {
+  var btn = document.getElementById('btnRefresh');
+  btn.classList.add('loading'); btn.disabled = true;
   api('/admin/ops-status').then(function(d) {
-    var s = [];
-    function tile(v, l, warn) { s.push('<div class="stat"><div class="v' + (warn && v > 0 ? ' warn' : '') + '">' + v + '</div><div class="l">' + l + '</div></div>'); }
-    tile(d.index.total, '索引总数（图 ' + (d.index.byType.image || 0) + ' / 视频 ' + (d.index.byType.video || 0) + '）');
-    tile(d.unscored, '待 AI 打分', true);
-    tile(d.unlocated, '待查地点', true);
-    tile(d.pendingNotify, '待推送新照片', true);
-    tile(d.notes, '手记条数');
-    tile(d.reactions.total, '表态总数');
-    document.getElementById('stats').innerHTML = s.join('');
-    var f = d.flags;
-    document.getElementById('flags').innerHTML =
-      '<b>索引回填：</b>' + (f.backfill_done_at ? '已完成（' + f.backfill_done_at.slice(0, 16) + '，每天核对一次）' : '进行中/待跑') +
-      '　<b>日期重扫：</b>' + (f.reindex_dates_done_at ? '已完成' : (f.reindex_dates_offset ? '进行中 offset=' + f.reindex_dates_offset : '待跑')) +
-      '　<b>最近浏览：</b>' + (f.last_viewed_day ? f.last_viewed_day.month + '-' + f.last_viewed_day.day : '—') +
-      '　<b>北京今天：</b>' + d.bjToday.month + '-' + d.bjToday.day;
-    document.getElementById('recent').innerHTML = '最近索引：<br>' + (d.recentIndexed || []).map(function(r) {
-      return r.year + '/' + r.month + '/' + r.day + ' · ' + r.key;
-    }).join('<br>');
-    log('状态已刷新：索引 ' + d.index.total + '，待打分 ' + d.unscored + '，待查地点 ' + d.unlocated);
-  }).catch(function(){});
+    renderStats(d);
+    renderFlags(d);
+    renderRecent(d);
+    addLog('状态刷新：索引 ' + d.index.total + '，待打分 ' + d.unscored + '，待查地点 ' + d.unlocated);
+  }).catch(function(){}).finally(function() {
+    btn.classList.remove('loading'); btn.disabled = false;
+  });
 }
 
-// ── 维护任务 ────────────────────────────────────────────────────────────────
-function run(endpoint, params) {
+function renderStats(d) {
+  var tiles = [
+    { icon:'📸', v: d.index.total, l:'索引总量', cls: d.index.total > 0 ? 'ok' : '' },
+    { icon:'🖼', v: d.index.byType.image || 0, l:'图片', cls: '' },
+    { icon:'🎬', v: d.index.byType.video || 0, l:'视频', cls: '' },
+    { icon:'🤖', v: d.unscored, l:'待 AI 打分', cls: d.unscored > 50 ? 'danger' : d.unscored > 0 ? 'warn' : 'ok' },
+    { icon:'📍', v: d.unlocated, l:'待查地点', cls: d.unlocated > 50 ? 'danger' : d.unlocated > 0 ? 'warn' : 'ok' },
+    { icon:'📬', v: d.pendingNotify, l:'待推送', cls: d.pendingNotify > 0 ? 'warn' : 'ok' },
+    { icon:'😊', v: d.reactions.total, l:'表态总数', cls: '' },
+    { icon:'📝', v: d.notes, l:'手记条数', cls: '' },
+  ];
+  document.getElementById('stats').innerHTML = tiles.map(function(t) {
+    return '<div class="stat ' + t.cls + '"><div class="stat-icon">' + t.icon + '</div><div class="v">' + t.v + '</div><div class="l">' + t.l + '</div></div>';
+  }).join('');
+}
+
+function renderFlags(d) {
+  var f = d.flags;
+  var bj = d.bjToday;
+  var items = [
+    { ok: !!f.backfill_done_at, label: '索引回填', detail: f.backfill_done_at ? '完成 ' + f.backfill_done_at.slice(5, 16) : (f.backfill_done_at === false ? '进行中' : '待跑') },
+    { ok: !!f.reindex_dates_done_at, label: '日期重扫', detail: f.reindex_dates_done_at ? '完成' : (f.reindex_dates_offset ? 'offset=' + f.reindex_dates_offset : '待跑') },
+    { ok: true, label: '北京今天', detail: bj.month + '-' + bj.day, cls: '' },
+    { ok: !!f.last_viewed_day, label: '最近浏览', detail: f.last_viewed_day ? f.last_viewed_day.month + '-' + f.last_viewed_day.day : '—', cls: '' },
+  ];
+  document.getElementById('flags').innerHTML = items.map(function(it) {
+    var cls = it.cls !== undefined ? it.cls : (it.ok ? 'ok' : 'warn');
+    return '<span class="pill ' + cls + '">' + it.label + '：' + it.detail + '</span>';
+  }).join('');
+}
+
+function renderRecent(d) {
+  var rows = (d.recentIndexed || []);
+  document.getElementById('recent').innerHTML = rows.length
+    ? '最近入库：' + rows.map(function(r){ return r.year + '/' + r.month + '/' + r.day + ' · ' + r.key; }).join(' &nbsp;·&nbsp; ')
+    : '';
+}
+
+// ── Maintenance tasks ─────────────────────────────────────────────────────────
+function runTask(btn, endpoint, params) {
   var qs = Object.keys(params).map(function(k){ return k + '=' + encodeURIComponent(params[k]); }).join('&');
-  log('执行 /admin/' + endpoint + (qs ? '?' + qs : '') + ' …');
-  api('/admin/' + endpoint + (qs ? '?' + qs : '')).then(function(d) {
-    log({ endpoint: endpoint, result: d });
+  var url = '/admin/' + endpoint + (qs ? '?' + qs : '');
+  addLog('▶ ' + url);
+  btn.classList.add('loading'); btn.disabled = true;
+  api(url).then(function(d) {
+    addLog({ endpoint: endpoint, result: d });
+    var remain = d && d.remaining !== undefined ? d.remaining : null;
+    toast((remain !== null ? '完成，remaining=' + remain : '完成'), 'ok');
     loadStatus();
-  }).catch(function(){});
+  }).catch(function(){}).finally(function() {
+    btn.classList.remove('loading'); btn.disabled = false;
+  });
 }
 
 function purgeDay() {
-  var m = document.getElementById('pgMonth').value.trim().padStart(2, '0');
-  var d = document.getElementById('pgDay').value.trim().padStart(2, '0');
-  if (!/^\d{2}$/.test(m) || !/^\d{2}$/.test(d)) { log('月/日格式需为 MM / DD', true); return; }
-  run('purge-cache', { month: m, day: d });
+  var m = (document.getElementById('pgMonth').value.trim() || '').padStart(2, '0');
+  var d = (document.getElementById('pgDay').value.trim() || '').padStart(2, '0');
+  if (!/^\d{2}$/.test(m) || !/^\d{2}$/.test(d)) { toast('月/日格式需为 MM / DD', 'err'); return; }
+  var btn = document.getElementById('btn-purge');
+  runTask(btn, 'purge-cache', { month: m, day: d });
 }
 
 function resetFlag(flag) {
-  if (!confirm(flag === 'backfill' ? '清掉回填完成标记，Cron 恢复每 20 分钟一批的索引回填？' : '清掉重扫标记，Cron 将重新全表扫描修正拍摄日期？')) return;
   api('/admin/reset-flag', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ flag: flag }) })
-    .then(function(d) { log(d); loadStatus(); }).catch(function(){});
+    .then(function(d) { addLog(d); toast('标记已清除，Cron 将自动推进', 'ok'); loadStatus(); }).catch(function(){});
 }
 
-// ── 照片数据修复 ─────────────────────────────────────────────────────────────
+// ── Photo search ─────────────────────────────────────────────────────────────
 function searchPhoto() {
   var q = document.getElementById('q').value.trim();
   if (!q) return;
   document.getElementById('detail').classList.remove('open');
+  currentKey = null;
   api('/admin/photo-info?q=' + encodeURIComponent(q)).then(function(d) {
     var ms = d.matches || [];
-    document.getElementById('matches').innerHTML = ms.length
-      ? ms.map(function(m) { return '<div class="match" data-key="' + m.key.replace(/"/g, '&quot;') + '">' + m.year + '/' + m.month + '/' + m.day + ' · ' + m.key + '</div>'; }).join('')
-      : '<div class="hint">没有匹配的照片（只搜已索引的）</div>';
-    document.querySelectorAll('.match').forEach(function(el) {
-      el.onclick = function() { openPhoto(el.dataset.key); };
+    if (!ms.length) {
+      document.getElementById('matches').innerHTML = '<div class="hint" style="padding:.5rem 0">没有匹配（只搜已索引的照片）</div>';
+      return;
+    }
+    document.getElementById('matches').innerHTML = '<div class="match-grid" id="matchGrid">' +
+      ms.map(function(m) {
+        var thumb = '/thumb/' + encodeURIComponent(m.key) + '?w=240&h=240&q=65&fit=cover';
+        var name = m.key.split('/').pop();
+        return '<div class="match-card" data-key="' + escAttr(m.key) + '">' +
+          '<img class="match-thumb" src="' + thumb + '" loading="lazy" alt="" />' +
+          '<div class="match-caption">' + escHtml(m.year + '/' + m.month + '/' + m.day) + '<br>' + escHtml(name) + '</div>' +
+          '</div>';
+      }).join('') + '</div>';
+    document.querySelectorAll('.match-card').forEach(function(el) {
+      el.addEventListener('click', function() {
+        document.querySelectorAll('.match-card').forEach(function(c){ c.classList.remove('active'); });
+        el.classList.add('active');
+        openPhoto(el.dataset.key);
+      });
     });
   }).catch(function(){});
 }
+function escAttr(s) { return String(s).replace(/"/g, '&quot;'); }
 
 function openPhoto(key) {
   api('/admin/photo-info?key=' + encodeURIComponent(key)).then(function(d) {
     currentKey = key;
     var det = document.getElementById('detail');
     det.classList.add('open');
-    document.getElementById('dThumb').src = '/thumb/' + encodeURIComponent(key) + '?w=192&h=192&q=70&fit=cover';
+    document.getElementById('dThumb').src = '/thumb/' + encodeURIComponent(key) + '?w=220&h=220&q=75&fit=cover';
+    var badge = document.getElementById('dR2Badge');
+    if (d.inR2) { badge.textContent = 'R2 ✓'; badge.className = 'detail-r2-badge ok'; }
+    else { badge.textContent = 'R2 缺失!'; badge.className = 'detail-r2-badge miss'; }
     var i = d.index || {};
-    var rx = (d.reactions || []).map(function(r){ return r.emoji + r.count; }).join(' ');
-    document.getElementById('dInfo').innerHTML =
-      '<div class="key">' + key + (d.inR2 ? '<span class="badge">R2 ✓</span>' : '<span class="badge miss">R2 原图缺失</span>') + '</div>' +
-      '<div><b>日期</b>' + (i.year ? i.year + '/' + i.month + '/' + i.day : '未索引') + '　<b>类型</b>' + (i.type || '—') + '</div>' +
-      '<div><b>评分</b>' + (d.score ? d.score.score + (d.score.has_face ? ' · 有人脸' : '') : '未打分') + '　<b>地点</b>' + (d.place ? (d.place.name || '（无名）') : '未查') + '</div>' +
-      (d.score && d.score.caption ? '<div><b>文案</b>' + d.score.caption + '</div>' : '') +
-      (d.note ? '<div><b>手记</b>' + String(d.note.note).slice(0, 80) + '</div>' : '') +
-      (rx ? '<div><b>表态</b>' + rx + '</div>' : '');
+    var rx = (d.reactions || []).map(function(r){ return r.emoji + r.count; }).join('  ');
+    var rows = [
+      ['key', '<span class="kv-key">' + escHtml(key) + '</span><button class="copy-btn" onclick="copyText(\'' + escAttr(key) + '\')">复制</button>'],
+      ['日期', i.year ? i.year + '/' + i.month + '/' + i.day : '未索引'],
+      ['类型', i.type || '—'],
+      ['评分', d.score ? d.score.score + (d.score.has_face ? ' · 有人脸' : '') : '未打分'],
+      ['地点', d.place ? (d.place.name || '（无名）') : '未查'],
+      d.score && d.score.caption ? ['文案', escHtml(String(d.score.caption).slice(0,80))] : null,
+      d.note ? ['手记', escHtml(String(d.note.note).slice(0,80))] : null,
+      rx ? ['表态', rx] : null,
+    ].filter(Boolean);
+    document.getElementById('dInfo').innerHTML = rows.map(function(r) {
+      return '<div class="kv-row"><span class="kv-k">' + r[0] + '</span><span class="kv-v">' + r[1] + '</span></div>';
+    }).join('');
     document.getElementById('fxYear').value = i.year || '';
     document.getElementById('fxMonth').value = i.month || '';
     document.getElementById('fxDay').value = i.day || '';
     document.getElementById('fxPlace').value = d.place ? (d.place.name || '') : '';
+    det.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }).catch(function(){});
+}
+
+function copyText(t) {
+  navigator.clipboard.writeText(t).then(function(){ toast('已复制', 'info'); });
 }
 
 function fix(action) {
   if (!currentKey) return;
+  var btnId = 'btn-' + action.replace(/-([a-z])/g, function(_, c){ return '-' + c; });
+  var btn = document.getElementById('btn-' + action);
   var body = { key: currentKey, action: action };
   if (action === 'set-date') {
     body.year = document.getElementById('fxYear').value.trim();
@@ -234,14 +703,22 @@ function fix(action) {
     body.day = document.getElementById('fxDay').value.trim().padStart(2, '0');
   }
   if (action === 'set-place') body.name = document.getElementById('fxPlace').value.trim();
-  if (action === 'remove-index' && !confirm('确认把这张照片从索引移除？R2 原图不受影响。')) return;
-  if (action === 'rescore') log('重新打分需要调用 AI 模型，可能要等几秒…');
+  if (action === 'rescore') toast('重新打分调用 AI 模型，稍候…', 'info');
+  if (btn) { btn.classList.add('loading'); btn.disabled = true; }
   api('/admin/photo-fix', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
     .then(function(d) {
-      log({ action: action, key: currentKey, result: d });
-      if (action === 'remove-index') { document.getElementById('detail').classList.remove('open'); currentKey = null; }
-      else openPhoto(currentKey);
-    }).catch(function(){});
+      addLog({ action: action, key: currentKey, result: d });
+      toast(action + ' 完成', 'ok');
+      if (action === 'remove-index') {
+        document.getElementById('detail').classList.remove('open');
+        currentKey = null;
+        document.querySelectorAll('.match-card').forEach(function(c){ c.classList.remove('active'); });
+      } else {
+        openPhoto(currentKey);
+      }
+    }).catch(function(){}).finally(function() {
+      if (btn) { btn.classList.remove('loading'); btn.disabled = false; }
+    });
 }
 
 loadStatus();
