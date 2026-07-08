@@ -1063,13 +1063,20 @@ async function runBackgroundMaintenance(env) {
   if (unscored.length > 0) await scoreKeys(env, unscored);
 
   // 循环查地点直到全部完成或时间预算耗尽（每次 Cron 最多跑 24 秒用于地点查询）。
-  // 每张照片：R2 读 EXIF ~100ms + Mapbox API ~200ms，24s 内可处理约 80 张，
-  // 相比之前每次只处理 10 张快 8 倍；积压清完后每次 collectCandidates 返回空直接退出，几乎没有开销。
-  const locateDeadline = Date.now() + 24000;
-  while (Date.now() < locateDeadline) {
-    const unlocated = await collectCandidates(env, findUnlocatedKeys, priorityDays, BATCH_SIZE);
-    if (unlocated.length === 0) break;
-    await enrichLocations(env, unlocated);
+  // 每张照片：R2 读 EXIF ~100ms + Mapbox geocoding ~200ms，24s 内可处理约 40-80 张；
+  // 积压清完后每次 collectCandidates 返回空直接退出，几乎没有开销。
+  // 用 try/catch 隔离：enrichLocations 内部的错误不应冒泡到 Cron 主流程。
+  try {
+    let locateCount = 0;
+    const locateDeadline = Date.now() + 24000;
+    while (Date.now() < locateDeadline) {
+      const unlocated = await collectCandidates(env, findUnlocatedKeys, priorityDays, BATCH_SIZE);
+      if (unlocated.length === 0) break;
+      locateCount += await enrichLocations(env, unlocated);
+    }
+    if (locateCount > 0) console.log(`locate loop: ${locateCount} photos processed`);
+  } catch (err) {
+    console.error("locate loop failed", err);
   }
 
   // HEIC 预览图只转"今天"（服务器真实今天）拍的——不像打分/查地点那样还顺带覆盖"最近浏览日期"
@@ -2584,8 +2591,11 @@ async function findUnscoredKeys(env, { month, day, limit }) {
   const conds = ["i.type = 'image'", NEEDS_SCORE_SQL];
   const binds = [];
   if (month && day) { conds.push("i.month = ?", "i.day = ?"); binds.push(month, day); }
+  // ORDER BY 把非 HEIC 照片排到前面：HEIC 没有预览图时 Cron 里无法打分，
+  // 若不排序 SQLite 按 rowid 返回，如果前 N 条恰好全是 HEIC 就会让评分批次永远为空。
+  // 非 HEIC（JPEG/PNG/WebP）优先处理，HEIC 等 Workflow 转出预览图后自然会排上来。
   const { results } = await env.DB.prepare(
-    `SELECT i.key FROM photos_index i LEFT JOIN photo_scores s ON s.key = i.key WHERE ${conds.join(" AND ")} LIMIT ?`
+    `SELECT i.key FROM photos_index i LEFT JOIN photo_scores s ON s.key = i.key WHERE ${conds.join(" AND ")} ORDER BY (CASE WHEN i.key LIKE '%.heic' THEN 1 ELSE 0 END) LIMIT ?`
   ).bind(...binds, limit).all();
   return results.map((r) => r.key);
 }
