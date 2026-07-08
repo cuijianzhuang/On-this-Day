@@ -181,6 +181,8 @@ input[type="text"], input[type="search"], input:not([type]) {
 }
 input:focus { border-color: var(--border-focus); }
 .hint { font-size: .68rem; color: var(--text-dim); margin-top: .6rem; line-height: 1.7; }
+.bulk-wrap { display: flex; align-items: center; gap: .4rem; }
+.bulk-prog { font-size: .7rem; font-variant-numeric: tabular-nums; color: var(--text-sub); min-width: 8ch; }
 /* ── Photo search ── */
 .search-row { display: flex; gap: .5rem; margin-bottom: .75rem; }
 .search-row input { flex: 1; }
@@ -341,13 +343,29 @@ input:focus { border-color: var(--border-focus); }
   </div>
 
   <div class="task-section">
-    <div class="task-label">批量处理（每次一小批，反复点到 remaining=0）</div>
+    <div class="task-label">一键全量处理（自动循环直到 remaining=0）</div>
+    <div class="btn-row" style="flex-wrap:wrap;gap:.55rem">
+      <div class="bulk-wrap">
+        <button class="primary" id="btn-bulk-workflow" onclick="bulkRun('workflow','backfill-workflows',{limit:50},'bulk-workflow-prog','bulk-workflow-stop')">🚀 全量触发 Workflow</button>
+        <button class="danger" id="bulk-workflow-stop" onclick="stopBulk('workflow','bulk-workflow-stop')" style="display:none">⏹ 停止</button>
+        <span class="bulk-prog" id="bulk-workflow-prog"></span>
+      </div>
+      <div class="bulk-wrap">
+        <button id="btn-bulk-locate" onclick="bulkRun('locate','locate-photos',{limit:50},'bulk-locate-prog','bulk-locate-stop')">📍 全量查地点</button>
+        <button class="danger" id="bulk-locate-stop" onclick="stopBulk('locate','bulk-locate-stop')" style="display:none">⏹ 停止</button>
+        <span class="bulk-prog" id="bulk-locate-prog"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="task-section">
+    <div class="task-label">单批手动（每次一小批，用于调试）</div>
     <div class="btn-row">
       <button id="btn-backfill" onclick="runTask(this,'backfill-photos-index',{limit:300})">📥 索引回填一批</button>
       <button id="btn-score" onclick="runTask(this,'score-photos',{limit:10})">🤖 AI 打分一批</button>
       <button id="btn-locate" onclick="runTask(this,'locate-photos',{})">📍 查地点一批</button>
       <button id="btn-heic" onclick="runTask(this,'convert-heic-photos',{})">🖼 HEIC 转码一批</button>
-      <button id="btn-workflow" onclick="runTask(this,'backfill-workflows',{})">🔄 补触发流水线</button>
+      <button id="btn-workflow" onclick="runTask(this,'backfill-workflows',{})">🔄 补触发流水线一批</button>
       <button id="btn-tg" onclick="runTask(this,'test-telegram',{})">✈️ 测试 Telegram</button>
     </div>
   </div>
@@ -719,6 +737,55 @@ function fix(action) {
     }).catch(function(){}).finally(function() {
       if (btn) { btn.classList.remove('loading'); btn.disabled = false; }
     });
+}
+
+// ── Bulk run (loop until remaining=0) ───────────────────────────────────────
+var _bulkRunning = {};
+
+function bulkRun(id, endpoint, params, progId, stopId) {
+  if (_bulkRunning[id]) return;
+  _bulkRunning[id] = true;
+  document.getElementById(stopId).style.display = '';
+  var progEl = document.getElementById(progId);
+  var triggered = 0;
+
+  function tick() {
+    if (!_bulkRunning[id]) return;
+    var qs = Object.keys(params).map(function(k){ return k + '=' + encodeURIComponent(params[k]); }).join('&');
+    api('/admin/' + endpoint + (qs ? '?' + qs : '')).then(function(d) {
+      var remaining = d.remaining !== undefined ? d.remaining : null;
+      var thisTriggered = (d.triggered || 0) + (d.processedCount || 0);
+      triggered += thisTriggered;
+      var prog = remaining !== null ? 'remaining ' + remaining : '';
+      if (triggered) prog += (prog ? ' · ' : '') + '已处理 ' + triggered;
+      progEl.textContent = prog;
+      // 停止条件：
+      //   locate-photos → remaining=0 表示全部查完
+      //   backfill-workflows → triggered=0 表示没有新照片要触发了（Workflow 在后台跑，remaining 不会立刻降）
+      var done = (remaining !== null && remaining <= 0) || thisTriggered === 0;
+      if (!done && _bulkRunning[id]) {
+        setTimeout(tick, 400);
+      } else {
+        _bulkRunning[id] = false;
+        document.getElementById(stopId).style.display = 'none';
+        toast(thisTriggered === 0 ? '已全部触发，Workflow 后台处理中' : '全量完成，remaining=' + remaining, 'ok');
+        progEl.textContent = '';
+        loadStatus();
+      }
+    }).catch(function() {
+      _bulkRunning[id] = false;
+      document.getElementById(stopId).style.display = 'none';
+      progEl.textContent = '';
+    });
+  }
+  tick();
+}
+
+function stopBulk(id, stopId) {
+  _bulkRunning[id] = false;
+  document.getElementById(stopId).style.display = 'none';
+  document.getElementById(stopId.replace('-stop', '-prog')).textContent = '';
+  toast('已停止', 'info');
 }
 
 loadStatus();
