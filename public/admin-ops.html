@@ -54,18 +54,8 @@ button:disabled{opacity:.45;cursor:default}
 <h1>🛠 运维控制台</h1>
 
 <div class="card">
-  <div class="btn-row">
-    <div class="field" style="flex:1">
-      <label>ADMIN_TOKEN（保存在本机 localStorage，不入库）</label>
-      <input id="token" type="password" style="width:100%" placeholder="必填" />
-    </div>
-    <button class="primary" onclick="loadStatus()">刷新状态</button>
-  </div>
-</div>
-
-<div class="card">
-  <h2>系统状态</h2>
-  <div class="stats" id="stats"><div class="stat"><div class="v">—</div><div class="l">点击上方"刷新状态"</div></div></div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.8rem"><h2 style="margin:0">系统状态</h2><button class="primary" onclick="loadStatus()">刷新</button></div>
+  <div class="stats" id="stats"><div class="stat"><div class="v">—</div><div class="l">加载中…</div></div></div>
   <div class="flags" id="flags"></div>
   <div class="recent" id="recent"></div>
 </div>
@@ -127,13 +117,7 @@ button:disabled{opacity:.45;cursor:default}
 </div>
 
 <script>
-var tokenEl = document.getElementById('token');
-tokenEl.value = new URLSearchParams(location.search).get('token') || localStorage.getItem('opsToken') || '';
-tokenEl.addEventListener('change', function(){ localStorage.setItem('opsToken', tokenEl.value); });
-if (tokenEl.value) localStorage.setItem('opsToken', tokenEl.value);
 var currentKey = null;
-
-function tk() { return encodeURIComponent(tokenEl.value.trim()); }
 
 function log(msg, isErr) {
   var el = document.getElementById('log');
@@ -146,8 +130,7 @@ function log(msg, isErr) {
 }
 
 function api(path, opts) {
-  if (!tokenEl.value.trim()) { log('请先填 ADMIN_TOKEN', true); return Promise.reject(new Error('no token')); }
-  return fetch(path + (path.indexOf('?') >= 0 ? '&' : '?') + 'token=' + tk(), opts).then(function(r) {
+  return fetch(path, opts).then(function(r) {
     return r.text().then(function(text) {
       var data; try { data = JSON.parse(text); } catch (_) { data = text; }
       if (!r.ok) { log(path.split('?')[0] + ' → HTTP ' + r.status + ' ' + (typeof data === 'string' ? data : JSON.stringify(data)), true); throw new Error('http ' + r.status); }
@@ -261,7 +244,7 @@ function fix(action) {
     }).catch(function(){});
 }
 
-if (tokenEl.value) loadStatus();
+loadStatus();
 </script>
 </body>
 </html>
