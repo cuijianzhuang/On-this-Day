@@ -1,6 +1,7 @@
 # 运维手册
 
-日常运维的首选入口是 **运维控制台 `/admin/ops`**（需要 ADMIN_TOKEN），系统状态、批量维护、
+日常运维的首选入口是 **运维控制台 `/admin/ops`**（首页头部齿轮图标可进；整站在 Cloudflare
+Access 后面，不需要额外 token），系统状态、批量维护、
 错误数据修复都可以在页面上点按钮完成。本文档记录控制台背后的原理和控制台覆盖不到的
 命令行操作。
 
@@ -20,7 +21,7 @@
 - **状态开关**：重启索引回填、重跑日期重扫（清 KV 标记，Cron 自动推进）
 - **照片数据修复**：按 key 搜索 → 改拍摄日期 / 改地点名 / 重查地点 / 重新打分 / 删手记 / 从索引移除
 
-管理端点也可直接 curl（全部带 `?token=<ADMIN_TOKEN>`）：
+管理端点也可直接 curl（同样不需要 token，但要带上能过 Cloudflare Access 的凭证）：
 `/admin/backfill-photos-index?limit=300`、`/admin/reindex-photo-dates?limit=200&offset=0`、
 `/admin/score-photos?limit=10`、`/admin/locate-photos`、`/admin/convert-heic-photos`、
 `/admin/purge-cache?month=MM&day=DD`、`/admin/backfill-workflows`、`/admin/test-telegram`、

@@ -71,10 +71,6 @@ export default {
     }
 
     if (url.pathname === "/admin/test-telegram") {
-      const token = url.searchParams.get("token");
-      if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
-        return new Response("Forbidden", { status: 403 });
-      }
       try {
         await sendDailyMemories(env);
         return new Response("OK", { status: 200 });
@@ -83,7 +79,7 @@ export default {
       }
     }
 
-    // ── 运维控制台：页面本身是静态资源，数据接口全部走 ADMIN_TOKEN 校验 ──────
+    // ── 运维控制台：整站在 Cloudflare Access 后面，页面和接口都不再单独校验 token ──
     if (url.pathname === "/admin/ops") {
       return env.ASSETS.fetch(new Request(new URL("/admin-ops.html", request.url), request));
     }
@@ -2726,13 +2722,7 @@ async function enrichLocations(env, keys) {
 
 // 管理端点：每次调用只处理一小批未打分的照片（避免单次请求超时/超 CPU 限制），
 // 多次调用（比如写个循环脚本反复 curl）直到 remaining 降到 0，全量照片就都打完分了
-// 需要先用 `wrangler secret put ADMIN_TOKEN` 设置密钥，调用时带 ?token=xxx
 async function handleScorePhotos(request, env, url) {
-  const token = url.searchParams.get("token");
-  if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
-    return new Response("Forbidden", { status: 403 });
-  }
-
   const limit = Math.min(Number(url.searchParams.get("limit")) || 5, 20);
 
   // SQL 侧直接筛出待打分的 key + COUNT 统计，不再把整张 photo_scores 读进内存过滤
@@ -2759,11 +2749,6 @@ async function handleScorePhotos(request, env, url) {
 //   2. 历史 HEIC 无预览图（cron 只转今天的）：Workflow step 2 先转码，step 3 再打分
 // 每次调用触发 limit 张（默认 50，上限 200），多次调用直到 remaining=0
 async function handleBackfillWorkflows(request, env, url) {
-  const token = url.searchParams.get("token");
-  if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
-    return new Response("Forbidden", { status: 403 });
-  }
-
   const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 200);
 
   // 找出 photos_index 里有记录、但 photo_scores 里还没有打分结果的图片
@@ -2792,11 +2777,6 @@ async function handleBackfillWorkflows(request, env, url) {
 // 管理端点：跟 /admin/score-photos 同样的批处理思路，把存量照片库的拍摄地点一次性查完。
 // 因为要遵守 Nominatim 1 次/秒的限速，limit 故意给得比打分接口小一点，避免单次请求跑太久超时
 async function handleLocatePhotos(request, env, url) {
-  const token = url.searchParams.get("token");
-  if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
-    return new Response("Forbidden", { status: 403 });
-  }
-
   const limit = Math.min(Number(url.searchParams.get("limit")) || 10, 20);
 
   // 同 /admin/score-photos：SQL 侧筛选 + COUNT，不把整张 photo_places 读进内存
@@ -2843,11 +2823,6 @@ async function convertHeicBatch(env, heicKeys, limit) {
 
 // 管理端点：批量给 HEIC 照片生成 JPEG 预览版（服务端解码，需要 Workers Paid 套餐）
 async function handleConvertHeicPhotos(request, env, url) {
-  const token = url.searchParams.get("token");
-  if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
-    return new Response("Forbidden", { status: 403 });
-  }
-
   const limit = Math.min(Number(url.searchParams.get("limit")) || 3, 10);
   // 查 photos_index 而不是 listAll() 扫一遍 R2，省内存（回填没跑完之前 totalHeic 不是 100% 准）
   const { results } = await env.DB.prepare("SELECT key FROM photos_index WHERE key LIKE '%.HEIC' OR key LIKE '%.heic'").all();
@@ -2889,11 +2864,6 @@ async function purgeDayCache(month, day) {
 }
 
 async function handlePurgeCache(request, env, url) {
-  const token = url.searchParams.get("token");
-  if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
-    return new Response("Forbidden", { status: 403 });
-  }
-
   const month = url.searchParams.get("month");
   const day = url.searchParams.get("day");
   if (!/^\d{2}$/.test(month || "") || !/^\d{2}$/.test(day || "")) {
@@ -2985,11 +2955,6 @@ async function reindexPhotoDatesBatch(env, limit, offset) {
 
 // 用法：/admin/reindex-photo-dates?token=xxx&limit=200&offset=0，返回 nextOffset 继续翻页
 async function handleReindexPhotoDates(request, env, url) {
-  const token = url.searchParams.get("token");
-  if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
-    return new Response("Forbidden", { status: 403 });
-  }
-
   const limit = Math.min(Number(url.searchParams.get("limit")) || 200, 500);
   const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
   const result = await reindexPhotoDatesBatch(env, limit, offset);
@@ -3000,11 +2965,6 @@ async function handleReindexPhotoDates(request, env, url) {
 }
 
 async function handleBackfillPhotosIndex(request, env, url) {
-  const token = url.searchParams.get("token");
-  if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
-    return new Response("Forbidden", { status: 403 });
-  }
-
   const limit = Math.min(Number(url.searchParams.get("limit")) || 100, 300);
   const result = await backfillPhotosIndexBatch(env, limit);
 
@@ -3014,20 +2974,11 @@ async function handleBackfillPhotosIndex(request, env, url) {
 }
 
 // ---------- 运维控制台 API：状态总览 / 照片查询 / 数据修复 ----------
-// 控制台页面在 public/admin-ops.html（/admin/ops 路由直出），下面的接口全部要 ?token=ADMIN_TOKEN
-
-function opsGuard(env, url) {
-  const token = url.searchParams.get("token");
-  if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
-    return new Response("Forbidden", { status: 403 });
-  }
-  return null;
-}
+// 控制台页面在 public/admin-ops.html（/admin/ops 路由直出）。站点整体在 Cloudflare Access
+// 后面，管理接口和相簿时期的决策一致：不再单独校验 token
 
 // 系统状态总览：索引量、待打分/待查地点积压、推送队列、后台任务标记位
 async function handleOpsStatus(request, env, url) {
-  const denied = opsGuard(env, url);
-  if (denied) return denied;
   await ensureAuxTables(env);
 
   const [typeRows, unscored, unlocated, pendingNotify, notes, reactions, recent] = await Promise.all([
@@ -3076,8 +3027,6 @@ async function handleOpsStatus(request, env, url) {
 // GET ?q=子串   → 按 key 模糊搜索，最多 20 条
 // GET ?key=完整key → 单张照片的全量数据（索引 / 打分 / 地点 / 手记 / 表态 / 原图是否还在 R2）
 async function handlePhotoInfo(request, env, url) {
-  const denied = opsGuard(env, url);
-  if (denied) return denied;
   await ensureAuxTables(env);
 
   const q = (url.searchParams.get("q") || "").trim();
@@ -3111,8 +3060,6 @@ async function handlePhotoInfo(request, env, url) {
 //   clear-note                     删手记
 //   remove-index                   从索引移除（原图已删但索引残留、或不想展示这张时用）
 async function handlePhotoFix(request, env, url) {
-  const denied = opsGuard(env, url);
-  if (denied) return denied;
   await ensureAuxTables(env);
 
   let body;
@@ -3180,8 +3127,6 @@ async function handlePhotoFix(request, env, url) {
 // POST body: { flag: "backfill" | "reindex" }——删掉 KV 完成标记，
 // 让 Cron 恢复对应的追赶任务（索引回填 / 日期重扫）
 async function handleResetFlag(request, env, url) {
-  const denied = opsGuard(env, url);
-  if (denied) return denied;
   let body;
   try { body = await request.json(); } catch { return Response.json({ error: "bad json" }, { status: 400 }); }
   if (body.flag === "backfill") {
