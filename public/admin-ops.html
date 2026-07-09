@@ -474,11 +474,20 @@ var currentKey = null;
 var _modalCb = null;
 var _autoTimer = null;
 
+// ── 北京时间工具（页面上所有时间统一北京时间，不跟浏览器时区走）───────────────
+// Date.now() 是绝对 UTC 毫秒，直接 +8h 再用 toISOString 渲染即是北京时间；
+// 之前叠加 getTimezoneOffset 的写法在中国时区浏览器上会多加 8 小时
+function bjDate(ts) {
+  var ms = ts ? new Date(ts).getTime() : Date.now();
+  return new Date(ms + 8 * 3600 * 1000);
+}
+function bjFull(ts)  { return bjDate(ts).toISOString().replace('T', ' ').slice(0, 19); } // yyyy-MM-dd HH:mm:ss
+function bjShort(ts) { return bjDate(ts).toISOString().slice(5, 16).replace('T', ' '); } // MM-dd HH:mm
+function bjTime()    { return bjDate().toISOString().slice(11, 19); }                    // HH:mm:ss
+
 // ── Live clock ──────────────────────────────────────────────────────────────
 function tickClock() {
-  var now = new Date(Date.now() + (8 * 60 - new Date().getTimezoneOffset()) * 60000);
-  var s = now.toISOString().replace('T', ' ').slice(0, 19) + ' CST';
-  document.getElementById('liveTime').textContent = s;
+  document.getElementById('liveTime').textContent = bjFull() + ' 北京时间';
 }
 tickClock(); setInterval(tickClock, 1000);
 
@@ -516,7 +525,7 @@ function addLog(msg, isErr) {
   var wrap = document.getElementById('logWrap');
   var row = document.createElement('div');
   row.className = 'log-entry';
-  var t = new Date().toTimeString().slice(0, 8);
+  var t = bjTime();
   var txt = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 0);
   row.innerHTML = '<span class="log-t">' + t + '</span><span class="log-msg' + (isErr ? ' err' : '') + '">' + escHtml(txt) + '</span>';
   wrap.prepend(row);
@@ -595,7 +604,7 @@ function renderFlags(d) {
   var f = d.flags;
   var bj = d.bjToday;
   var items = [
-    { ok: !!f.backfill_done_at, label: '索引回填', detail: f.backfill_done_at ? '完成 ' + f.backfill_done_at.slice(5, 16) : (f.backfill_done_at === false ? '进行中' : '待跑') },
+    { ok: !!f.backfill_done_at, label: '索引回填', detail: f.backfill_done_at ? '完成 ' + bjShort(f.backfill_done_at) : (f.backfill_done_at === false ? '进行中' : '待跑') },
     { ok: !!f.reindex_dates_done_at, label: '日期重扫', detail: f.reindex_dates_done_at ? '完成' : (f.reindex_dates_offset ? 'offset=' + f.reindex_dates_offset : '待跑') },
     { ok: true, label: '北京今天', detail: bj.month + '-' + bj.day, cls: '' },
     { ok: !!f.last_viewed_day, label: '最近浏览', detail: f.last_viewed_day ? f.last_viewed_day.month + '-' + f.last_viewed_day.day : '—', cls: '' },
@@ -605,7 +614,7 @@ function renderFlags(d) {
   if (cr && cr.at) {
     var ageMin = Math.round((Date.now() - Date.parse(cr.at)) / 60000);
     var stale = ageMin > 15;
-    var detail = ageMin <= 0 ? '刚刚' : ageMin + ' 分钟前';
+    var detail = (ageMin <= 0 ? '刚刚' : ageMin + ' 分钟前') + ' ' + bjShort(cr.at);
     detail += '（打分 ' + (cr.scored || 0) + ' · 查点 ' + (cr.located || 0) + '）';
     if (cr.errors && cr.errors.length) detail += ' ⚠ ' + cr.errors[0];
     items.unshift({ ok: !stale && !(cr.errors && cr.errors.length), label: '上次 Cron', detail: detail });
