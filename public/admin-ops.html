@@ -600,6 +600,18 @@ function renderFlags(d) {
     { ok: true, label: '北京今天', detail: bj.month + '-' + bj.day, cls: '' },
     { ok: !!f.last_viewed_day, label: '最近浏览', detail: f.last_viewed_day ? f.last_viewed_day.month + '-' + f.last_viewed_day.day : '—', cls: '' },
   ];
+  // Cron 心跳：10 分钟一趟，超过 15 分钟没跑过就标黄示警——这是判断定时任务是否存活的直接依据
+  var cr = f.cron_last_run;
+  if (cr && cr.at) {
+    var ageMin = Math.round((Date.now() - Date.parse(cr.at)) / 60000);
+    var stale = ageMin > 15;
+    var detail = ageMin <= 0 ? '刚刚' : ageMin + ' 分钟前';
+    detail += '（打分 ' + (cr.scored || 0) + ' · 查点 ' + (cr.located || 0) + '）';
+    if (cr.errors && cr.errors.length) detail += ' ⚠ ' + cr.errors[0];
+    items.unshift({ ok: !stale && !(cr.errors && cr.errors.length), label: '上次 Cron', detail: detail });
+  } else {
+    items.unshift({ ok: false, label: '上次 Cron', detail: '无记录（部署后要等下一趟才有）' });
+  }
   document.getElementById('flags').innerHTML = items.map(function(it) {
     var cls = it.cls !== undefined ? it.cls : (it.ok ? 'ok' : 'warn');
     return '<span class="pill ' + cls + '">' + it.label + '：' + it.detail + '</span>';

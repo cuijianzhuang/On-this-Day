@@ -982,6 +982,10 @@ async function flushPendingNotifications(env) {
 
 async function runBackgroundMaintenance(env) {
   const BATCH_SIZE = 10;
+  // 心跳摘要：每个环节干了多少、有没有报错，结束时写 KV 给运维控制台展示。
+  // 各环节全部 try/catch 隔离——任何一段出错都不能把后面的环节（和心跳本身）一起带崩，
+  // 否则线上只能看到"数字不动"，完全无法判断 Cron 是没触发还是触发了但中途炸了
+  const beat = { at: new Date().toISOString(), scored: 0, located: 0, errors: [] };
 
   // 今天新照片的聚合推送放在最前面——很轻（多数时候队列是空的，一条 SELECT 就返回），
   // 不跟后面的回填/打分抢内存
@@ -989,46 +993,52 @@ async function runBackgroundMaintenance(env) {
     await flushPendingNotifications(env);
   } catch (err) {
     console.error("flushPendingNotifications failed", err);
+    beat.errors.push("notify: " + (err?.message || err));
   }
 
   // 回填（listAll 扫全量 ~16000 张建一个大数组）跟 HEIC 解码（单张就能占几十 MB 原始像素）
   // 是这个函数里两个最吃内存的环节，干万不能凑到同一次调用里——上一次就是因为两个撞一起
   // 又把 Cron 炸了（exceededMemory）。按当前分钟单双轮流跑，保证它俩永远不同时出现
   const doBackfillThisTick = new Date().getMinutes() % 20 < 10;
-  if (doBackfillThisTick) {
-    // 自动把存量照片慢慢补进 photos_index，不用再手动一次次点 /admin/backfill-photos-index。
-    // 回填全部完成后写个时间戳标记：之后每天只核对一次，不再每 20 分钟白白 listAll 扫一遍
-    // 全桶 + 全表 SELECT 来发现"没活干"（新上传的照片走 queue 增量维护，不依赖这里）
-    const doneAt = Date.parse((await env.KV.get("backfill_done_at")) || "");
-    if (!(Date.now() - doneAt < 24 * 3600 * 1000)) {
-      const res = await backfillPhotosIndexBatch(env, 300);
-      if (res.remaining === 0) {
-        await env.KV.put("backfill_done_at", new Date().toISOString());
-      } else {
-        // 又出现了没索引的文件（比如 R2 事件丢了）——清掉标记，恢复每 20 分钟一批的追赶节奏
-        await env.KV.delete("backfill_done_at");
+  try {
+    if (doBackfillThisTick) {
+      // 自动把存量照片慢慢补进 photos_index，不用再手动一次次点 /admin/backfill-photos-index。
+      // 回填全部完成后写个时间戳标记：之后每天只核对一次，不再每 20 分钟白白 listAll 扫一遍
+      // 全桶 + 全表 SELECT 来发现"没活干"（新上传的照片走 queue 增量维护，不依赖这里）
+      const doneAt = Date.parse((await env.KV.get("backfill_done_at")) || "");
+      if (!(Date.now() - doneAt < 24 * 3600 * 1000)) {
+        const res = await backfillPhotosIndexBatch(env, 300);
+        if (res.remaining === 0) {
+          await env.KV.put("backfill_done_at", new Date().toISOString());
+        } else {
+          // 又出现了没索引的文件（比如 R2 事件丢了）——清掉标记，恢复每 20 分钟一批的追赶节奏
+          await env.KV.delete("backfill_done_at");
+        }
+      }
+    } else {
+      // 单双分钟的另一半：一次性重算存量索引行的日期（修正"路径月+文件名日"时期写错的行，
+      // 见 reindexPhotoDatesBatch）。进度存 KV，每趟一批，扫完整张表写完成标记后永久跳过。
+      // 批内 EXIF 读取是串行的（单个 256KB 缓冲），不会和回填的 listAll 大数组撞内存
+      const reindexDone = await env.KV.get("reindex_dates_done_at");
+      if (!reindexDone) {
+        const offset = Number((await env.KV.get("reindex_dates_offset")) || 0);
+        const res = await reindexPhotoDatesBatch(env, 200, offset);
+        if (res.fixed > 0) {
+          console.log(`reindexPhotoDates: offset=${offset} fixed=${res.fixed}`,
+            JSON.stringify(res.changes.slice(0, 5)));
+        }
+        if (res.nextOffset == null) {
+          await env.KV.put("reindex_dates_done_at", new Date().toISOString());
+          await env.KV.delete("reindex_dates_offset");
+          console.log("reindexPhotoDates: 全表扫描完成");
+        } else {
+          await env.KV.put("reindex_dates_offset", String(res.nextOffset));
+        }
       }
     }
-  } else {
-    // 单双分钟的另一半：一次性重算存量索引行的日期（修正"路径月+文件名日"时期写错的行，
-    // 见 reindexPhotoDatesBatch）。进度存 KV，每趟一批，扫完整张表写完成标记后永久跳过。
-    // 批内 EXIF 读取是串行的（单个 256KB 缓冲），不会和回填的 listAll 大数组撞内存
-    const reindexDone = await env.KV.get("reindex_dates_done_at");
-    if (!reindexDone) {
-      const offset = Number((await env.KV.get("reindex_dates_offset")) || 0);
-      const res = await reindexPhotoDatesBatch(env, 200, offset);
-      if (res.fixed > 0) {
-        console.log(`reindexPhotoDates: offset=${offset} fixed=${res.fixed}`,
-          JSON.stringify(res.changes.slice(0, 5)));
-      }
-      if (res.nextOffset == null) {
-        await env.KV.put("reindex_dates_done_at", new Date().toISOString());
-        await env.KV.delete("reindex_dates_offset");
-        console.log("reindexPhotoDates: 全表扫描完成");
-      } else {
-        await env.KV.put("reindex_dates_offset", String(res.nextOffset));
-      }
-    }
+  } catch (err) {
+    console.error("backfill/reindex failed", err);
+    beat.errors.push((doBackfillThisTick ? "backfill: " : "reindex: ") + (err?.message || err));
   }
 
   // 之前这里用 listAll() 扫一遍整个 R2 桶 + matchPhotosForDay() 对每个年份再扫一遍、
@@ -1052,31 +1062,35 @@ async function runBackgroundMaintenance(env) {
   // 原来这里把整张 photos_index + photo_scores（含 raw_response 大文本）+ photo_places
   // 全部读进内存再逐个过滤，内存随库存线性涨。改成 LEFT JOIN 在 SQL 侧直接筛出
   // "还没打分/还没查地点"的 key（优先日期先查、全库补足），每次只拿一小批候选进内存
-  const candidatesToCheck = await collectCandidates(env, findUnscoredKeys, priorityDays, BATCH_SIZE * 3);
-  // 跟队列消费者那边一样：没预览图的 HEIC 不在这里打分（打分要现场解码，好几张堆在同一次
-  // Cron 调用里很容易把内存吃爆）。只检查这一小批候选（head() 很便宜），凑够一批就够了
-  const checked = await mapWithConcurrency(candidatesToCheck, 4, async (key) => {
-    if (/\.heic$/i.test(key) && !(await findHeicPreviewKey(env, key))) return null;
-    return key;
-  });
-  const unscored = checked.filter(Boolean).slice(0, BATCH_SIZE);
-  if (unscored.length > 0) await scoreKeys(env, unscored);
+  try {
+    const candidatesToCheck = await collectCandidates(env, findUnscoredKeys, priorityDays, BATCH_SIZE * 3);
+    // 跟队列消费者那边一样：没预览图的 HEIC 不在这里打分（打分要现场解码，好几张堆在同一次
+    // Cron 调用里很容易把内存吃爆）。只检查这一小批候选（head() 很便宜），凑够一批就够了
+    const checked = await mapWithConcurrency(candidatesToCheck, 4, async (key) => {
+      if (/\.heic$/i.test(key) && !(await findHeicPreviewKey(env, key))) return null;
+      return key;
+    });
+    const unscored = checked.filter(Boolean).slice(0, BATCH_SIZE);
+    if (unscored.length > 0) beat.scored = await scoreKeys(env, unscored);
+  } catch (err) {
+    console.error("score section failed", err);
+    beat.errors.push("score: " + (err?.message || err));
+  }
 
   // 循环查地点直到全部完成或时间预算耗尽（每次 Cron 最多跑 24 秒用于地点查询）。
   // 每张照片：R2 读 EXIF ~100ms + Mapbox geocoding ~200ms，24s 内可处理约 40-80 张；
   // 积压清完后每次 collectCandidates 返回空直接退出，几乎没有开销。
-  // 用 try/catch 隔离：enrichLocations 内部的错误不应冒泡到 Cron 主流程。
   try {
-    let locateCount = 0;
     const locateDeadline = Date.now() + 24000;
     while (Date.now() < locateDeadline) {
       const unlocated = await collectCandidates(env, findUnlocatedKeys, priorityDays, BATCH_SIZE);
       if (unlocated.length === 0) break;
-      locateCount += await enrichLocations(env, unlocated);
+      beat.located += await enrichLocations(env, unlocated);
     }
-    if (locateCount > 0) console.log(`locate loop: ${locateCount} photos processed`);
+    if (beat.located > 0) console.log(`locate loop: ${beat.located} photos processed`);
   } catch (err) {
     console.error("locate loop failed", err);
+    beat.errors.push("locate: " + (err?.message || err));
   }
 
   // HEIC 预览图只转"今天"（服务器真实今天）拍的——不像打分/查地点那样还顺带覆盖"最近浏览日期"
@@ -1084,16 +1098,31 @@ async function runBackgroundMaintenance(env) {
   // 重得多（一张 12MP 照片解码出来的原始像素就有几十 MB），范围卡得越窄，内存/CPU 风险越小
   const HEIC_BATCH_SIZE = 1;
   if (!doBackfillThisTick) {
-    const { results: todayHeicRows } = await env.DB.prepare(
-      // SQLite 的 LIKE 对 ASCII 字母默认就不分大小写，'%.heic' 能匹配到 .HEIC/.heic 两种大小写
-      "SELECT key FROM photos_index WHERE month = ? AND day = ? AND key LIKE '%.heic'"
-    )
-      .bind(realToday.month, realToday.day)
-      .all();
-    const heicToday = todayHeicRows.map((r) => r.key);
-    if (heicToday.length > 0) {
-      await convertHeicBatch(env, heicToday, HEIC_BATCH_SIZE);
+    try {
+      const { results: todayHeicRows } = await env.DB.prepare(
+        // SQLite 的 LIKE 对 ASCII 字母默认就不分大小写，'%.heic' 能匹配到 .HEIC/.heic 两种大小写
+        "SELECT key FROM photos_index WHERE month = ? AND day = ? AND key LIKE '%.heic'"
+      )
+        .bind(realToday.month, realToday.day)
+        .all();
+      const heicToday = todayHeicRows.map((r) => r.key);
+      if (heicToday.length > 0) {
+        await convertHeicBatch(env, heicToday, HEIC_BATCH_SIZE);
+      }
+    } catch (err) {
+      console.error("heic section failed", err);
+      beat.errors.push("heic: " + (err?.message || err));
     }
+  }
+
+  // 心跳落 KV：运维控制台据此判断 Cron 是否在跑、上一趟干了什么。
+  // 只保留最近一次（KV 每 10 分钟写一条，量可忽略）；errors 截断防止 KV 值过大
+  try {
+    beat.errors = beat.errors.slice(0, 5);
+    beat.tookMs = Date.now() - Date.parse(beat.at);
+    await env.KV.put("cron_last_run", JSON.stringify(beat));
+  } catch (err) {
+    console.error("heartbeat write failed", err);
   }
 }
 
@@ -2726,11 +2755,19 @@ async function enrichLocations(env, keys) {
   const places = await loadPlacesForKeys(env, keys);
   const toProcess = keys.filter((key) => !(key in places) && IMAGE_EXT.test(key));
   for (const key of toProcess) {
-    const gps = await getExifGps(env.PHOTOS, key);
-    if (gps) {
-      const name = await reverseGeocode(env, gps.lat, gps.lon);
-      await savePlace(env, key, { lat: gps.lat, lon: gps.lon, name });
-    } else {
+    // 单张隔离：EXIF 解析/R2 读取抛错时记一行空结果让队列前进，否则一张坏照片
+    // 会让每次 Cron 都在同一批卡死（findUnlocatedKeys 无排序，坏照片永远排最前）。
+    // 记了空结果的照片之后仍可在运维控制台「重查地点」单独重试
+    try {
+      const gps = await getExifGps(env.PHOTOS, key);
+      if (gps) {
+        const name = await reverseGeocode(env, gps.lat, gps.lon);
+        await savePlace(env, key, { lat: gps.lat, lon: gps.lon, name });
+      } else {
+        await savePlace(env, key, { lat: null, lon: null, name: "" });
+      }
+    } catch (err) {
+      console.error("enrichLocations: failed on", key, err);
       await savePlace(env, key, { lat: null, lon: null, name: "" });
     }
   }
@@ -3021,12 +3058,15 @@ async function handleOpsStatus(request, env, url) {
     env.DB.prepare("SELECT key, year, month, day, type, updated_at FROM photos_index ORDER BY updated_at DESC LIMIT 8").all(),
   ]);
 
-  const [backfillDoneAt, reindexDoneAt, reindexOffset, lastViewed] = await Promise.all([
+  const [backfillDoneAt, reindexDoneAt, reindexOffset, lastViewed, cronLastRunRaw] = await Promise.all([
     env.KV.get("backfill_done_at"),
     env.KV.get("reindex_dates_done_at"),
     env.KV.get("reindex_dates_offset"),
     getLastViewedDay(env),
+    env.KV.get("cron_last_run"),
   ]);
+  let cronLastRun = null;
+  try { cronLastRun = cronLastRunRaw ? JSON.parse(cronLastRunRaw) : null; } catch {}
 
   const byType = {};
   for (const r of typeRows.results) byType[r.type] = r.c;
@@ -3045,6 +3085,7 @@ async function handleOpsStatus(request, env, url) {
       reindex_dates_done_at: reindexDoneAt || null,
       reindex_dates_offset: reindexOffset || null,
       last_viewed_day: lastViewed || null,
+      cron_last_run: cronLastRun,
     },
     recentIndexed: recent.results,
   });
