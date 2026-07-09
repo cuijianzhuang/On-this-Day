@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>全家最爱 · 那年今日</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico" />
+<link rel="stylesheet" href="/loved.css" />
+</head>
+<body>
+  <a class="back" href="/" title="回到今天">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+  </a>
+  <h1>❤️ 全家最爱</h1>
+  <div class="sub">被表态最多的照片</div>
+  <div class="grid" id="grid"></div>
+  <div class="empty" id="empty" style="display:none">还没有人表态过<br>去照片里点一个 ❤️ 吧</div>
+<script>
+  fetch('/api/top-loved').then(function (r) { return r.json(); }).then(function (data) {
+    var photos = data.photos || [];
+    if (!photos.length) { document.getElementById('empty').style.display = 'block'; return; }
+    document.getElementById('grid').innerHTML = photos.map(function (p) {
+      var thumb = p.url.replace('/img/', '/thumb/') + '?w=400&h=400&q=75&fit=cover';
+      var dateTxt = p.year + '/' + p.month + '/' + p.day;
+      var href = '/?month=' + p.month + '&day=' + p.day;
+      return '<a class="card" href="' + href + '">' +
+        '<img src="' + thumb.replace(/"/g, '&quot;') + '" loading="lazy" onload="this.classList.add(\'loaded\')" />' +
+        '<span class="badge">❤️ ' + p.total + '</span><span class="date">' + dateTxt + '</span></a>';
+    }).join('');
+  });
+</script>
+</body>
+</html>
