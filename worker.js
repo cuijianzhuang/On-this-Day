@@ -129,9 +129,7 @@ export default {
     }
 
     if (url.pathname === "/loved") {
-      return new Response(LOVED_HTML, {
-        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
-      });
+      return env.ASSETS.fetch(new Request(new URL("/loved.html", request.url), request));
     }
 
     if (url.pathname === "/api/recap") {
@@ -139,9 +137,7 @@ export default {
     }
 
     if (url.pathname === "/recap") {
-      return new Response(RECAP_HTML, {
-        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
-      });
+      return env.ASSETS.fetch(new Request(new URL("/recap.html", request.url), request));
     }
 
     if (url.pathname === "/api/poem") {
@@ -157,9 +153,15 @@ export default {
     }
 
     if (url.pathname === "/map") {
-      return new Response(MAP_HTML(env.MAPBOX_PUBLIC_TOKEN || ""), {
-        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
-      });
+      const mapHtmlResp = await env.ASSETS.fetch(new Request(new URL("/map.html", request.url), request));
+      const mapToken = JSON.stringify(env.MAPBOX_PUBLIC_TOKEN || "").replace(/<\//g, "<\\/");
+      return new HTMLRewriter()
+        .on("head", {
+          element(el) {
+            el.prepend(`<script>window.MAPBOX_TOKEN=${mapToken};</script>`, { html: true });
+          },
+        })
+        .transform(mapHtmlResp);
     }
 
     // 实时共享房间：每个日期一个 Durable Object，家人同时在线时看到彼此人数 + 实时点赞
@@ -534,162 +536,6 @@ async function handleRecap(request, env, url) {
   return response;
 }
 
-const RECAP_HTML = `<!doctype html>
-<html lang="zh">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-<title>年度回忆 · 那年今日</title>
-<link rel="icon" type="image/x-icon" href="/favicon.ico" />
-<style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
-  body {
-    margin: 0; background: #000; color: #fff; overflow: hidden;
-    height: 100dvh; font-family: "SF Pro Display", -apple-system, "PingFang SC", sans-serif;
-  }
-  #stage { position: fixed; inset: 0; }
-  #stage img {
-    position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
-    opacity: 0; transition: opacity 1.1s ease;
-  }
-  #stage img.on { opacity: 1; }
-  #stage img.kb { animation: kenburns 6s ease-out forwards; }
-  @keyframes kenburns { from { transform: scale(1); } to { transform: scale(1.07); } }
-  #intro {
-    position: fixed; inset: 0; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: 0.6rem;
-    background: #000; z-index: 5; transition: opacity 1s ease;
-  }
-  #intro.hide { opacity: 0; pointer-events: none; }
-  #intro .y { font-size: clamp(3rem, 12vw, 6rem); font-weight: 700; letter-spacing: 0.02em; }
-  #intro .t { color: #8a8a8f; font-size: 0.95rem; letter-spacing: 0.35em; text-transform: uppercase; }
-  #caption {
-    position: fixed; left: max(1.4rem, env(safe-area-inset-left)); bottom: max(1.6rem, env(safe-area-inset-bottom));
-    z-index: 3; max-width: 72vw; text-shadow: 0 1px 10px rgba(0,0,0,0.8);
-  }
-  #caption .d { font-size: 1.25rem; font-weight: 700; margin-bottom: 0.25rem; }
-  #caption .c { font-size: 0.8rem; color: rgba(255,255,255,0.75); line-height: 1.5; }
-  #bar { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 4; background: rgba(255,255,255,0.14); }
-  #bar i { display: block; height: 100%; width: 0; background: #fff; transition: width 0.2s linear; }
-  .btn {
-    position: fixed; z-index: 6; width: 38px; height: 38px; border-radius: 50%;
-    border: none; display: flex; align-items: center; justify-content: center;
-    background: rgba(255,255,255,0.12); backdrop-filter: blur(12px); color: #fff;
-    cursor: pointer; text-decoration: none; font-size: 0.9rem;
-  }
-  #back { top: max(1rem, env(safe-area-inset-top)); left: max(1rem, env(safe-area-inset-left)); }
-  #music { top: max(1rem, env(safe-area-inset-top)); right: max(1rem, env(safe-area-inset-right)); }
-  #yearNav {
-    position: fixed; bottom: max(1.5rem, env(safe-area-inset-bottom)); right: max(1.2rem, env(safe-area-inset-right));
-    z-index: 6; display: flex; gap: 0.4rem;
-  }
-  #yearNav a {
-    color: rgba(255,255,255,0.55); text-decoration: none; font-size: 0.78rem;
-    padding: 0.25rem 0.6rem; border-radius: 999px; background: rgba(0,0,0,0.35); backdrop-filter: blur(8px);
-  }
-  #yearNav a.cur { color: #000; background: rgba(255,255,255,0.9); font-weight: 600; }
-  #empty { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; color: #6e6e73; z-index: 5; }
-  svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-</style>
-</head>
-<body>
-  <div id="stage"><img id="imgA" /><img id="imgB" /></div>
-  <div id="intro"><div class="t">Year in Review</div><div class="y" id="introYear"></div></div>
-  <div id="bar"><i id="barFill"></i></div>
-  <div id="caption"><div class="d" id="capDate"></div><div class="c" id="capText"></div></div>
-  <a class="btn" id="back" href="/" title="回到今天"><svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg></a>
-  <button class="btn" id="music" title="背景音乐"><svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></button>
-  <div id="yearNav"></div>
-  <div id="empty">这一年还没有打过分的照片</div>
-  <audio id="bgm" loop preload="none"><source src="https://image.cuijianzhuang.com/forest.mp3" type="audio/mpeg" /></audio>
-<script>
-  var params = new URLSearchParams(location.search);
-  var qs = params.get('year') ? '?year=' + encodeURIComponent(params.get('year')) : '';
-  var photos = [], idx = -1, timer = null, paused = false, useA = true;
-  var DURATION = 5000;
-  var imgA = document.getElementById('imgA'), imgB = document.getElementById('imgB');
-  var barFill = document.getElementById('barFill');
-
-  function thumbOf(p) { return p.url.replace('/img/', '/thumb/') + '?w=1600&q=85&fit=scale-down'; }
-
-  fetch('/api/recap' + qs).then(function (r) { return r.json(); }).then(function (data) {
-    document.getElementById('introYear').textContent = data.year;
-    var nav = document.getElementById('yearNav');
-    nav.innerHTML = (data.years || []).map(function (y) {
-      return '<a href="/recap?year=' + y + '"' + (y === data.year ? ' class="cur"' : '') + '>' + y + '</a>';
-    }).join('');
-    photos = data.photos || [];
-    if (!photos.length) {
-      document.getElementById('intro').classList.add('hide');
-      document.getElementById('empty').style.display = 'flex';
-      return;
-    }
-    setTimeout(function () {
-      document.getElementById('intro').classList.add('hide');
-      next();
-    }, 1800);
-  });
-
-  function show(i) {
-    idx = (i + photos.length) % photos.length;
-    var p = photos[idx];
-    var incoming = useA ? imgA : imgB;
-    var outgoing = useA ? imgB : imgA;
-    useA = !useA;
-    incoming.classList.remove('on', 'kb');
-    incoming.src = thumbOf(p);
-    var reveal = function () {
-      incoming.classList.add('on', 'kb');
-      outgoing.classList.remove('on');
-      document.getElementById('capDate').textContent = parseInt(p.month) + ' 月 ' + parseInt(p.day) + ' 日';
-      document.getElementById('capText').textContent = [p.caption, p.place].filter(Boolean).join(' · ');
-      barFill.style.width = ((idx + 1) / photos.length * 100) + '%';
-      // 预加载下一张
-      var nx = new Image(); nx.src = thumbOf(photos[(idx + 1) % photos.length]);
-      schedule();
-    };
-    if (incoming.complete && incoming.naturalWidth) reveal();
-    else { incoming.onload = reveal; incoming.onerror = function () { schedule(); }; }
-  }
-
-  function schedule() {
-    clearTimeout(timer);
-    if (!paused) timer = setTimeout(next, DURATION);
-  }
-  function next() { show(idx + 1); }
-  function prev() { show(idx - 1); }
-
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); clearTimeout(timer); next(); }
-    if (e.key === 'ArrowLeft') { clearTimeout(timer); prev(); }
-    if (e.key === 'Escape') location.href = '/';
-  });
-  // 点击：左 1/3 上一张，右 2/3 下一张；长按暂停由 pointerdown/up 控制
-  var pressTimer = null;
-  document.getElementById('stage').addEventListener('pointerdown', function () {
-    pressTimer = setTimeout(function () { paused = true; clearTimeout(timer); pressTimer = null; }, 350);
-  });
-  document.getElementById('stage').addEventListener('pointerup', function (e) {
-    if (pressTimer) {
-      clearTimeout(pressTimer); pressTimer = null;
-      clearTimeout(timer);
-      if (e.clientX < window.innerWidth / 3) prev(); else next();
-    } else if (paused) {
-      paused = false; schedule();
-    }
-  });
-
-  var bgm = document.getElementById('bgm'), musicOn = false;
-  document.getElementById('music').onclick = function () {
-    musicOn = !musicOn;
-    this.style.opacity = musicOn ? 1 : 0.55;
-    if (musicOn) { bgm.volume = 0.4; bgm.play().catch(function () {}); } else bgm.pause();
-  };
-</script>
-</body>
-</html>`;
-
 // ── 照片手记 ──────────────────────────────────────────────────────────────────
 // 家人给照片写的文字注解（谁拍的、当时发生了什么）。站点面向家庭成员公开，
 // 跟表态一样不做身份校验，只做长度和 key 存在性约束
@@ -772,71 +618,6 @@ async function handleSearch(request, env, url) {
     },
   });
 }
-
-const LOVED_HTML = `<!doctype html>
-<html lang="zh">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>全家最爱 · 那年今日</title>
-<link rel="icon" type="image/x-icon" href="/favicon.ico" />
-<style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: #000; color: #f5f5f7; min-height: 100vh;
-    font-family: "SF Pro Display", -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
-    padding: 3.5rem 1.2rem 4rem;
-  }
-  .back {
-    position: fixed; top: max(1rem, env(safe-area-inset-top)); left: max(1rem, env(safe-area-inset-left));
-    width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
-    background: rgba(255,255,255,0.1); backdrop-filter: blur(10px); color: #fff; text-decoration: none; z-index: 5;
-  }
-  h1 { text-align: center; font-size: 1.5rem; margin: 1rem 0 0.3rem; letter-spacing: -0.01em; }
-  .sub { text-align: center; color: #8a8a8f; font-size: 0.82rem; margin-bottom: 2rem; }
-  .grid { max-width: 1000px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 14px; }
-  @media (max-width: 640px) { .grid { grid-template-columns: repeat(2, 1fr); gap: 10px; } }
-  .card {
-    position: relative; border-radius: 10px; overflow: hidden; display: block;
-    background: #1c1c1e; aspect-ratio: 1; text-decoration: none;
-  }
-  .card img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity 0.35s ease; }
-  .card img.loaded { opacity: 1; }
-  .badge {
-    position: absolute; left: 8px; bottom: 8px; display: flex; align-items: center; gap: 4px;
-    background: rgba(0,0,0,0.55); backdrop-filter: blur(8px); border-radius: 999px;
-    padding: 3px 9px; color: #fff; font-size: 0.72rem; font-weight: 600;
-  }
-  .date { position: absolute; right: 8px; bottom: 8px; color: rgba(255,255,255,0.85); font-size: 0.66rem;
-    background: rgba(0,0,0,0.45); backdrop-filter: blur(8px); border-radius: 999px; padding: 3px 8px; }
-  .empty { text-align: center; color: #6e6e73; padding: 5rem 1rem; line-height: 1.7; }
-</style>
-</head>
-<body>
-  <a class="back" href="/" title="回到今天">
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-  </a>
-  <h1>❤️ 全家最爱</h1>
-  <div class="sub">被表态最多的照片</div>
-  <div class="grid" id="grid"></div>
-  <div class="empty" id="empty" style="display:none">还没有人表态过<br>去照片里点一个 ❤️ 吧</div>
-<script>
-  fetch('/api/top-loved').then(function (r) { return r.json(); }).then(function (data) {
-    var photos = data.photos || [];
-    if (!photos.length) { document.getElementById('empty').style.display = 'block'; return; }
-    document.getElementById('grid').innerHTML = photos.map(function (p) {
-      var thumb = p.url.replace('/img/', '/thumb/') + '?w=400&h=400&q=75&fit=cover';
-      var dateTxt = p.year + '/' + p.month + '/' + p.day;
-      var href = '/?month=' + p.month + '&day=' + p.day;
-      return '<a class="card" href="' + href + '">' +
-        '<img src="' + thumb.replace(/"/g, '&quot;') + '" loading="lazy" onload="this.classList.add(\\'loaded\\')" />' +
-        '<span class="badge">❤️ ' + p.total + '</span><span class="date">' + dateTxt + '</span></a>';
-    }).join('');
-  });
-</script>
-</body>
-</html>`;
 
 // ── PWA 应用图标 ──────────────────────────────────────────────────────────────
 // 用全库 AI 评分最高的照片裁成方形做安装图标（PWA manifest + apple-touch-icon），
@@ -3419,32 +3200,6 @@ async function handleMapPhotos(request, env, url) {
   await cache.put(cacheKey, response.clone());
   return response;
 }
-
-// ---------- 地图页：把所有带 GPS 的照片打点在地图上 ----------
-// 这里用的 token 必须是 public token（pk. 开头），跟服务端反向地理编码用的 secret token 是两个东西，
-// 因为这段代码会原样发到浏览器执行，secret token 绝对不能出现在这里
-const MAP_HTML = (mapboxPublicToken) => `<!doctype html>
-<html lang="zh">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-<title>足迹 · 那年今日</title>
-<link rel="icon" type="image/x-icon" href="/favicon.ico" />
-<link href="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.css" rel="stylesheet" />
-<script src="https://api.mapbox.com/mapbox-gl-js/v3.6.0/mapbox-gl.js"></script>
-<link rel="stylesheet" href="/map.css" />
-</head>
-<body>
-  <a class="back-btn" href="/" title="回到回忆墙">
-    <svg viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
-  </a>
-  <div id="map"></div>
-  <div class="map-empty" id="mapEmpty">还没有带定位信息的照片<br />等后台任务慢慢解析，或跑一次 /admin/locate-photos</div>
-
-<script>window.MAPBOX_TOKEN = ${JSON.stringify(mapboxPublicToken).replace(/<\//g, '<\\/')};</script>
-<script src="/map.js" defer></script>
-</body>
-</html>`;
 
 // ── Durable Object：实时共享房间 ─────────────────────────────────────────────────
 // 每个日期（"MM-DD"）对应一个 DO 实例。家人同时打开同一天的回忆时：

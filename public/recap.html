@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>年度回忆 · 那年今日</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico" />
+<link rel="stylesheet" href="/recap.css" />
+</head>
+<body>
+  <div id="stage"><img id="imgA" /><img id="imgB" /></div>
+  <div id="intro"><div class="t">Year in Review</div><div class="y" id="introYear"></div></div>
+  <div id="bar"><i id="barFill"></i></div>
+  <div id="caption"><div class="d" id="capDate"></div><div class="c" id="capText"></div></div>
+  <a class="btn" id="back" href="/" title="回到今天"><svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg></a>
+  <button class="btn" id="music" title="背景音乐"><svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></button>
+  <div id="yearNav"></div>
+  <div id="empty">这一年还没有打过分的照片</div>
+  <audio id="bgm" loop preload="none"><source src="https://image.cuijianzhuang.com/forest.mp3" type="audio/mpeg" /></audio>
+<script>
+  var params = new URLSearchParams(location.search);
+  var qs = params.get('year') ? '?year=' + encodeURIComponent(params.get('year')) : '';
+  var photos = [], idx = -1, timer = null, paused = false, useA = true;
+  var DURATION = 5000;
+  var imgA = document.getElementById('imgA'), imgB = document.getElementById('imgB');
+  var barFill = document.getElementById('barFill');
+
+  function thumbOf(p) { return p.url.replace('/img/', '/thumb/') + '?w=1600&q=85&fit=scale-down'; }
+
+  fetch('/api/recap' + qs).then(function (r) { return r.json(); }).then(function (data) {
+    document.getElementById('introYear').textContent = data.year;
+    var nav = document.getElementById('yearNav');
+    nav.innerHTML = (data.years || []).map(function (y) {
+      return '<a href="/recap?year=' + y + '"' + (y === data.year ? ' class="cur"' : '') + '>' + y + '</a>';
+    }).join('');
+    photos = data.photos || [];
+    if (!photos.length) {
+      document.getElementById('intro').classList.add('hide');
+      document.getElementById('empty').style.display = 'flex';
+      return;
+    }
+    setTimeout(function () {
+      document.getElementById('intro').classList.add('hide');
+      next();
+    }, 1800);
+  });
+
+  function show(i) {
+    idx = (i + photos.length) % photos.length;
+    var p = photos[idx];
+    var incoming = useA ? imgA : imgB;
+    var outgoing = useA ? imgB : imgA;
+    useA = !useA;
+    incoming.classList.remove('on', 'kb');
+    incoming.src = thumbOf(p);
+    var reveal = function () {
+      incoming.classList.add('on', 'kb');
+      outgoing.classList.remove('on');
+      document.getElementById('capDate').textContent = parseInt(p.month) + ' 月 ' + parseInt(p.day) + ' 日';
+      document.getElementById('capText').textContent = [p.caption, p.place].filter(Boolean).join(' · ');
+      barFill.style.width = ((idx + 1) / photos.length * 100) + '%';
+      var nx = new Image(); nx.src = thumbOf(photos[(idx + 1) % photos.length]);
+      schedule();
+    };
+    if (incoming.complete && incoming.naturalWidth) reveal();
+    else { incoming.onload = reveal; incoming.onerror = function () { schedule(); }; }
+  }
+
+  function schedule() {
+    clearTimeout(timer);
+    if (!paused) timer = setTimeout(next, DURATION);
+  }
+  function next() { show(idx + 1); }
+  function prev() { show(idx - 1); }
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); clearTimeout(timer); next(); }
+    if (e.key === 'ArrowLeft') { clearTimeout(timer); prev(); }
+    if (e.key === 'Escape') location.href = '/';
+  });
+  var pressTimer = null;
+  document.getElementById('stage').addEventListener('pointerdown', function () {
+    pressTimer = setTimeout(function () { paused = true; clearTimeout(timer); pressTimer = null; }, 350);
+  });
+  document.getElementById('stage').addEventListener('pointerup', function (e) {
+    if (pressTimer) {
+      clearTimeout(pressTimer); pressTimer = null;
+      clearTimeout(timer);
+      if (e.clientX < window.innerWidth / 3) prev(); else next();
+    } else if (paused) {
+      paused = false; schedule();
+    }
+  });
+
+  var bgm = document.getElementById('bgm'), musicOn = false;
+  document.getElementById('music').onclick = function () {
+    musicOn = !musicOn;
+    this.style.opacity = musicOn ? 1 : 0.55;
+    if (musicOn) { bgm.volume = 0.4; bgm.play().catch(function () {}); } else bgm.pause();
+  };
+</script>
+</body>
+</html>
