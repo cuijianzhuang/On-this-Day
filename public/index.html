@@ -48,18 +48,6 @@
           <span class="track"></span>
         </label>
       </div>
-      <a class="date-toggle" href="/recap" id="recapLink" title="年度回忆放映">
-        <svg viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20"/></svg>
-      </a>
-      <a class="date-toggle" href="/loved" id="lovedLink" title="全家最爱">
-        <svg viewBox="0 0 24 24"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>
-      </a>
-      <a class="date-toggle" href="/map" id="mapLink" title="看看拍照的地方">
-        <svg viewBox="0 0 24 24"><path d="M9 18l-5 2V4l5-2 6 2 5-2v16l-5 2-6-2z"/><line x1="9" y1="2" x2="9" y2="18"/><line x1="15" y1="4" x2="15" y2="20"/></svg>
-      </a>
-      <a class="date-toggle" href="/stats" id="statsLink" title="数据总览">
-        <svg viewBox="0 0 24 24"><line x1="4" y1="20" x2="4" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="20" y1="20" x2="20" y2="14"/></svg>
-      </a>
       <button class="calendar-mode-toggle" id="lunarToggle" type="button" aria-pressed="false" title="切换公历 / 农历">
         <span class="calendar-mode-option solar">公</span><span class="calendar-mode-option lunar">农</span>
       </button>
@@ -72,9 +60,18 @@
       <button class="date-toggle" id="searchToggle" title="搜索照片">
         <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.2" y2="16.2"/></svg>
       </button>
-      <a class="date-toggle" href="/admin/ops" id="opsLink" title="运维控制台">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-      </a>
+      <!-- 年度回忆/全家最爱/足迹地图/数据总览/运维控制台这五个"跳到别的页面"的入口
+           收进一个下拉菜单，避免头部图标行在手机上排成一长条 -->
+      <button class="date-toggle" id="navMenuToggle" title="更多功能">
+        <svg viewBox="0 0 24 24"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
+      </button>
+    </div>
+    <div class="nav-menu" id="navMenu">
+      <a href="/recap"><svg class="nm-icon" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20"/></svg><span>年度回忆放映</span></a>
+      <a href="/loved"><svg class="nm-icon" viewBox="0 0 24 24"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg><span>全家最爱</span></a>
+      <a href="/map" id="mapLink"><svg class="nm-icon" viewBox="0 0 24 24"><path d="M9 18l-5 2V4l5-2 6 2 5-2v16l-5 2-6-2z"/><line x1="9" y1="2" x2="9" y2="18"/><line x1="15" y1="4" x2="15" y2="20"/></svg><span>足迹地图</span></a>
+      <a href="/stats"><svg class="nm-icon" viewBox="0 0 24 24"><line x1="4" y1="20" x2="4" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="20" y1="20" x2="20" y2="14"/></svg><span>数据总览</span></a>
+      <a href="/admin/ops"><svg class="nm-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span>运维控制台</span></a>
     </div>
     <div class="year-menu" id="yearMenu"></div>
     <div class="search-panel" id="searchPanel">

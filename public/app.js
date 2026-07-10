@@ -590,6 +590,14 @@
     yearMenu.classList.toggle('open');
   };
 
+  // "更多功能"下拉：年度回忆/全家最爱/足迹地图/数据总览/运维控制台入口
+  const navMenuToggle = document.getElementById('navMenuToggle');
+  const navMenu = document.getElementById('navMenu');
+  navMenuToggle.onclick = (e) => {
+    e.stopPropagation();
+    navMenu.classList.toggle('open');
+  };
+
   // 照片搜索：搜 AI 说明文字和拍摄地名，防抖 350ms，回车立即搜
   const searchToggle = document.getElementById('searchToggle');
   const searchPanel = document.getElementById('searchPanel');
@@ -647,6 +655,9 @@
     }
     if (yearMenu.classList.contains('open') && !yearMenu.contains(e.target) && e.target !== yearToggle && !yearToggle.contains(e.target)) {
       yearMenu.classList.remove('open');
+    }
+    if (navMenu.classList.contains('open') && !navMenu.contains(e.target) && e.target !== navMenuToggle && !navMenuToggle.contains(e.target)) {
+      navMenu.classList.remove('open');
     }
     if (searchPanel.classList.contains('open') && !searchPanel.contains(e.target) && e.target !== searchToggle && !searchToggle.contains(e.target)) {
       searchPanel.classList.remove('open');
