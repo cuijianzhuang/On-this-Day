@@ -33,6 +33,10 @@
     nav.innerHTML = (data.years || []).map(function (y) {
       return '<a href="/recap?year=' + y + '"' + (y === data.year ? ' class="cur"' : '') + '>' + y + '</a>';
     }).join('');
+    // 年份多到超出可视宽度时整行可横滑；不管浏览器把默认滚动位置摆在哪，
+    // 都强制把当前年份滚到可见范围内，不然刚进页面正在看的这年可能就在滚动条外面
+    var curYearEl = nav.querySelector('.cur');
+    if (curYearEl) curYearEl.scrollIntoView({ inline: 'center', block: 'nearest' });
     photos = data.photos || [];
     if (!photos.length) {
       document.getElementById('intro').classList.add('hide');
