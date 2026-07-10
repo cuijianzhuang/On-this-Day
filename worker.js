@@ -140,6 +140,14 @@ export default {
       return env.ASSETS.fetch(new Request(new URL("/recap.html", request.url), request));
     }
 
+    if (url.pathname === "/api/stats") {
+      return handleStats(request, env, url);
+    }
+
+    if (url.pathname === "/stats") {
+      return env.ASSETS.fetch(new Request(new URL("/stats.html", request.url), request));
+    }
+
     if (url.pathname === "/api/poem") {
       return handlePoem(request, env, url);
     }
@@ -562,6 +570,89 @@ async function handleRecap(request, env, url) {
   }));
 
   const response = new Response(JSON.stringify({ year, years, photos }), {
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "public, max-age=3600",
+    },
+  });
+  await cache.put(cacheKey, response.clone());
+  return response;
+}
+
+// ── 数据总览 ──────────────────────────────────────────────────────────────────
+// 全库聚合统计：总量、逐年趋势、常去地点、表态/手记总量、AI 评分统计，
+// 再挑两张"高光时刻"（表态最多 / AI 评分最高）。纯聚合查询，边缘缓存 1 小时足够新鲜
+async function handleStats(request, env, url) {
+  await ensureAuxTables(env);
+  const cache = caches.default;
+  const cacheKey = new Request(`${SITE_ORIGIN}/api/stats`);
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  const [
+    typeRows, yearRows, monthRows, placeRows, locatedRow, dateRange,
+    reactionStats, commentStats, scoreStats, topLoved, topScored,
+  ] = await Promise.all([
+    env.DB.prepare("SELECT type, COUNT(*) AS c FROM photos_index GROUP BY type").all(),
+    env.DB.prepare("SELECT year, COUNT(*) AS c FROM photos_index GROUP BY year ORDER BY year").all(),
+    env.DB.prepare("SELECT month, COUNT(*) AS c FROM photos_index GROUP BY month").all(),
+    env.DB.prepare("SELECT name, COUNT(*) AS c FROM photo_places WHERE name != '' GROUP BY name ORDER BY c DESC LIMIT 6").all(),
+    env.DB.prepare("SELECT COUNT(*) AS c FROM photo_places WHERE lat IS NOT NULL").first(),
+    env.DB.prepare("SELECT MIN(year) AS minYear, MAX(year) AS maxYear FROM photos_index").first(),
+    env.DB.prepare("SELECT COALESCE(SUM(count), 0) AS total FROM photo_reactions").first(),
+    env.DB.prepare("SELECT COUNT(*) AS c FROM photo_comments").first(),
+    env.DB.prepare(
+      "SELECT COUNT(*) AS scored, AVG(score) AS avg, SUM(has_face) AS withFace FROM photo_scores WHERE score IS NOT NULL"
+    ).first(),
+    // 只挑图片：视频/实况即使表态最多，/thumb/ 也生不出静态缩略图，卡片会显示裂图
+    env.DB.prepare(
+      `SELECT pr.key AS key, SUM(pr.count) AS total, pi.month, pi.day FROM photo_reactions pr
+       JOIN photos_index pi ON pi.key = pr.key WHERE pi.type = 'image'
+       GROUP BY pr.key HAVING total > 0 ORDER BY total DESC LIMIT 1`
+    ).first(),
+    env.DB.prepare(
+      `SELECT pi.key AS key, ps.score, ps.caption, pi.month, pi.day FROM photos_index pi
+       JOIN photo_scores ps ON ps.key = pi.key
+       WHERE pi.type = 'image' AND ps.score IS NOT NULL ORDER BY ps.score DESC, pi.uploaded DESC LIMIT 1`
+    ).first(),
+  ]);
+
+  const byType = {};
+  for (const r of typeRows.results) byType[r.type] = r.c;
+  const total = Object.values(byType).reduce((a, b) => a + b, 0);
+
+  // 拍照最集中的月份（跨所有年份合计），只取一个整数月份给前端拼"X 月"
+  let topMonth = null, topMonthCount = 0;
+  for (const r of monthRows.results) {
+    if (r.c > topMonthCount) { topMonthCount = r.c; topMonth = parseInt(r.month, 10); }
+  }
+
+  const payload = {
+    total,
+    byType,
+    years: yearRows.results.map((r) => ({ year: r.year, count: r.c })),
+    topMonth,
+    places: placeRows.results.map((r) => ({ name: r.name, count: r.c })),
+    locatedCount: locatedRow?.c ?? 0,
+    firstYear: dateRange?.minYear ?? null,
+    lastYear: dateRange?.maxYear ?? null,
+    yearSpan: dateRange?.minYear ? Number(dateRange.maxYear) - Number(dateRange.minYear) + 1 : 0,
+    reactionsTotal: reactionStats?.total ?? 0,
+    comments: commentStats?.c ?? 0,
+    score: {
+      scored: scoreStats?.scored ?? 0,
+      avg: scoreStats?.avg != null ? Math.round(scoreStats.avg * 10) / 10 : null,
+      withFacePct: scoreStats?.scored ? Math.round((scoreStats.withFace / scoreStats.scored) * 100) : 0,
+    },
+    topLoved: topLoved
+      ? { key: topLoved.key, url: `/img/${encodeURIComponent(topLoved.key)}`, total: topLoved.total, month: topLoved.month, day: topLoved.day }
+      : null,
+    topScored: topScored
+      ? { key: topScored.key, url: `/img/${encodeURIComponent(topScored.key)}`, score: topScored.score, caption: topScored.caption || "", month: topScored.month, day: topScored.day }
+      : null,
+  };
+
+  const response = new Response(JSON.stringify(payload), {
     headers: {
       "content-type": "application/json; charset=utf-8",
       "cache-control": "public, max-age=3600",
