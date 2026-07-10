@@ -388,7 +388,7 @@ input:focus { border-color: var(--border-focus); }
   <div class="task-section">
     <div class="task-label">状态开关（清 KV 标记，Cron 自动推进）</div>
     <div class="btn-row">
-      <button class="danger" onclick="confirmThen('重启索引回填？Cron 将恢复每 20 分钟一批补索引。','重启', function(){ resetFlag(\'backfill\'); })">↺ 重启索引回填</button>
+      <button class="danger" onclick="confirmThen('重启索引回填？Cron 将恢复每 30 分钟一批补索引。','重启', function(){ resetFlag(\'backfill\'); })">↺ 重启索引回填</button>
       <button class="danger" onclick="confirmThen('重跑日期重扫？Cron 将重新全表扫描修正拍摄日期，期间 offset 会递增。','重跑', function(){ resetFlag(\'reindex\'); })">↺ 重跑日期重扫</button>
     </div>
   </div>
@@ -615,11 +615,13 @@ function renderFlags(d) {
     { ok: true, label: '北京今天', detail: bj.month + '-' + bj.day, cls: '' },
     { ok: !!f.last_viewed_day, label: '最近浏览', detail: f.last_viewed_day ? f.last_viewed_day.month + '-' + f.last_viewed_day.day : '—', cls: '' },
   ];
-  // Cron 心跳：10 分钟一趟，超过 15 分钟没跑过就标黄示警——这是判断定时任务是否存活的直接依据
+  // Cron 心跳：15 分钟一趟，超过 25 分钟（一个间隔 + 缓冲）没跑过就标黄示警——
+  // 这是判断定时任务是否存活的直接依据。阈值必须比 Cron 间隔大出一截，
+  // 不然刚好卡在两趟之间刷新页面，健康的 Cron 也会被误标成异常
   var cr = f.cron_last_run;
   if (cr && cr.at) {
     var ageMin = Math.round((Date.now() - Date.parse(cr.at)) / 60000);
-    var stale = ageMin > 15;
+    var stale = ageMin > 25;
     var detail = (ageMin <= 0 ? '刚刚' : ageMin + ' 分钟前') + ' ' + bjShort(cr.at);
     detail += '（打分 ' + (cr.scored || 0) + ' · 查点 ' + (cr.located || 0) + '）';
     if (cr.errors && cr.errors.length) detail += ' ⚠ ' + cr.errors[0];

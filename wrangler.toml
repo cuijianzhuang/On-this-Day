@@ -79,10 +79,14 @@ name = "photo-processing"
 binding = "PHOTO_WORKFLOW"
 class_name = "PhotoProcessingWorkflow"
 
-# 每 10 分钟跑一次，补打历史积压的照片分数/地点（新上传的照片已由 Workflow 实时处理）
+# 每 15 分钟跑一次，补打历史积压的照片分数/地点。新上传的照片由 Workflow 实时处理，
+# Cron 只是存量追赶，不需要高频——从 10 分钟放宽到 15 分钟，每月少跑 1/3 的调用，
+# 省下的是 Workers 请求数和 CPU ms 配额，代价只是历史积压清完的日期晚一点点。
+# 注意：改这个间隔必须同步改 runBackgroundMaintenance 里 doBackfillThisTick 的取模逻辑
+# （回填/重扫按 tick 单双轮换）和运维控制台的心跳过期阈值
 # 0 16 * * * = 北京时间每天零点（UTC+8），推送当天精选到 Telegram
 [triggers]
-crons = ["*/10 * * * *", "0 16 * * *"]
+crons = ["*/15 * * * *", "0 16 * * *"]
 
 [observability]
 enabled = false

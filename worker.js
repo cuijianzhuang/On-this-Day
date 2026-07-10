@@ -17,7 +17,7 @@ const VIDEO_EXT = /\.(mov|mp4)$/i;
 const BASE_PREFIX = "Photos/MobileBackup/iPhone/";
 
 // 记录最近一次有人查看的 month/day，给 Cron 任务做优先级参考
-// 改用 KV：Cron 每 10 分钟读一次，KV 读比 D1 SELECT 快，且全局一份（不同 PoP 共享同一个值）
+// 改用 KV：Cron 每 15 分钟读一次，KV 读比 D1 SELECT 快，且全局一份（不同 PoP 共享同一个值）
 async function getLastViewedDay(env) {
   return env.KV.get("last_viewed_day", { type: "json" });
 }
@@ -205,7 +205,7 @@ export default {
   },
 
   // Cron 定时任务：按 cron 表达式区分任务
-  // */10 * * * *  → 维护任务（打分/地点/回填）
+  // */15 * * * *  → 维护任务（打分/地点/回填）
   // 0 16 * * *    → 北京时间零点，把当天历史精选推送到 Telegram
   async scheduled(event, env, ctx) {
     if (event.cron === "0 16 * * *") {
@@ -884,7 +884,7 @@ function injectOgTags(assetResp, url) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // 把 Workflow 登记的"今天新照片"聚合成一条 Telegram 消息推送出去。
-// 每次 Cron（10 分钟）跑一趟：有多少发多少（图最多带 10 张，条数说总量），
+// 每次 Cron（15 分钟）跑一趟：有多少发多少（图最多带 10 张，条数说总量），
 // 发送成功才把队列里对应的 key 删掉，失败留着下一趟重试
 async function flushPendingNotifications(env) {
   if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) return;
@@ -967,12 +967,14 @@ async function runBackgroundMaintenance(env) {
 
   // 回填（listAll 扫全量 ~16000 张建一个大数组）跟 HEIC 解码（单张就能占几十 MB 原始像素）
   // 是这个函数里两个最吃内存的环节，干万不能凑到同一次调用里——上一次就是因为两个撞一起
-  // 又把 Cron 炸了（exceededMemory）。按当前分钟单双轮流跑，保证它俩永远不同时出现
-  const doBackfillThisTick = new Date().getMinutes() % 20 < 10;
+  // 又把 Cron 炸了（exceededMemory）。按 tick 单双轮流跑，保证它俩永远不同时出现。
+  // 取模基数必须是 Cron 间隔的 2 倍（当前 */15 → % 30）：:00/:30 走回填，:15/:45 走重扫，
+  // 改 wrangler.toml 里的 Cron 间隔时这里要跟着改，不然轮换会失衡甚至只跑一边
+  const doBackfillThisTick = new Date().getMinutes() % 30 < 15;
   try {
     if (doBackfillThisTick) {
       // 自动把存量照片慢慢补进 photos_index，不用再手动一次次点 /admin/backfill-photos-index。
-      // 回填全部完成后写个时间戳标记：之后每天只核对一次，不再每 20 分钟白白 listAll 扫一遍
+      // 回填全部完成后写个时间戳标记：之后每天只核对一次，不再每 30 分钟白白 listAll 扫一遍
       // 全桶 + 全表 SELECT 来发现"没活干"（新上传的照片走 queue 增量维护，不依赖这里）
       const doneAt = Date.parse((await env.KV.get("backfill_done_at")) || "");
       if (!(Date.now() - doneAt < 24 * 3600 * 1000)) {
@@ -980,7 +982,7 @@ async function runBackgroundMaintenance(env) {
         if (res.remaining === 0) {
           await env.KV.put("backfill_done_at", new Date().toISOString());
         } else {
-          // 又出现了没索引的文件（比如 R2 事件丢了）——清掉标记，恢复每 20 分钟一批的追赶节奏
+          // 又出现了没索引的文件（比如 R2 事件丢了）——清掉标记，恢复每 30 分钟一批的追赶节奏
           await env.KV.delete("backfill_done_at");
         }
       }
@@ -1089,7 +1091,7 @@ async function runBackgroundMaintenance(env) {
   }
 
   // 心跳落 KV：运维控制台据此判断 Cron 是否在跑、上一趟干了什么。
-  // 只保留最近一次（KV 每 10 分钟写一条，量可忽略）；errors 截断防止 KV 值过大
+  // 只保留最近一次（KV 每 15 分钟写一条，量可忽略）；errors 截断防止 KV 值过大
   try {
     beat.errors = beat.errors.slice(0, 5);
     beat.tookMs = Date.now() - Date.parse(beat.at);
@@ -1403,7 +1405,7 @@ async function handleMemories(request, env, url, ctx) {
   if (ctx) {
     ctx.waitUntil(setLastViewedDay(env, month, day));
 
-    // 顺手把这一天匹配到的 HEIC 转一小批预览图，不用等 Cron 最多 10 分钟才轮到——
+    // 顺手把这一天匹配到的 HEIC 转一小批预览图，不用等 Cron 最多 15 分钟才轮到——
     // 放在 waitUntil 里，不占用本次响应的等待时间；batch 给得很小，避免和上面的 EXIF 读取叠加起来撞子请求上限
     const heicKeys = matchedByYear.flatMap((y) => y.photos).filter((p) => (p.type === "image" || p.type === "live") && /\.heic$/i.test(p.key)).map((p) => p.key);
     if (heicKeys.length > 0) {
@@ -2542,7 +2544,25 @@ async function saveScore(env, key, info) {
 async function getJpegBytesForScoring(env, key) {
   if (!/\.heic$/i.test(key)) {
     const obj = await env.PHOTOS.get(key);
-    return obj ? new Uint8Array(await obj.arrayBuffer()) : null;
+    if (!obj) return null;
+    // 小图直接用原字节：Array.from 一个 2MB 以下的 buffer CPU 开销可以接受，
+    // 不值得为它烧一次 Images 转换额度（每月免费 5000 次，缩略图也在用这个池子）
+    if (obj.size <= 2 * 1024 * 1024) return new Uint8Array(await obj.arrayBuffer());
+    // 大图先缩到 1024px 再喂模型（跟下面 HEIC 兜底路径同一档参数）——
+    // scoreOnePhoto 里的 Array.from(buffer) 是逐字节装箱成 JS number，8MB 原图就是
+    // 800 万个数组元素，这一步的 Worker CPU 跟图片体积线性相关；缩完只剩 100-300KB，
+    // 这部分 CPU 直接省掉 10-30 倍，AI 模型自己也吃不了那么大的分辨率，喂原图纯属浪费
+    try {
+      const transformed = await env.IMAGES.input(obj.body)
+        .transform({ width: 1024 })
+        .output({ format: "image/jpeg", quality: 85 });
+      return new Uint8Array(await transformed.response().arrayBuffer());
+    } catch {
+      // 转换失败（罕见格式/额度用尽）退回原图，行为跟改动前一致；
+      // obj.body 流已被上面的 transform 消费掉，必须重新 get 一次
+      const retry = await env.PHOTOS.get(key);
+      return retry ? new Uint8Array(await retry.arrayBuffer()) : null;
+    }
   }
   const previewKey = await findHeicPreviewKey(env, key);
   if (previewKey) {
@@ -3744,7 +3764,7 @@ export class PhotoProcessingWorkflow extends WorkflowEntrypoint {
 
     // ── Step 6: 今天拍的照片登记进待推送队列 ─────────────────────────────────
     // 不在这里直接发 Telegram：批量上传会一张一条刷屏。只把 key 登记进 D1
-    // （meta 表 notify: 前缀），由 */10 Cron 聚合成一条消息推送
+    // （meta 表 notify: 前缀），由 */15 Cron 聚合成一条消息推送
     // （见 flushPendingNotifications）
     await step.do("queue-notify", {
       retries: { limit: 2, delay: "5 seconds" },
