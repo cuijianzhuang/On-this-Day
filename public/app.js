@@ -1282,6 +1282,7 @@
     if (_popup) _popup.classList.remove('open');
     stopAutoPlay();
     _lbScale = 1; _lbTx = 0; _lbTy = 0; _lbPanning = false;
+    _lbPinching = false; _lbPointers.clear();
     lightboxBody.innerHTML = '';
     lightboxBody.classList.remove('zoomed', 'panning');
     document.body.style.overflow = '';
@@ -1341,8 +1342,16 @@
 
   // ── 灯箱图片缩放 + 平移 ─────────────────────────────────────────────────────
   let _lbScale = 1, _lbTx = 0, _lbTy = 0;
-  let _lbPanning = false, _lbPanSX = 0, _lbPanSY = 0, _lbPanTx0 = 0, _lbPanTy0 = 0;
+  let _lbPanning = false, _lbPanSX = 0, _lbPanSY = 0, _lbPanTx0 = 0, _lbPanTy0 = 0, _lbPanMoved = false;
   let _lbSlideDragX = 0, _lbSlideDragY = 0, _lbSlideDragging = false, _lbSlideActive = false;
+  // 多指捏合缩放：按 pointerId 记录每根手指当前位置，两指同时按下时进入捏合手势
+  const _lbPointers = new Map();
+  let _lbPinching = false, _lbPinchStartDist = 1, _lbPinchStartScale = 1;
+  let _lbPinchAnchorX = 0, _lbPinchAnchorY = 0; // 捏合中心相对元素中心的偏移（未缩放坐标系），缩放过程中让这个点尽量不动
+  // 手动判定双击/双击：移动端浏览器合成的 dblclick 不可靠（下面会说明原因），
+  // 改成自己在 pointerup 里比较两次点击的时间和位置
+  let _lastTapTime = 0, _lastTapX = 0, _lastTapY = 0;
+  let _lastZoomToggleAt = 0;
   let _lbZoomHideTimer = null;
   let _imgLoadAbort = null;
   let _lbDragEndTime = 0;
@@ -1451,8 +1460,87 @@
 
   function _lbResetZoom() {
     _lbScale = 1; _lbTx = 0; _lbTy = 0;
+    _lbPinching = false; _lbPointers.clear();
     lightboxBody.classList.remove('zoomed', 'panning');
     _lbApplyTransform();
+  }
+
+  // 双击/双击缩放的共用逻辑：桌面 dblclick 和移动端手动判定的双击都调这个
+  function _lbToggleZoom(clientX, clientY) {
+    // 防抖：同一次双击有极小概率同时触发"手动判定"和浏览器合成的 dblclick，
+    // 不加这道栏杆会看到缩放"闪一下"又弹回去
+    const now = Date.now();
+    if (now - _lastZoomToggleAt < 250) return;
+    _lastZoomToggleAt = now;
+
+    const t = _lbTarget();
+    if (!t) return;
+    if (_lbScale > 1) {
+      _lbResetZoom();
+    } else {
+      const stage = lightboxBody.parentElement;
+      const rect = stage.getBoundingClientRect();
+      const vcx = stage.offsetWidth / 2;
+      const vcy = stage.offsetHeight / 2;
+      const cx = clientX - rect.left;
+      const cy = clientY - rect.top;
+      const newScale = 2.5;
+      _lbTx += (vcx - cx) * (newScale - 1);
+      _lbTy += (vcy - cy) * (newScale - 1);
+      _lbScale = newScale;
+      _lbClamp();
+      _lbApplyTransform();
+    }
+  }
+
+  // 触屏没有原生 dblclick 可靠可用（见下面 pointerup 里的说明），自己比较两次
+  // 点击的时间间隔和位置距离；触发过一次之后清零计时，避免连续三击被算成第二次双击
+  function _checkDoubleTap(x, y) {
+    const now = Date.now();
+    const isDouble = now - _lastTapTime < 300 && Math.hypot(x - _lastTapX, y - _lastTapY) < 30;
+    _lastTapTime = isDouble ? 0 : now;
+    _lastTapX = x; _lastTapY = y;
+    if (isDouble) _lbToggleZoom(x, y);
+  }
+
+  // ── 双指捏合缩放 ─────────────────────────────────────────────────────────────
+  function _pinchDist() {
+    const pts = [..._lbPointers.values()];
+    return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+  }
+  function _pinchMid() {
+    const pts = [..._lbPointers.values()];
+    return { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+  }
+  function _startPinch() {
+    _lbPinching = true;
+    _lbPanning = false; _lbSlideActive = false; _lbSlideDragging = false;
+    lightboxBody.classList.remove('panning');
+    lightboxBody.style.transition = 'none';
+    lightboxBody.style.transform = ''; // 取消可能正在进行中的横滑切图位移
+    _lbPinchStartDist = _pinchDist() || 1;
+    _lbPinchStartScale = _lbScale;
+    const t = _lbTarget();
+    if (t) {
+      const rect = t.getBoundingClientRect();
+      const mid = _pinchMid();
+      _lbPinchAnchorX = (mid.x - (rect.left + rect.width / 2)) / _lbScale;
+      _lbPinchAnchorY = (mid.y - (rect.top + rect.height / 2)) / _lbScale;
+    }
+  }
+  function _endPinch() {
+    _lbPinching = false;
+    if (_lbScale <= 1) { _lbScale = 1; _lbTx = 0; _lbTy = 0; _lbApplyTransform(); return; }
+    // 松开一根手指后如果还剩一根，无缝切到单指平移——用剩下那根手指的当前坐标当新基准，
+    // 不然松开的瞬间平移基准点没跟着换，画面会跳一下
+    const remaining = [..._lbPointers.values()][0];
+    if (remaining) {
+      _lbPanning = true;
+      _lbPanMoved = false;
+      lightboxBody.classList.add('panning');
+      _lbPanSX = remaining.x; _lbPanSY = remaining.y;
+      _lbPanTx0 = _lbTx; _lbPanTy0 = _lbTy;
+    }
   }
 
   // 滚轮缩放：以鼠标所在点为缩放中心
@@ -1483,14 +1571,25 @@
   // 直接打断（触发 pointercancel），放大后的平移根本走不起来——必须整体禁掉
   lightboxBody.addEventListener('dragstart', (e) => e.preventDefault());
 
-  // 放大时拖拽平移；未放大时水平拖动整体 lightboxBody 切换图片
+  // 放大时拖拽平移；未放大时水平拖动整体 lightboxBody 切换图片；两指同时按下时进入捏合缩放。
+  // 统一在 pointerdown 就 setPointerCapture——捏合需要同时稳定收到两根手指各自的 move/up，
+  // 不能像以前那样只在"确认是一次有效拖动"之后才补 capture
   lightboxBody.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
+    _lbPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    lightboxBody.setPointerCapture(e.pointerId);
+
+    if (_lbPointers.size >= 2) {
+      e.preventDefault();
+      _startPinch();
+      return;
+    }
+
     if (_lbScale > 1) {
       e.preventDefault(); // 拦截原生图片拖拽/文字选择，把手势留给平移
       e.stopPropagation();
       _lbPanning = true;
-      lightboxBody.setPointerCapture(e.pointerId);
+      _lbPanMoved = false;
       lightboxBody.classList.add('panning');
       _lbPanSX = e.clientX; _lbPanSY = e.clientY;
       _lbPanTx0 = _lbTx; _lbPanTy0 = _lbTy;
@@ -1502,9 +1601,27 @@
     }
   });
   lightboxBody.addEventListener('pointermove', (e) => {
+    if (_lbPointers.has(e.pointerId)) _lbPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (_lbPinching) {
+      if (_lbPointers.size < 2) return;
+      const dist = _pinchDist() || 1;
+      _lbScale = Math.max(1, Math.min(10, _lbPinchStartScale * (dist / _lbPinchStartDist)));
+      if (_lbScale === 1) { _lbTx = 0; _lbTy = 0; }
+      else {
+        // 锚点固定在手势开始时的捏合中心，缩放过程中该点在屏幕上尽量不动
+        _lbTx = -_lbPinchAnchorX * (_lbScale - 1);
+        _lbTy = -_lbPinchAnchorY * (_lbScale - 1);
+      }
+      _lbClamp();
+      _lbApplyTransform();
+      return;
+    }
+
     if (_lbPanning) {
       _lbTx = _lbPanTx0 + e.clientX - _lbPanSX;
       _lbTy = _lbPanTy0 + e.clientY - _lbPanSY;
+      if (Math.abs(e.clientX - _lbPanSX) > 6 || Math.abs(e.clientY - _lbPanSY) > 6) _lbPanMoved = true;
       _lbClamp();
       const t = _lbTarget();
       if (t) t.style.transform = `translate(${_lbTx}px,${_lbTy}px) scale(${_lbScale})`;
@@ -1515,7 +1632,6 @@
         if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
         if (Math.abs(dy) > Math.abs(dx)) { _lbSlideActive = false; return; }
         _lbSlideDragging = true;
-        lightboxBody.setPointerCapture(e.pointerId);
         // 切图手势开始时停止实况播放，避免干扰
         const lpWrap = lightboxBody.querySelector('.live-photo-wrap.playing');
         if (lpWrap) { const v = lpWrap.querySelector('video'); if (v) v.pause(); lpWrap.classList.remove('playing'); }
@@ -1525,9 +1641,15 @@
     }
   });
   lightboxBody.addEventListener('pointerup', (e) => {
+    _lbPointers.delete(e.pointerId);
+
+    if (_lbPinching) { _endPinch(); return; }
+
     if (_lbPanning) {
       _lbPanning = false;
       lightboxBody.classList.remove('panning');
+      // 放大状态下按下又原地抬起（没有产生平移）＝一次点按，交给双击判定
+      if (!_lbPanMoved && e.pointerType !== 'mouse') _checkDoubleTap(e.clientX, e.clientY);
     } else if (_lbSlideActive) {
       _lbSlideActive = false;
       if (_lbSlideDragging) {
@@ -1551,10 +1673,15 @@
           lightboxBody.style.transform = '';
           setTimeout(() => { lightboxBody.style.transition = ''; }, 260);
         }
+      } else if (e.pointerType !== 'mouse') {
+        // 未缩放状态下没有产生横滑位移的抬起＝一次点按，交给双击判定
+        _checkDoubleTap(e.clientX, e.clientY);
       }
     }
   });
-  lightboxBody.addEventListener('pointercancel', () => {
+  lightboxBody.addEventListener('pointercancel', (e) => {
+    _lbPointers.delete(e.pointerId);
+    if (_lbPinching) { _endPinch(); return; }
     if (_lbPanning) {
       _lbPanning = false;
       lightboxBody.classList.remove('panning');
@@ -1566,27 +1693,14 @@
     }
   });
 
-  // 双击缩放：在当前点放大到 2.5×，再次双击复原
+  // 桌面鼠标双击缩放：在当前点放大到 2.5×，再次双击复原。
+  // 移动端不靠这个——触屏的 dblclick 合成不可靠：上面 pointerdown 为了不让浏览器把
+  // 双击当成"尝试原生缩放"吞掉（见 #lightboxBody 的 touch-action:none 注释）会
+  // preventDefault，一部分浏览器因此干脆不再合成 dblclick，双击缩放会跟着失效——
+  // 所以触屏走的是 pointerup 里 _checkDoubleTap 的手动判定，两条路径共用 _lbToggleZoom
   lightboxBody.addEventListener('dblclick', (e) => {
     e.preventDefault();
-    const t = _lbTarget();
-    if (!t) return;
-    if (_lbScale > 1) {
-      _lbResetZoom();
-    } else {
-      const stage = lightboxBody.parentElement;
-      const vcx = stage.offsetWidth / 2;
-      const vcy = stage.offsetHeight / 2;
-      const rect = stage.getBoundingClientRect();
-      const cx = e.clientX - rect.left;
-      const cy = e.clientY - rect.top;
-      const newScale = 2.5;
-      _lbTx += (vcx - cx) * (newScale - 1);
-      _lbTy += (vcy - cy) * (newScale - 1);
-      _lbScale = newScale;
-      _lbClamp();
-      _lbApplyTransform();
-    }
+    _lbToggleZoom(e.clientX, e.clientY);
   });
 
   // ── 移动端左右滑动切换，不用非得点那两个小箭头 ─────────────────────────────
