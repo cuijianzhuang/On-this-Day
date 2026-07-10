@@ -843,54 +843,83 @@
     _loadNote(p.key);
   }
 
-  // ── 照片手记：家人写的文字注解，存服务端，全家可见 ─────────────────────────
+  // ── 照片手记：多人评论串，家人各自留言，存服务端全家可见，只能删自己发的 ─────
   let _noteSeq = 0;
   function _loadNote(key) {
     const seq = ++_noteSeq;
     fetch('/api/note?key=' + encodeURIComponent(key))
-      .then(r => r.ok ? r.json() : { note: '' })
-      .then(d => { if (seq === _noteSeq) _renderNote(key, d.note || ''); })
-      .catch(() => { if (seq === _noteSeq) _renderNote(key, ''); });
+      .then(r => r.ok ? r.json() : { comments: [] })
+      .then(d => { if (seq === _noteSeq) _renderComments(key, d.comments || []); })
+      .catch(() => { if (seq === _noteSeq) _renderComments(key, []); });
   }
 
-  function _renderNote(key, note) {
+  // 简单相对时间：分钟内"刚刚"，24 小时内"N 小时前"，再远给具体日期
+  function _commentTime(iso) {
+    const diff = Date.now() - Date.parse(iso);
+    if (diff < 60000) return '刚刚';
+    if (diff < 3600000) return Math.floor(diff / 60000) + ' 分钟前';
+    if (diff < 86400000) return Math.floor(diff / 3600000) + ' 小时前';
+    return iso.slice(0, 10).replace(/-/g, '/');
+  }
+
+  function _renderComments(key, comments) {
     const wrap = document.getElementById('lpNoteWrap');
     if (wrap) {
+      const listHtml = comments.length
+        ? comments.map(c =>
+            '<div class="lp-comment">' +
+              '<div class="lp-comment-head"><span class="lp-comment-author">' + escHtml(c.author) + '</span>' +
+              '<span class="lp-comment-time">' + _commentTime(c.createdAt) + '</span></div>' +
+              '<div class="lp-comment-text">' + escHtml(c.note) + '</div>' +
+              (c.mine ? '<button class="lp-comment-del" type="button" data-id="' + c.id + '">删除</button>' : '') +
+            '</div>'
+          ).join('')
+        : '<div class="lp-note-empty">还没有人留言</div>';
       wrap.innerHTML =
-        (note
-          ? '<div class="lp-note-text">' + escHtml(note) + '</div>'
-          : '<div class="lp-note-empty">还没有手记</div>') +
-        '<button class="lp-note-edit" type="button">' + (note ? '编辑' : '写点什么…') + '</button>';
-      wrap.querySelector('.lp-note-edit').onclick = () => _editNote(key, note);
+        '<div class="lp-comment-list">' + listHtml + '</div>' +
+        '<div class="lp-comment-compose">' +
+          '<textarea class="lp-note-input" maxlength="500" rows="2" placeholder="说点什么…"></textarea>' +
+          '<button class="lp-note-save" type="button">发送</button>' +
+        '</div>';
+      wrap.querySelectorAll('.lp-comment-del').forEach(btn => {
+        btn.onclick = () => _deleteComment(key, Number(btn.dataset.id));
+      });
+      const ta = wrap.querySelector('textarea');
+      wrap.querySelector('.lp-note-save').onclick = () => _postComment(key, ta);
+      ta.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) _postComment(key, ta);
+      });
     }
-    // 移动端信息面板是隐藏的，手记显示在底部提示区
+    // 移动端信息面板是隐藏的，最新一条留言显示在底部提示区
     const hint = document.getElementById('lbZoomHint');
-    if (hint && window.innerWidth <= 640 && note) hint.textContent = '📝 ' + note;
+    if (hint && window.innerWidth <= 640) {
+      hint.textContent = comments.length ? '📝 ' + comments[comments.length - 1].note : '';
+    }
   }
 
-  function _editNote(key, current) {
-    const wrap = document.getElementById('lpNoteWrap');
-    if (!wrap) return;
-    wrap.innerHTML =
-      '<textarea class="lp-note-input" maxlength="500" rows="4" placeholder="谁拍的、当时发生了什么…"></textarea>' +
-      '<div class="lp-note-btns">' +
-      '<button class="lp-note-save" type="button">保存</button>' +
-      '<button class="lp-note-cancel" type="button">取消</button></div>';
-    const ta = wrap.querySelector('textarea');
-    ta.value = current;
-    ta.focus();
-    wrap.querySelector('.lp-note-cancel').onclick = () => _renderNote(key, current);
-    wrap.querySelector('.lp-note-save').onclick = () => {
-      const note = ta.value.trim();
-      fetch('/api/note', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key, note }),
-      })
-        .then(r => { if (!r.ok) throw new Error('save failed'); return r.json(); })
-        .then(() => { _renderNote(key, note); showToast(note ? '手记已保存' : '手记已删除'); })
-        .catch(() => showToast('保存失败，请重试'));
-    };
+  function _postComment(key, ta) {
+    const note = ta.value.trim();
+    if (!note) return;
+    ta.disabled = true;
+    fetch('/api/note', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, note }),
+    })
+      .then(r => { if (!r.ok) throw new Error('save failed'); return r.json(); })
+      .then(() => { showToast('已发送'); _loadNote(key); })
+      .catch(() => { showToast('发送失败，请重试'); ta.disabled = false; });
+  }
+
+  function _deleteComment(key, id) {
+    fetch('/api/note', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, id }),
+    })
+      .then(r => { if (!r.ok) throw new Error('delete failed'); return r.json(); })
+      .then(() => { showToast('已删除'); _loadNote(key); })
+      .catch(() => showToast('删除失败，请重试'));
   }
 
   function _renderLightboxExif(exif, p) {

@@ -377,7 +377,17 @@ async function ensureAuxTables(env) {
       "count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (key, emoji))"
     ),
     env.DB.prepare(
+      // 旧版单条覆盖式手记表——不再写入，只保留给下面的一次性迁移读取，避免丢老数据
       "CREATE TABLE IF NOT EXISTS photo_notes (key TEXT PRIMARY KEY, note TEXT NOT NULL, updated_at TEXT)"
+    ),
+    env.DB.prepare(
+      // 手记改多人评论串：每张照片可以有多条，各自记作者身份（Cloudflare Access 邮箱），
+      // 用于"只能删自己发的"这条权限判断
+      "CREATE TABLE IF NOT EXISTS photo_comments (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL, " +
+      "author_email TEXT NOT NULL DEFAULT '', author_name TEXT NOT NULL DEFAULT '', note TEXT NOT NULL, created_at TEXT NOT NULL)"
+    ),
+    env.DB.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_photo_comments_key ON photo_comments(key)"
     ),
     // /api/recap 按年查询用；索引是库级别的，任何一条请求创建过一次之后永久生效
     env.DB.prepare(
@@ -389,7 +399,27 @@ async function ensureAuxTables(env) {
   try {
     await env.DB.prepare("ALTER TABLE photo_scores ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0").run();
   } catch { /* 列已存在 */ }
+  // 一次性把旧的单条手记迁移成评论串的第一条评论——条件是"这张照片在 photo_comments 里
+  // 还一条都没有"，天然幂等（迁移过的照片下次冷启动会被 WHERE NOT IN 排除），可以放心每次都跑
+  try {
+    await env.DB.prepare(
+      "INSERT INTO photo_comments (key, author_email, author_name, note, created_at) " +
+      "SELECT key, '', '家人', note, COALESCE(updated_at, datetime('now')) FROM photo_notes " +
+      "WHERE note != '' AND key NOT IN (SELECT DISTINCT key FROM photo_comments)"
+    ).run();
+  } catch (err) {
+    console.error("migrate photo_notes -> photo_comments failed", err);
+  }
   _auxTablesReady = true;
+}
+
+// 从 Cloudflare Access 注入的 header 取当前访问者身份（跟 MemoryRoom DO 同一套规则）。
+// 未启用 Access 或匿名访问时邮箱为空、显示名退化为"访客"——手记评论用它做作者归属，
+// 空邮箱的评论谁都不能通过 API 删除（避免匿名互删）
+function identityOf(request) {
+  const email = request.headers.get("Cf-Access-Authenticated-User-Email") || "";
+  const name = email ? email.split("@")[0] : "访客";
+  return { email, name };
 }
 
 // 北京时间（UTC+8）的今天，返回 { month: "MM", day: "DD" }
@@ -542,17 +572,28 @@ async function handleRecap(request, env, url) {
 }
 
 // ── 照片手记 ──────────────────────────────────────────────────────────────────
-// 家人给照片写的文字注解（谁拍的、当时发生了什么）。站点面向家庭成员公开，
-// 跟表态一样不做身份校验，只做长度和 key 存在性约束
+// 家人给照片留言的评论串（谁拍的、当时发生了什么），每人可以各自发多条，只能删自己发的。
+// 站点面向家庭成员公开，身份识别靠 Cloudflare Access 的邮箱 header，不做额外校验，
+// 只做长度和 key 存在性约束
 async function handleNote(request, env, url) {
   await ensureAuxTables(env);
 
   if (request.method === "GET") {
     const key = url.searchParams.get("key") || "";
     if (!key) return new Response("Bad Request", { status: 400 });
-    const row = await env.DB.prepare("SELECT note, updated_at FROM photo_notes WHERE key = ?")
-      .bind(key).first();
-    return new Response(JSON.stringify({ note: row?.note || "", updated_at: row?.updated_at || null }), {
+    const { email } = identityOf(request);
+    const { results } = await env.DB.prepare(
+      "SELECT id, author_email, author_name, note, created_at FROM photo_comments WHERE key = ? ORDER BY id ASC"
+    ).bind(key).all();
+    const comments = results.map((r) => ({
+      id: r.id,
+      author: r.author_name || "访客",
+      note: r.note,
+      createdAt: r.created_at,
+      // 只有邮箱非空且匹配才算"我的"——匿名评论（author_email 为空）谁都不认领
+      mine: !!email && r.author_email === email,
+    }));
+    return new Response(JSON.stringify({ comments }), {
       headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
     });
   }
@@ -562,20 +603,35 @@ async function handleNote(request, env, url) {
     try { body = await request.json(); } catch { return new Response("Bad Request", { status: 400 }); }
     const key = typeof body.key === "string" ? body.key : "";
     const note = typeof body.note === "string" ? body.note.trim() : "";
-    if (!key || note.length > 500) return new Response("Bad Request", { status: 400 });
+    if (!key || !note || note.length > 500) return new Response("Bad Request", { status: 400 });
     // key 必须是真实存在的照片，别让这张表变成任意写入的垃圾桶
     const exists = await env.DB.prepare("SELECT 1 FROM photos_index WHERE key = ?").bind(key).first();
     if (!exists) return new Response("Not Found", { status: 404 });
 
-    if (!note) {
-      await env.DB.prepare("DELETE FROM photo_notes WHERE key = ?").bind(key).run();
-    } else {
-      await env.DB.prepare(
-        "INSERT INTO photo_notes (key, note, updated_at) VALUES (?, ?, ?) " +
-        "ON CONFLICT(key) DO UPDATE SET note = excluded.note, updated_at = excluded.updated_at"
-      ).bind(key, note, new Date().toISOString()).run();
-    }
-    return new Response(JSON.stringify({ ok: true, note }), {
+    const { email, name } = identityOf(request);
+    const createdAt = new Date().toISOString();
+    const result = await env.DB.prepare(
+      "INSERT INTO photo_comments (key, author_email, author_name, note, created_at) VALUES (?, ?, ?, ?, ?)"
+    ).bind(key, email, name, note, createdAt).run();
+
+    return new Response(
+      JSON.stringify({ ok: true, comment: { id: result.meta.last_row_id, author: name, note, createdAt, mine: true } }),
+      { headers: { "content-type": "application/json; charset=utf-8" } }
+    );
+  }
+
+  if (request.method === "DELETE") {
+    let body;
+    try { body = await request.json(); } catch { return new Response("Bad Request", { status: 400 }); }
+    const id = Number(body.id);
+    if (!id) return new Response("Bad Request", { status: 400 });
+    const { email } = identityOf(request);
+    const row = await env.DB.prepare("SELECT author_email FROM photo_comments WHERE id = ?").bind(id).first();
+    if (!row) return new Response("Not Found", { status: 404 });
+    // 只能删自己发的：邮箱必须非空且匹配，匿名评论没人能通过这个接口删掉
+    if (!email || row.author_email !== email) return new Response("Forbidden", { status: 403 });
+    await env.DB.prepare("DELETE FROM photo_comments WHERE id = ?").bind(id).run();
+    return new Response(JSON.stringify({ ok: true }), {
       headers: { "content-type": "application/json; charset=utf-8" },
     });
   }
@@ -2894,7 +2950,7 @@ async function handleBackfillPhotosIndex(request, env, url) {
 async function handleOpsStatus(request, env, url) {
   await ensureAuxTables(env);
 
-  const [typeRows, unscored, unlocated, pendingNotify, notes, reactions, recent] = await Promise.all([
+  const [typeRows, unscored, unlocated, pendingNotify, comments, reactions, recent] = await Promise.all([
     env.DB.prepare("SELECT type, COUNT(*) AS c FROM photos_index GROUP BY type").all(),
     env.DB.prepare(
       `SELECT COUNT(*) AS c FROM photos_index i LEFT JOIN photo_scores s ON s.key = i.key WHERE i.type = 'image' AND ${NEEDS_SCORE_SQL}`
@@ -2903,7 +2959,7 @@ async function handleOpsStatus(request, env, url) {
       "SELECT COUNT(*) AS c FROM photos_index i LEFT JOIN photo_places p ON p.key = i.key WHERE i.type = 'image' AND p.key IS NULL"
     ).first(),
     env.DB.prepare("SELECT COUNT(*) AS c FROM meta WHERE key LIKE 'notify:%'").first(),
-    env.DB.prepare("SELECT COUNT(*) AS c FROM photo_notes").first(),
+    env.DB.prepare("SELECT COUNT(*) AS c FROM photo_comments").first(),
     env.DB.prepare("SELECT COUNT(*) AS c, COALESCE(SUM(count), 0) AS total FROM photo_reactions").first(),
     env.DB.prepare("SELECT key, year, month, day, type, updated_at FROM photos_index ORDER BY updated_at DESC LIMIT 8").all(),
   ]);
@@ -2928,7 +2984,7 @@ async function handleOpsStatus(request, env, url) {
     unscored: unscored?.c ?? 0,
     unlocated: unlocated?.c ?? 0,
     pendingNotify: pendingNotify?.c ?? 0,
-    notes: notes?.c ?? 0,
+    comments: comments?.c ?? 0,
     reactions: { rows: reactions?.c ?? 0, total: reactions?.total ?? 0 },
     flags: {
       backfill_done_at: backfillDoneAt || null,
@@ -2942,7 +2998,7 @@ async function handleOpsStatus(request, env, url) {
 }
 
 // GET ?q=子串   → 按 key 模糊搜索，最多 20 条
-// GET ?key=完整key → 单张照片的全量数据（索引 / 打分 / 地点 / 手记 / 表态 / 原图是否还在 R2）
+// GET ?key=完整key → 单张照片的全量数据（索引 / 打分 / 地点 / 手记条数 / 表态 / 原图是否还在 R2）
 async function handlePhotoInfo(request, env, url) {
   await ensureAuxTables(env);
 
@@ -2958,15 +3014,15 @@ async function handlePhotoInfo(request, env, url) {
     return Response.json({ matches: results });
   }
 
-  const [index, score, place, note, reactions] = await Promise.all([
+  const [index, score, place, commentStats, reactions] = await Promise.all([
     env.DB.prepare("SELECT * FROM photos_index WHERE key = ?").bind(key).first(),
     env.DB.prepare("SELECT score, has_face, caption, updated_at FROM photo_scores WHERE key = ?").bind(key).first(),
     env.DB.prepare("SELECT lat, lon, name FROM photo_places WHERE key = ?").bind(key).first(),
-    env.DB.prepare("SELECT note, updated_at FROM photo_notes WHERE key = ?").bind(key).first(),
+    env.DB.prepare("SELECT COUNT(*) AS c FROM photo_comments WHERE key = ?").bind(key).first(),
     env.DB.prepare("SELECT emoji, count FROM photo_reactions WHERE key = ? AND count > 0").bind(key).all(),
   ]);
   const inR2 = !!(await env.PHOTOS.head(key));
-  return Response.json({ key, inR2, index, score, place, note, reactions: reactions.results });
+  return Response.json({ key, inR2, index, score, place, commentCount: commentStats?.c ?? 0, reactions: reactions.results });
 }
 
 // POST body: { key, action, ... }。动作：
@@ -2974,7 +3030,7 @@ async function handlePhotoInfo(request, env, url) {
 //   rescore                        删打分并立即重打（AI 文案/评分不满意时用）
 //   relocate                       删地点并立即重查（EXIF GPS → Mapbox 地名）
 //   set-place {name}               手动改地点名（保留已有经纬度）
-//   clear-note                     删手记
+//   clear-note                     清空这张照片的全部手记评论
 //   remove-index                   从索引移除（原图已删但索引残留、或不想展示这张时用）
 async function handlePhotoFix(request, env, url) {
   await ensureAuxTables(env);
@@ -3028,6 +3084,9 @@ async function handlePhotoFix(request, env, url) {
   }
 
   if (body.action === "clear-note") {
+    await env.DB.prepare("DELETE FROM photo_comments WHERE key = ?").bind(key).run();
+    // 旧表的这一行也要删掉——否则下次冷启动，ensureAuxTables 里那条"迁移旧手记"的
+    // SQL 一看 photo_comments 又没有这个 key 了，会把刚清掉的内容重新迁移回来
     await env.DB.prepare("DELETE FROM photo_notes WHERE key = ?").bind(key).run();
     return Response.json({ ok: true });
   }
