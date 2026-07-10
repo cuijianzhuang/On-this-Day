@@ -654,6 +654,13 @@
     font-size: 0.76rem; color: #8a8a8f; line-height: 1.55;
     font-style: italic;
   }
+  /* AI 分类标签：跟评分/表态徽章一样的暖金色调，跟 caption 拉开一点距离 */
+  .lp-tags { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.55rem; }
+  .lp-tag {
+    font-size: 0.68rem; font-weight: 600; color: #ffd996;
+    background: rgba(255,180,50,0.14); border-radius: 999px;
+    padding: 0.2rem 0.6rem;
+  }
 
   /* emoji 反应条（已移至灯箱舞台浮动按钮，侧边保留元素但隐藏） */
   .lp-reactions { display: none; }

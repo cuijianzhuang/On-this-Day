@@ -9,7 +9,7 @@ Access 后面，不需要额外 token），系统状态、批量维护、
 
 - **R2 `image` 桶**：原图，唯一真数据源，其他一切都可从它重建
 - **R2 `image-previews` 桶**：全是派生物——`thumbs/`（WebP 缩略图）、`{年/月/日}/*.heic-preview.jpg`（HEIC 预转）、`tg/`、`og/`、`icon/`
-- **D1 `memories-db`**：`photos_index`（索引，照片可见性的唯一依据）、`photo_scores`（AI 评分+文案，可再生）、`photo_places`（地点，可再生）、`photo_reactions`（表态 D1 镜像，权威在 DO）、`photo_notes`（手记）、`meta`（诗词缓存 `poem:*`、待推送队列 `notify:*`）
+- **D1 `memories-db`**：`photos_index`（索引，照片可见性的唯一依据）、`photo_scores`（AI 评分+文案+分类标签，可再生）、`photo_places`（地点，可再生）、`photo_reactions`（表态 D1 镜像，权威在 DO）、`photo_comments`（手记评论串）、`meta`（诗词缓存 `poem:*`、待推送队列 `notify:*`）
 - **KV**：后台任务状态位（`backfill_done_at`、`reindex_dates_done_at/offset`、`last_viewed_day`、`jinrishici-token`）
 - **数据流**：照片上传 R2 → 事件通知 → Queue → Workflow 五步流水线（索引→HEIC 转码→AI 打分→查地点→清缓存）；存量照片靠 Cron（每 10 分钟）回填追赶
 

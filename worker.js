@@ -419,6 +419,12 @@ async function ensureAuxTables(env) {
   try {
     await env.DB.prepare("ALTER TABLE photo_scores ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0").run();
   } catch { /* 列已存在 */ }
+  // AI 分类标签列（见 PHOTO_TAGS），逗号分隔存成一个字符串，老库同样靠 ALTER 补列。
+  // 故意不给 DEFAULT——ALTER 之后老记录这一列是 NULL，靠这个跟"AI 判定没有合适标签"
+  // （saveScore 会显式写成空字符串 ''）区分开，NULL 才是"这张照片还没跑过标签"的信号
+  try {
+    await env.DB.prepare("ALTER TABLE photo_scores ADD COLUMN tags TEXT").run();
+  } catch { /* 列已存在 */ }
   // 一次性把旧的单条手记迁移成评论串的第一条评论——条件是"这张照片在 photo_comments 里
   // 还一条都没有"，天然幂等（迁移过的照片下次冷启动会被 WHERE NOT IN 排除），可以放心每次都跑
   try {
@@ -603,7 +609,7 @@ async function handleStats(request, env, url) {
 
   const [
     typeRows, yearRows, monthRows, placeRows, locatedRow, dateRange,
-    reactionStats, commentStats, scoreStats, topLoved, topScored,
+    reactionStats, commentStats, scoreStats, tagRows, topLoved, topScored,
   ] = await Promise.all([
     env.DB.prepare("SELECT type, COUNT(*) AS c FROM photos_index GROUP BY type").all(),
     env.DB.prepare("SELECT year, COUNT(*) AS c FROM photos_index GROUP BY year ORDER BY year").all(),
@@ -616,6 +622,10 @@ async function handleStats(request, env, url) {
     env.DB.prepare(
       "SELECT COUNT(*) AS scored, AVG(score) AS avg, SUM(has_face) AS withFace FROM photo_scores WHERE score IS NOT NULL"
     ).first(),
+    // tags 是逗号拼接存的（一张照片最多 3 个），SQLite 没有现成的拆分聚合函数，
+    // 就把非空的原始字符串都取出来，在 JS 里拆开计数——量级只有"已打标签的照片数"这么多行，
+    // 拆分计数在内存里做完全没有压力
+    env.DB.prepare("SELECT tags FROM photo_scores WHERE tags IS NOT NULL AND tags != ''").all(),
     // 只挑图片：视频/实况即使表态最多，/thumb/ 也生不出静态缩略图，卡片会显示裂图
     env.DB.prepare(
       `SELECT pr.key AS key, SUM(pr.count) AS total, pi.month, pi.day FROM photo_reactions pr
@@ -639,12 +649,24 @@ async function handleStats(request, env, url) {
     if (r.c > topMonthCount) { topMonthCount = r.c; topMonth = parseInt(r.month, 10); }
   }
 
+  const tagCounts = {};
+  for (const r of tagRows.results) {
+    for (const t of r.tags.split(",")) {
+      if (t) tagCounts[t] = (tagCounts[t] || 0) + 1;
+    }
+  }
+  const tags = Object.entries(tagCounts)
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8);
+
   const payload = {
     total,
     byType,
     years: yearRows.results.map((r) => ({ year: r.year, count: r.c })),
     topMonth,
     places: placeRows.results.map((r) => ({ name: r.name, count: r.c })),
+    tags,
     locatedCount: locatedRow?.c ?? 0,
     firstYear: dateRange?.minYear ?? null,
     lastYear: dateRange?.maxYear ?? null,
@@ -743,8 +765,9 @@ async function handleNote(request, env, url) {
 }
 
 // ── 照片搜索 ──────────────────────────────────────────────────────────────────
-// 搜 AI 生成的中文说明（photo_scores.caption）和拍摄地名（photo_places.name）。
-// 用 LIKE 子串匹配而不是 FTS5——FTS5 默认分词器不吃中文（要 trigram 扩展），
+// 搜 AI 生成的中文说明（photo_scores.caption）、拍摄地名（photo_places.name）、
+// AI 分类标签（photo_scores.tags，比如直接搜"美食"能找到没提到"美食"两个字但被打上这个
+// 标签的照片）。用 LIKE 子串匹配而不是 FTS5——FTS5 默认分词器不吃中文（要 trigram 扩展），
 // 而 LIKE '%词%' 对中文天然就是正确的子串语义；一万多行的表扫一遍毫无压力
 async function handleSearch(request, env, url) {
   const q = (url.searchParams.get("q") || "").trim();
@@ -757,11 +780,11 @@ async function handleSearch(request, env, url) {
   // 转义 LIKE 元字符，用户输入的 % _ 按字面匹配
   const like = "%" + q.replace(/[\\%_]/g, (m) => "\\" + m) + "%";
   const { results } = await env.DB.prepare(
-    `SELECT pi.key AS key, pi.year, pi.month, pi.day, ps.caption, pp.name AS place
+    `SELECT pi.key AS key, pi.year, pi.month, pi.day, ps.caption, ps.tags, pp.name AS place
      FROM photos_index pi
      LEFT JOIN photo_scores ps ON ps.key = pi.key
      LEFT JOIN photo_places pp ON pp.key = pi.key
-     WHERE pi.type = 'image' AND (ps.caption LIKE ?1 ESCAPE '\\' OR pp.name LIKE ?1 ESCAPE '\\')
+     WHERE pi.type = 'image' AND (ps.caption LIKE ?1 ESCAPE '\\' OR pp.name LIKE ?1 ESCAPE '\\' OR ps.tags LIKE ?1 ESCAPE '\\')
      ORDER BY pi.year DESC, pi.month DESC, pi.day DESC
      LIMIT 60`
   ).bind(like).all();
@@ -773,6 +796,7 @@ async function handleSearch(request, env, url) {
     month: r.month,
     day: r.day,
     caption: r.caption || "",
+    tags: tagsArrayOf(r.tags),
     place: r.place || "",
   }));
   return new Response(JSON.stringify({ q, photos }), {
@@ -1356,8 +1380,8 @@ async function handleMemories(request, env, url, ctx) {
   const enrich = (y) => ({
     ...y,
     photos: y.photos.map((p) => {
-      const { score, hasFace, caption } = scoreInfoOf(scores[p.key]);
-      return { ...p, score, hasFace, caption, place: placeNameOf(places[p.key]) };
+      const { score, hasFace, caption, tags } = scoreInfoOf(scores[p.key]);
+      return { ...p, score, hasFace, caption, tags: tagsArrayOf(tags), place: placeNameOf(places[p.key]) };
     }),
   });
   const results = matchedByYear.map(enrich);
@@ -2471,9 +2495,9 @@ async function loadScoresForKeys(env, keys) {
     chunkArray(keys, 100).map((batch) => {
       const placeholders = batch.map(() => "?").join(",");
       // 不查 raw_response——那是 AI 原始响应全文（每行几百字节到几 KB），只在 saveScore 时
-      // 写入留档，这里的调用方（/api/memories、打分候选筛选）都只用 score/has_face/caption
+      // 写入留档，这里的调用方（/api/memories、打分候选筛选）都只用 score/has_face/caption/tags
       return env.DB.prepare(
-        `SELECT key, score, has_face, caption, updated_at FROM photo_scores WHERE key IN (${placeholders})`
+        `SELECT key, score, has_face, caption, tags, updated_at FROM photo_scores WHERE key IN (${placeholders})`
       )
         .bind(...batch)
         .all();
@@ -2486,6 +2510,9 @@ async function loadScoresForKeys(env, keys) {
         score: row.score,
         hasFace: !!row.has_face,
         caption: row.caption || "",
+        // 保留原始 null（不跟着 caption 一样坍缩成 ""）——needsScoring 靠 null 识别
+        // "这张还没跑过标签"，坍缩成 "" 会跟"AI 判定没有合适标签"分不清，一直重打分
+        tags: row.tags,
         updatedAt: row.updated_at || "",
       };
     }
@@ -2494,15 +2521,15 @@ async function loadScoresForKeys(env, keys) {
 }
 
 async function saveScore(env, key, info) {
-  // attempts 每写一次 +1：打分成功（文案有中文）后这行不再匹配 NEEDS_SCORE_SQL，计数无所谓；
+  // attempts 每写一次 +1：打分成功（文案有中文+标签已生成）后这行不再匹配 NEEDS_SCORE_SQL，计数无所谓；
   // 一直失败的照片计数涨到 SCORE_RETRY_LIMIT 后退出自动重试队列
   await env.DB.prepare(
-    "INSERT INTO photo_scores (key, score, has_face, caption, raw_response, updated_at, attempts) VALUES (?, ?, ?, ?, ?, ?, 1) " +
+    "INSERT INTO photo_scores (key, score, has_face, caption, tags, raw_response, updated_at, attempts) VALUES (?, ?, ?, ?, ?, ?, ?, 1) " +
       "ON CONFLICT(key) DO UPDATE SET score = excluded.score, has_face = excluded.has_face, " +
-      "caption = excluded.caption, raw_response = excluded.raw_response, updated_at = excluded.updated_at, " +
+      "caption = excluded.caption, tags = excluded.tags, raw_response = excluded.raw_response, updated_at = excluded.updated_at, " +
       "attempts = photo_scores.attempts + 1"
   )
-    .bind(key, info.score, info.hasFace ? 1 : 0, info.caption || "", info.rawResponse || "", new Date().toISOString())
+    .bind(key, info.score, info.hasFace ? 1 : 0, info.caption || "", info.tags || "", info.rawResponse || "", new Date().toISOString())
     .run();
 }
 
@@ -2533,6 +2560,25 @@ async function getJpegBytesForScoring(env, key) {
   return new Uint8Array(await transformed.response().arrayBuffer());
 }
 
+// AI 分类标签的固定小词表——开放式标签（AI 自由发挥）会越攒越乱，没法拿来做筛选/统计；
+// 固定词表配合下面的白名单校验，保证库里出现的标签种类永远可控
+const PHOTO_TAGS = ["人像", "风景", "美食", "聚会", "旅行", "萌宠", "建筑", "运动", "节日", "文档"];
+
+// 从 AI 回复的 TAGS 行提取标签：中英文逗号/顿号都当分隔符，只留白名单里的词、去重、最多 3 个，
+// 不返回数组而是逗号拼成一个字符串——跟 caption 一样存进 TEXT 列，省一张关联表
+function parseTags(text) {
+  const m = text.match(/TAGS:\s*(.+)/i);
+  if (!m) return "";
+  const raw = m[1].split(/[,，、]/).map((s) => s.trim()).filter(Boolean);
+  const seen = new Set();
+  const tags = [];
+  for (const t of raw) {
+    if (PHOTO_TAGS.includes(t) && !seen.has(t)) { seen.add(t); tags.push(t); }
+    if (tags.length >= 3) break;
+  }
+  return tags.join(",");
+}
+
 async function scoreOnePhoto(env, key) {
   try {
     const buffer = await getJpegBytesForScoring(env, key);
@@ -2540,12 +2586,14 @@ async function scoreOnePhoto(env, key) {
     const aiResult = await env.AI.run("@cf/llava-hf/llava-1.5-7b-hf", {
       image: Array.from(buffer),
       prompt:
-        "Look at this personal photo. Reply with exactly three lines, nothing else:\n" +
+        "Look at this personal photo. Reply with exactly four lines, nothing else:\n" +
         "SCORE: <a number 1-10 for how memorable/worth keeping it is " +
         "(real candid moments, scenery, clear faces > blurry/accidental/duplicate-looking shots > screenshots, memes, scanned text/documents)>\n" +
         "FACE: <yes if there is at least one recognizable human face in the photo, otherwise no>\n" +
-        "CAPTION: <one short, warm, casual sentence in Chinese describing what's happening in this photo, like a caption you'd write in a photo album>",
-      max_tokens: 80,
+        "CAPTION: <one short, warm, casual sentence in Chinese describing what's happening in this photo, like a caption you'd write in a photo album>\n" +
+        "TAGS: <pick 0-2 categories that best fit this photo from exactly this list: " +
+        PHOTO_TAGS.join(", ") + " — comma separated, or NONE if nothing fits>",
+      max_tokens: 100,
     });
     const text = (aiResult && (aiResult.description || aiResult.response)) || "";
     const scoreMatch = text.match(/SCORE:\s*(\d+)/i);
@@ -2567,23 +2615,32 @@ async function scoreOnePhoto(env, key) {
         // 翻译失败就保留英文原文，好歹有文案
       }
     }
-    return { score, hasFace, caption, rawResponse: text };
+    const tags = parseTags(text);
+    return { score, hasFace, caption, tags, rawResponse: text };
   } catch (err) {
-    return { score: 5, hasFace: false, caption: "", rawResponse: String(err && err.message ? err.message : err) };
+    return { score: 5, hasFace: false, caption: "", tags: "", rawResponse: String(err && err.message ? err.message : err) };
   }
 }
 
-// key 还没打过分时 loadScores() 返回的对象里没有这一项，统一给个默认值方便调用方直接解构
+// key 还没打过分时 loadScores() 返回的对象里没有这一项，统一给个默认值方便调用方直接解构。
+// tags 默认 null（不是 ""）——跟"AI 判定没有合适标签"区分开，null 才是"还没跑过标签"
 function scoreInfoOf(entry) {
-  return entry || { score: null, hasFace: false, caption: "", updatedAt: "" };
+  return entry || { score: null, hasFace: false, caption: "", tags: null, updatedAt: "" };
+}
+
+// 把逗号拼接的标签字符串转成数组，给 API 输出用；null/空串都当"没有标签"
+function tagsArrayOf(tagsRaw) {
+  return tagsRaw ? tagsRaw.split(",").filter(Boolean) : [];
 }
 
 // 之前打过分但还没补上 AI 文案的（caption 字段加得比打分晚），或者文案是翻译功能上线前
-// 生成的英文老文案，都要算作"需要处理"，不然这批照片永远不会再被 scoreOnePhoto 碰到
+// 生成的英文老文案，都要算作"需要处理"；tags 是 null（AI 分类标签功能上线前的老记录）
+// 同样要算需要处理，不然这批照片永远不会再被 scoreOnePhoto 碰到
 function needsScoring(scores, key) {
   if (!(key in scores)) return true;
-  const caption = scores[key].caption;
-  return !caption || !/[一-鿿]/.test(caption);
+  const s = scores[key];
+  const captionOk = s.caption && /[一-鿿]/.test(s.caption);
+  return !captionOk || s.tags == null;
 }
 
 // needsScoring 的 SQL 版：直接在库里 LEFT JOIN 筛出需要打分的 key，调用方不用再把整张
@@ -2591,13 +2648,16 @@ function needsScoring(scores, key) {
 // "文案没有中文"用 字节数==字符数（纯 ASCII）近似：有中文时 UTF-8 字节数必然大于字符数。
 // 跟正则 /[一-鿿]/ 的口径差在纯 emoji/带音标文案会被当成"有内容"，但文案是提示词约定的中文，
 // 实际打出来不会是那两种。
+// s.tags IS NULL 这条是给 AI 分类标签功能上线时做的一次性存量回填：老记录这一列是 NULL，
+// 只要被 scoreOnePhoto 重新处理一次，saveScore 就会把它写成非 NULL（哪怕是空字符串），
+// 这个条件自然只命中一轮，不会跟 attempts 重试限制搅在一起、也不会死循环
 // attempts 上限：AI 持续失败/文案怎么翻都不是中文的照片，重试这么多次之后不再进队列——
 // findUnscoredKeys 无排序（rowid 稳定），没有上限的话队首几张顽固失败的照片会永久霸占
 // 每一批（跟之前查地点卡死是同一个病），打分流水线整个停摆还白烧 AI 配额。
 // 到上限的照片可在运维控制台「重新打分」（会先删行，计数归零）
 const SCORE_RETRY_LIMIT = 5;
 const NEEDS_SCORE_SQL =
-  "(s.key IS NULL OR ((s.caption IS NULL OR s.caption = '' OR length(CAST(s.caption AS BLOB)) = length(s.caption)) " +
+  "(s.key IS NULL OR s.tags IS NULL OR ((s.caption IS NULL OR s.caption = '' OR length(CAST(s.caption AS BLOB)) = length(s.caption)) " +
   `AND COALESCE(s.attempts, 0) < ${SCORE_RETRY_LIMIT}))`;
 
 async function findUnscoredKeys(env, { month, day, limit }) {
@@ -3119,7 +3179,7 @@ async function handlePhotoInfo(request, env, url) {
 
   const [index, score, place, commentStats, reactions] = await Promise.all([
     env.DB.prepare("SELECT * FROM photos_index WHERE key = ?").bind(key).first(),
-    env.DB.prepare("SELECT score, has_face, caption, updated_at FROM photo_scores WHERE key = ?").bind(key).first(),
+    env.DB.prepare("SELECT score, has_face, caption, tags, updated_at FROM photo_scores WHERE key = ?").bind(key).first(),
     env.DB.prepare("SELECT lat, lon, name FROM photo_places WHERE key = ?").bind(key).first(),
     env.DB.prepare("SELECT COUNT(*) AS c FROM photo_comments WHERE key = ?").bind(key).first(),
     env.DB.prepare("SELECT emoji, count FROM photo_reactions WHERE key = ? AND count > 0").bind(key).all(),
@@ -3163,7 +3223,7 @@ async function handlePhotoFix(request, env, url) {
     await env.DB.prepare("DELETE FROM photo_scores WHERE key = ?").bind(key).run();
     let error = null;
     try { await scoreKeys(env, [key]); } catch (err) { error = String((err && err.message) || err); }
-    const score = await env.DB.prepare("SELECT score, caption FROM photo_scores WHERE key = ?").bind(key).first();
+    const score = await env.DB.prepare("SELECT score, caption, tags FROM photo_scores WHERE key = ?").bind(key).first();
     if (row) await purgeDayCache(row.month, row.day);
     // score 为空 + error 为空 = AI 没跑成但没抛错（比如 HEIC 还没有预览图），留给 Cron 兜底重试
     return Response.json({ ok: true, score, error });
@@ -3624,7 +3684,7 @@ export class MemoryRoom {
 // 步骤：
 //   1. index          — 写 photos_index，拿到 month/day/type
 //   2. heic-convert   — HEIC 专属：先转 JPEG 预览图（跳过则打分会因无图失败）
-//   3. ai-score       — 调 llava-1.5-7b 视觉模型打分 + 生成中文说明文字
+//   3. ai-score       — 调 llava-1.5-7b 视觉模型打分 + 生成中文说明文字 + 分类标签
 //   4. enrich-location — EXIF GPS → Mapbox 反查地点名称，写 photo_places
 //   5. purge-cache    — 清边缘缓存，让 /api/memories 立即反映新照片
 //
@@ -3657,7 +3717,7 @@ export class PhotoProcessingWorkflow extends WorkflowEntrypoint {
     }
 
     // ── Step 3: AI 打分 ───────────────────────────────────────────────────────
-    // llava-1.5-7b 视觉模型：score(1-10) + hasFace + 中文说明文字
+    // llava-1.5-7b 视觉模型：score(1-10) + hasFace + 中文说明文字 + 分类标签（PHOTO_TAGS）
     // Workers AI 调用有时会超时，最多重试 3 次，间隔指数增长
     await step.do("ai-score", {
       retries: { limit: 3, delay: "30 seconds", backoff: "exponential" },

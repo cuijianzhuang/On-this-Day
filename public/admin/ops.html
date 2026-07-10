@@ -719,6 +719,7 @@ function openPhoto(key) {
       ['评分', d.score ? d.score.score + (d.score.has_face ? ' · 有人脸' : '') : '未打分'],
       ['地点', d.place ? (d.place.name || '（无名）') : '未查'],
       d.score && d.score.caption ? ['文案', escHtml(String(d.score.caption).slice(0,80))] : null,
+      d.score && d.score.tags ? ['标签', escHtml(d.score.tags)] : null,
       d.commentCount ? ['手记', d.commentCount + ' 条评论'] : null,
       rx ? ['表态', rx] : null,
     ].filter(Boolean);

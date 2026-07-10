@@ -31,6 +31,11 @@
       <div class="place-list" id="placeList"></div>
     </section>
 
+    <section class="section" id="tagsSection">
+      <div class="section-title">常见类型</div>
+      <div class="place-list" id="tagList"></div>
+    </section>
+
     <section class="section">
       <div class="section-title">高光时刻</div>
       <div class="highlights" id="highlights"></div>
@@ -69,7 +74,8 @@
     }).join('');
 
     renderYearChart(d.years);
-    renderPlaces(d.places);
+    renderBarList('placesSection', 'placeList', d.places);
+    renderBarList('tagsSection', 'tagList', d.tags);
     renderHighlights(d);
   }
 
@@ -120,15 +126,16 @@
     });
   }
 
-  function renderPlaces(places) {
-    var section = document.getElementById('placesSection');
-    if (!places.length) { section.style.display = 'none'; return; }
-    var maxC = places.reduce(function (m, p) { return Math.max(m, p.count); }, 0);
-    document.getElementById('placeList').innerHTML = places.map(function (p) {
-      var pct = maxC ? Math.round((p.count / maxC) * 100) : 0;
-      return '<div class="place-row"><span class="name">' + esc(p.name) + '</span>' +
+  // 常去的地方、常见类型标签用的是同一套横条排行样式，共用这一个渲染函数
+  function renderBarList(sectionId, listId, items) {
+    var section = document.getElementById(sectionId);
+    if (!items || !items.length) { section.style.display = 'none'; return; }
+    var maxC = items.reduce(function (m, it) { return Math.max(m, it.count); }, 0);
+    document.getElementById(listId).innerHTML = items.map(function (it) {
+      var pct = maxC ? Math.round((it.count / maxC) * 100) : 0;
+      return '<div class="place-row"><span class="name">' + esc(it.name) + '</span>' +
         '<span class="bar-track"><span class="bar" style="width:' + pct + '%"></span></span>' +
-        '<span class="count">' + p.count + '</span></div>';
+        '<span class="count">' + it.count + '</span></div>';
     }).join('');
   }
 
