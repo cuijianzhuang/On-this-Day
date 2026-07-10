@@ -9,9 +9,9 @@ Access 后面，不需要额外 token），系统状态、批量维护、
 
 - **R2 `image` 桶**：原图，唯一真数据源，其他一切都可从它重建
 - **R2 `image-previews` 桶**：全是派生物——`thumbs/`（WebP 缩略图）、`{年/月/日}/*.heic-preview.jpg`（HEIC 预转）、`tg/`、`og/`、`icon/`
-- **D1 `memories-db`**：`photos_index`（索引，照片可见性的唯一依据）、`photo_scores`（AI 评分+文案，可再生）、`photo_places`（地点，可再生）、`photo_reactions`（表态 D1 镜像，权威在 DO）、`photo_notes`（手记）、`meta`（诗词缓存 `poem:*`、待推送队列 `notify:*`）
+- **D1 `memories-db`**：`photos_index`（索引，照片可见性的唯一依据）、`photo_scores`（AI 评分+文案+分类标签，可再生）、`photo_places`（地点，可再生）、`photo_reactions`（表态 D1 镜像，权威在 DO）、`photo_comments`（手记评论串）、`meta`（诗词缓存 `poem:*`、待推送队列 `notify:*`）
 - **KV**：后台任务状态位（`backfill_done_at`、`reindex_dates_done_at/offset`、`last_viewed_day`、`jinrishici-token`）
-- **数据流**：照片上传 R2 → 事件通知 → Queue → Workflow 五步流水线（索引→HEIC 转码→AI 打分→查地点→清缓存）；存量照片靠 Cron（每 10 分钟）回填追赶
+- **数据流**：照片上传 R2 → 事件通知 → Queue → Workflow 五步流水线（索引→HEIC 转码→AI 打分→查地点→清缓存）；存量照片靠 Cron（每 15 分钟）回填追赶
 
 ## 运维控制台 /admin/ops
 
@@ -56,7 +56,7 @@ npx wrangler r2 object delete "image-previews/2023/06/14/IMG_1234.heic-preview.j
 | 原图删了页面还显示 | 「从索引移除」（不动 R2） |
 | 缩略图裂 | 先等自动重试；不行就删 PREVIEWS 里对应 webp 让它重新生成；HEIC 全裂查 Transformations 免费额度（每月 5000 次） |
 | 推送没发出来 | 控制台「测试 Telegram 推送」验证配置；`meta` 表 `notify:%` 堆积说明发送持续失败，看 tail 日志 |
-| 索引数 < R2 对象数 | 「重启索引回填」，Cron 每 20 分钟补 300 张 |
+| 索引数 < R2 对象数 | 「重启索引回填」，Cron 每 30 分钟补 300 张 |
 | Telegram/诗词等第三方挂了 | 都有降级（推送重试、诗词 204），不影响主页面 |
 
 ## 心法

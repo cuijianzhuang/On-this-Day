@@ -5,7 +5,10 @@ CREATE TABLE IF NOT EXISTS photo_scores (
   caption TEXT,
   raw_response TEXT,
   updated_at TEXT,
-  attempts INTEGER NOT NULL DEFAULT 0  -- 打分次数：文案一直不达标（AI 失败/翻不成中文）的照片到上限后退出自动重试队列；老库由 ensureAuxTables() 运行时 ALTER 补列
+  attempts INTEGER NOT NULL DEFAULT 0,  -- 打分次数：文案一直不达标（AI 失败/翻不成中文）的照片到上限后退出自动重试队列；老库由 ensureAuxTables() 运行时 ALTER 补列
+  tags TEXT  -- AI 分类标签（见 worker.js PHOTO_TAGS 固定词表），逗号拼接最多 3 个；
+             -- 故意不给 DEFAULT——NULL = 这张还没跑过标签（一次性存量回填信号），
+             -- 空字符串 '' = AI 判定没有合适标签，两者含义不同，见 needsScoring()
 );
 
 CREATE TABLE IF NOT EXISTS photo_places (

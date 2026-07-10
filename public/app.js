@@ -628,7 +628,8 @@
         searchResults.innerHTML = photos.map(p => {
           const thumb = p.url.replace('/img/', '/thumb/') + '?w=96&h=96&q=70&fit=cover';
           const title = p.caption || p.key.split('/').pop();
-          const meta = [p.place, p.year + '/' + p.month + '/' + p.day].filter(Boolean).join(' · ');
+          const tagsText = (p.tags && p.tags.length) ? p.tags.join(' ') : '';
+          const meta = [p.place, tagsText, p.year + '/' + p.month + '/' + p.day].filter(Boolean).join(' · ');
           return '<a class="search-row" href="/?month=' + p.month + '&day=' + p.day + '">' +
             '<img src="' + escAttr(thumb) + '" loading="lazy" />' +
             '<span class="sr-text"><span class="sr-title">' + escHtml(title) + '</span>' +
@@ -832,9 +833,13 @@
     const filenameEl = document.getElementById('lpFilename');
     if (filenameEl) {
       const name = p.key.split('/').pop().replace(/\.[^.]+$/, '');
+      const tagsHtml = (p.tags && p.tags.length)
+        ? '<div class="lp-tags">' + p.tags.map(t => '<span class="lp-tag">' + escHtml(t) + '</span>').join('') + '</div>'
+        : '';
       filenameEl.innerHTML =
         `<div class="lp-photo-title">${escHtml(name)}</div>` +
-        (p.caption ? `<div class="lp-photo-caption">${escHtml(p.caption)}</div>` : '');
+        (p.caption ? `<div class="lp-photo-caption">${escHtml(p.caption)}</div>` : '') +
+        tagsHtml;
     }
 
     const infoEl = document.getElementById('lpInfo');
