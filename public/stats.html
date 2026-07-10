@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>数据总览 · 那年今日</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico" />
+<link rel="stylesheet" href="/stats.css" />
+</head>
+<body>
+  <a class="back" href="/" title="回到今天">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+  </a>
+  <div id="loading" class="loading">正在盘点这些年…</div>
+  <div id="content" class="content" style="display:none">
+    <header class="hero">
+      <div class="eyebrow">Data Overview</div>
+      <div class="hero-num" id="heroTotal">0</div>
+      <div class="hero-sub" id="heroSub"></div>
+    </header>
+
+    <div class="stat-grid" id="statGrid"></div>
+
+    <section class="section" id="yearSection">
+      <div class="section-title">逐年数量</div>
+      <div class="chart-wrap"><canvas id="yearChart"></canvas></div>
+    </section>
+
+    <section class="section" id="placesSection">
+      <div class="section-title">常去的地方</div>
+      <div class="place-list" id="placeList"></div>
+    </section>
+
+    <section class="section">
+      <div class="section-title">高光时刻</div>
+      <div class="highlights" id="highlights"></div>
+    </section>
+  </div>
+<script>
+  function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function escAttr(s) { return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;'); }
+
+  fetch('/api/stats').then(function (r) { return r.json(); }).then(renderStats).catch(function () {
+    document.getElementById('loading').textContent = '数据加载失败，请稍后重试';
+  });
+
+  function renderStats(d) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('content').style.display = 'block';
+
+    document.getElementById('heroTotal').textContent = d.total.toLocaleString('zh-CN');
+    var subParts = [];
+    if (d.firstYear) subParts.push(d.firstYear + ' – ' + d.lastYear + ' 年');
+    if (d.yearSpan > 1) subParts.push('横跨 ' + d.yearSpan + ' 个年头');
+    document.getElementById('heroSub').textContent = subParts.join(' · ');
+
+    var tiles = [
+      { v: (d.byType.video || 0).toLocaleString('zh-CN'), l: '视频/实况' },
+      { v: d.locatedCount.toLocaleString('zh-CN'), l: '带定位照片' },
+      { v: d.reactionsTotal.toLocaleString('zh-CN'), l: '全家表态' },
+      { v: d.comments.toLocaleString('zh-CN'), l: '手记留言' },
+      { v: d.score.scored.toLocaleString('zh-CN'), l: 'AI 已鉴赏' },
+      { v: d.score.avg != null ? d.score.avg : '—', l: '平均颜值分' },
+      { v: d.score.withFacePct + '%', l: '有笑脸照片' },
+      { v: d.topMonth ? d.topMonth + ' 月' : '—', l: '最爱拍照的月份' },
+    ];
+    document.getElementById('statGrid').innerHTML = tiles.map(function (t) {
+      return '<div class="stat-tile"><div class="v">' + t.v + '</div><div class="l">' + t.l + '</div></div>';
+    }).join('');
+
+    renderYearChart(d.years);
+    renderPlaces(d.places);
+    renderHighlights(d);
+  }
+
+  function renderYearChart(years) {
+    var section = document.getElementById('yearSection');
+    var canvas = document.getElementById('yearChart');
+    if (!years.length) { section.style.display = 'none'; return; }
+
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    // canvas 的 CSS width:100% 已经让浏览器排好版、天然扣除了 chart-wrap 的左右内边距，
+    // 直接读 clientWidth 就是画布可用宽度，不用手算 padding
+    var w = canvas.clientWidth || canvas.parentElement.clientWidth;
+    var h = 160;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.height = h + 'px';
+    var ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    var maxC = years.reduce(function (m, y) { return Math.max(m, y.count); }, 0);
+    var padBottom = 20, padTop = 8;
+    var gap = 6;
+    var barW = (w - gap * (years.length - 1)) / years.length;
+
+    years.forEach(function (y, i) {
+      var barH = maxC ? (y.count / maxC) * (h - padBottom - padTop) : 0;
+      var x = i * (barW + gap);
+      var yTop = h - padBottom - barH;
+      var grad = ctx.createLinearGradient(0, yTop, 0, h - padBottom);
+      grad.addColorStop(0, '#ffd996');
+      grad.addColorStop(1, 'rgba(255,217,150,0.32)');
+      ctx.fillStyle = grad;
+      var r = Math.min(4, barW / 2, Math.max(barH, 1));
+      ctx.beginPath();
+      ctx.moveTo(x, h - padBottom);
+      ctx.lineTo(x, yTop + r);
+      ctx.arcTo(x, yTop, x + r, yTop, r);
+      ctx.lineTo(x + barW - r, yTop);
+      ctx.arcTo(x + barW, yTop, x + barW, yTop + r, r);
+      ctx.lineTo(x + barW, h - padBottom);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = 'rgba(255,255,255,0.42)';
+      ctx.font = '10px "Space Grotesk", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(String(y.year).slice(2), x + barW / 2, h - 6);
+    });
+  }
+
+  function renderPlaces(places) {
+    var section = document.getElementById('placesSection');
+    if (!places.length) { section.style.display = 'none'; return; }
+    var maxC = places.reduce(function (m, p) { return Math.max(m, p.count); }, 0);
+    document.getElementById('placeList').innerHTML = places.map(function (p) {
+      var pct = maxC ? Math.round((p.count / maxC) * 100) : 0;
+      return '<div class="place-row"><span class="name">' + esc(p.name) + '</span>' +
+        '<span class="bar-track"><span class="bar" style="width:' + pct + '%"></span></span>' +
+        '<span class="count">' + p.count + '</span></div>';
+    }).join('');
+  }
+
+  function renderHighlights(d) {
+    var cards = [];
+    if (d.topLoved) {
+      var thumb1 = d.topLoved.url.replace('/img/', '/thumb/') + '?w=500&h=375&q=78&fit=cover';
+      var href1 = '/?month=' + d.topLoved.month + '&day=' + d.topLoved.day;
+      cards.push(
+        '<a class="highlight-card" href="' + href1 + '">' +
+          '<img src="' + escAttr(thumb1) + '" loading="lazy" onload="this.classList.add(\'loaded\')" />' +
+          '<span class="highlight-label">❤️ 最受喜爱</span>' +
+          '<span class="highlight-caption">' + d.topLoved.total + ' 次表态</span>' +
+        '</a>'
+      );
+    }
+    if (d.topScored) {
+      var thumb2 = d.topScored.url.replace('/img/', '/thumb/') + '?w=500&h=375&q=78&fit=cover';
+      var href2 = '/?month=' + d.topScored.month + '&day=' + d.topScored.day;
+      cards.push(
+        '<a class="highlight-card" href="' + href2 + '">' +
+          '<img src="' + escAttr(thumb2) + '" loading="lazy" onload="this.classList.add(\'loaded\')" />' +
+          '<span class="highlight-label">✨ AI 最高分</span>' +
+          (d.topScored.caption ? '<span class="highlight-caption">' + esc(d.topScored.caption) + '</span>' : '') +
+        '</a>'
+      );
+    }
+    document.getElementById('highlights').innerHTML = cards.length
+      ? cards.join('')
+      : '<div class="empty">还没有足够数据生成高光时刻</div>';
+  }
+</script>
+</body>
+</html>

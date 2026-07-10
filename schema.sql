@@ -46,9 +46,22 @@ CREATE TABLE IF NOT EXISTS photo_reactions (
   PRIMARY KEY (key, emoji)
 );
 
--- 照片手记：家人给照片写的文字注解
+-- 照片手记（旧版，单条覆盖式）：已废弃，不再写入。只保留给 ensureAuxTables() 里
+-- 那条一次性迁移 SQL 读取，把老数据搬进下面的 photo_comments，不删表以免丢历史数据
 CREATE TABLE IF NOT EXISTS photo_notes (
   key TEXT PRIMARY KEY,
   note TEXT NOT NULL,
   updated_at TEXT
 );
+
+-- 照片手记（现版，多人评论串）：每张照片可以有多条，各自记作者身份，只能删自己发的
+-- 运行时由 ensureAuxTables() 自动建表，这里只做文档记录
+CREATE TABLE IF NOT EXISTS photo_comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  key TEXT NOT NULL,
+  author_email TEXT NOT NULL DEFAULT '',  -- Cloudflare Access 邮箱；匿名访问为空串，空串评论谁都删不掉
+  author_name TEXT NOT NULL DEFAULT '',   -- 邮箱 @ 前缀，匿名显示"访客"
+  note TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_photo_comments_key ON photo_comments(key);

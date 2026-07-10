@@ -696,16 +696,22 @@
   .lp-small { font-size: 0.68rem; }
   .lp-exif-loading { font-size: 0.72rem; color: #68686e; padding: 1rem 1.2rem; }
 
-  /* 照片手记 */
-  .lp-note-wrap { padding: 0.2rem 1.2rem 0.9rem; display: flex; flex-direction: column; gap: 0.5rem; align-items: flex-start; }
-  .lp-note-text { font-size: 0.78rem; color: #d6d6da; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+  /* 照片手记：多人评论串 */
+  .lp-note-wrap { padding: 0.2rem 1.2rem 0.9rem; display: flex; flex-direction: column; gap: 0.65rem; }
   .lp-note-empty { font-size: 0.72rem; color: #68686e; font-style: italic; }
-  .lp-note-edit {
-    border: none; background: rgba(255,255,255,0.07); color: #9a9a9e;
-    font-size: 0.7rem; font-family: inherit; padding: 0.3rem 0.75rem;
-    border-radius: 999px; cursor: pointer; transition: background 0.15s ease, color 0.15s ease;
+  .lp-comment-list { display: flex; flex-direction: column; gap: 0.6rem; }
+  .lp-comment { position: relative; padding-right: 3rem; }
+  .lp-comment-head { display: flex; align-items: baseline; gap: 0.45rem; margin-bottom: 0.15rem; }
+  .lp-comment-author { font-size: 0.74rem; font-weight: 700; color: #e8e8ec; }
+  .lp-comment-time { font-size: 0.64rem; color: #68686e; font-family: 'Space Grotesk', sans-serif; }
+  .lp-comment-text { font-size: 0.78rem; color: #d6d6da; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+  .lp-comment-del {
+    position: absolute; top: 0; right: 0; border: none; background: none; color: #68686e;
+    font-size: 0.66rem; font-family: inherit; padding: 0.15rem 0.4rem; cursor: pointer;
+    transition: color 0.15s ease;
   }
-  .lp-note-edit:hover { background: rgba(255,255,255,0.14); color: #f5f5f7; }
+  .lp-comment-del:hover { color: #ff6b6b; }
+  .lp-comment-compose { display: flex; flex-direction: column; gap: 0.4rem; }
   .lp-note-input {
     width: 100%; border: none; border-radius: 10px; resize: vertical;
     background: rgba(255,255,255,0.08); color: #f5f5f7;
@@ -713,16 +719,14 @@
     outline: none;
   }
   .lp-note-input:focus { background: rgba(255,255,255,0.12); }
-  .lp-note-btns { display: flex; gap: 0.4rem; }
-  .lp-note-save, .lp-note-cancel {
-    border: none; font-size: 0.72rem; font-family: inherit;
+  .lp-note-input:disabled { opacity: 0.5; }
+  .lp-note-save {
+    align-self: flex-end; border: none; font-size: 0.72rem; font-family: inherit;
     padding: 0.32rem 0.85rem; border-radius: 999px; cursor: pointer;
+    background: rgba(255,255,255,0.85); color: #1c1c1e; font-weight: 600;
     transition: background 0.15s ease;
   }
-  .lp-note-save { background: rgba(255,255,255,0.85); color: #1c1c1e; font-weight: 600; }
   .lp-note-save:hover { background: #fff; }
-  .lp-note-cancel { background: rgba(255,255,255,0.08); color: #9a9a9e; }
-  .lp-note-cancel:hover { background: rgba(255,255,255,0.14); color: #f5f5f7; }
 
   /* 直方图 */
   .lp-histogram-wrap {
