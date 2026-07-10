@@ -609,7 +609,7 @@ async function handleStats(request, env, url) {
 
   const [
     typeRows, yearRows, monthRows, placeRows, locatedRow, dateRange,
-    reactionStats, commentStats, scoreStats, tagRows, topLoved, topScored,
+    reactionStats, commentStats, scoreStats, tagRow, topLoved, topScored,
   ] = await Promise.all([
     env.DB.prepare("SELECT type, COUNT(*) AS c FROM photos_index GROUP BY type").all(),
     env.DB.prepare("SELECT year, COUNT(*) AS c FROM photos_index GROUP BY year ORDER BY year").all(),
@@ -622,10 +622,16 @@ async function handleStats(request, env, url) {
     env.DB.prepare(
       "SELECT COUNT(*) AS scored, AVG(score) AS avg, SUM(has_face) AS withFace FROM photo_scores WHERE score IS NOT NULL"
     ).first(),
-    // tags 是逗号拼接存的（一张照片最多 3 个），SQLite 没有现成的拆分聚合函数，
-    // 就把非空的原始字符串都取出来，在 JS 里拆开计数——量级只有"已打标签的照片数"这么多行，
-    // 拆分计数在内存里做完全没有压力
-    env.DB.prepare("SELECT tags FROM photo_scores WHERE tags IS NOT NULL AND tags != ''").all(),
+    // tags 是逗号拼接存的（一张照片最多 3 个），SQLite 没有现成的拆分聚合函数；
+    // 标签是固定小词表（PHOTO_TAGS）且词与词互不为子串，直接在 SQL 侧按词 LIKE 聚合、
+    // 一行返回全部计数——把全表非空 tags 拉进 JS 拆分的话，库一大会撞 D1 单次查询的
+    // 返回行数上限（统计被静默截断）和 Workers 内存上限。SQL 从词表数组生成，
+    // 词表增删时这里自动跟上；词表是代码里的常量，不存在注入面
+    env.DB.prepare(
+      "SELECT " +
+      PHOTO_TAGS.map((t, i) => `SUM(CASE WHEN tags LIKE '%${t}%' THEN 1 ELSE 0 END) AS t${i}`).join(", ") +
+      " FROM photo_scores WHERE tags IS NOT NULL AND tags != ''"
+    ).first(),
     // 只挑图片：视频/实况即使表态最多，/thumb/ 也生不出静态缩略图，卡片会显示裂图
     env.DB.prepare(
       `SELECT pr.key AS key, SUM(pr.count) AS total, pi.month, pi.day FROM photo_reactions pr
@@ -649,14 +655,10 @@ async function handleStats(request, env, url) {
     if (r.c > topMonthCount) { topMonthCount = r.c; topMonth = parseInt(r.month, 10); }
   }
 
-  const tagCounts = {};
-  for (const r of tagRows.results) {
-    for (const t of r.tags.split(",")) {
-      if (t) tagCounts[t] = (tagCounts[t] || 0) + 1;
-    }
-  }
-  const tags = Object.entries(tagCounts)
-    .map(([name, count]) => ({ name, count }))
+  // SQL 聚合返回单行 { t0: n, t1: n, ... }，按词表下标映射回标签名
+  const tags = PHOTO_TAGS
+    .map((name, i) => ({ name, count: (tagRow && tagRow[`t${i}`]) || 0 }))
+    .filter((it) => it.count > 0)
     .sort((a, b) => b.count - a.count)
     .slice(0, 8);
 
@@ -2524,12 +2526,18 @@ async function loadScoresForKeys(env, keys) {
 
 async function saveScore(env, key, info) {
   // attempts 每写一次 +1：打分成功（文案有中文+标签已生成）后这行不再匹配 NEEDS_SCORE_SQL，计数无所谓；
-  // 一直失败的照片计数涨到 SCORE_RETRY_LIMIT 后退出自动重试队列
+  // 一直失败的照片计数涨到 SCORE_RETRY_LIMIT 后退出自动重试队列。
+  // info.failed（AI 调用抛错的兜底结果）时，冲突分支只更新 raw_response/updated_at/attempts，
+  // 绝不覆盖已有的 score/caption/tags——标签回填会把打过分的好记录重新送进队列，
+  // 一次 AI 超时如果照常 DO UPDATE 全量覆盖，存量的高质量评分和中文文案会被兜底值
+  // （score=5/caption 空）整个抹掉，这是真实的数据丢失
+  const conflictSet = info.failed
+    ? "raw_response = excluded.raw_response, updated_at = excluded.updated_at, attempts = photo_scores.attempts + 1"
+    : "score = excluded.score, has_face = excluded.has_face, caption = excluded.caption, tags = excluded.tags, " +
+      "raw_response = excluded.raw_response, updated_at = excluded.updated_at, attempts = photo_scores.attempts + 1";
   await env.DB.prepare(
     "INSERT INTO photo_scores (key, score, has_face, caption, tags, raw_response, updated_at, attempts) VALUES (?, ?, ?, ?, ?, ?, ?, 1) " +
-      "ON CONFLICT(key) DO UPDATE SET score = excluded.score, has_face = excluded.has_face, " +
-      "caption = excluded.caption, tags = excluded.tags, raw_response = excluded.raw_response, updated_at = excluded.updated_at, " +
-      "attempts = photo_scores.attempts + 1"
+      `ON CONFLICT(key) DO UPDATE SET ${conflictSet}`
   )
     .bind(key, info.score, info.hasFace ? 1 : 0, info.caption || "", info.tags || "", info.rawResponse || "", new Date().toISOString())
     .run();
@@ -2638,7 +2646,8 @@ async function scoreOnePhoto(env, key) {
     const tags = parseTags(text);
     return { score, hasFace, caption, tags, rawResponse: text };
   } catch (err) {
-    return { score: 5, hasFace: false, caption: "", tags: "", rawResponse: String(err && err.message ? err.message : err) };
+    // failed 标记让 saveScore 走"只记录失败、不覆盖已有数据"的分支（见 saveScore 注释）
+    return { score: 5, hasFace: false, caption: "", tags: "", rawResponse: String(err && err.message ? err.message : err), failed: true };
   }
 }
 
@@ -2668,16 +2677,17 @@ function needsScoring(scores, key) {
 // "文案没有中文"用 字节数==字符数（纯 ASCII）近似：有中文时 UTF-8 字节数必然大于字符数。
 // 跟正则 /[一-鿿]/ 的口径差在纯 emoji/带音标文案会被当成"有内容"，但文案是提示词约定的中文，
 // 实际打出来不会是那两种。
-// s.tags IS NULL 这条是给 AI 分类标签功能上线时做的一次性存量回填：老记录这一列是 NULL，
-// 只要被 scoreOnePhoto 重新处理一次，saveScore 就会把它写成非 NULL（哪怕是空字符串），
-// 这个条件自然只命中一轮，不会跟 attempts 重试限制搅在一起、也不会死循环
+// s.tags IS NULL 这条是给 AI 分类标签功能上线时做的存量回填：老记录这一列是 NULL，
+// 打分成功一次 saveScore 就会写成非 NULL（哪怕是空字符串），条件自然清除。
+// tags 分支必须跟 caption 分支一起套在 attempts 上限里——saveScore 对失败结果不再覆盖数据
+// （tags 保持 NULL），没有上限的话顽固失败的照片会靠这个分支无限重试。
 // attempts 上限：AI 持续失败/文案怎么翻都不是中文的照片，重试这么多次之后不再进队列——
 // findUnscoredKeys 无排序（rowid 稳定），没有上限的话队首几张顽固失败的照片会永久霸占
 // 每一批（跟之前查地点卡死是同一个病），打分流水线整个停摆还白烧 AI 配额。
 // 到上限的照片可在运维控制台「重新打分」（会先删行，计数归零）
 const SCORE_RETRY_LIMIT = 5;
 const NEEDS_SCORE_SQL =
-  "(s.key IS NULL OR s.tags IS NULL OR ((s.caption IS NULL OR s.caption = '' OR length(CAST(s.caption AS BLOB)) = length(s.caption)) " +
+  "(s.key IS NULL OR ((s.tags IS NULL OR s.caption IS NULL OR s.caption = '' OR length(CAST(s.caption AS BLOB)) = length(s.caption)) " +
   `AND COALESCE(s.attempts, 0) < ${SCORE_RETRY_LIMIT}))`;
 
 async function findUnscoredKeys(env, { month, day, limit }) {
