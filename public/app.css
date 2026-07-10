@@ -597,7 +597,6 @@
     display: flex; flex-direction: column; z-index: 200;
     opacity: 0; visibility: hidden; pointer-events: none;
     transition: opacity 0.25s ease;
-    touch-action: pinch-zoom;
   }
   .lightbox.open { opacity: 1; visibility: visible; pointer-events: auto; }
 
@@ -768,7 +767,11 @@
   /* 灯箱面板始终保持深色主题，photo viewer 不跟随日照模式反色 */
 
   /* 缩放状态游标 */
-  #lightboxBody { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+  /* touch-action:none——捏合缩放/双击缩放/横滑切图全部交给 JS 的 pointerdown/move/up 处理
+     （见 app.js）。之前 .lightbox 上的 touch-action:pinch-zoom 把捏合手势交给浏览器原生处理，
+     但 viewport 的 maximum-scale=1 把原生缩放完全锁死（捏了也不会有任何视觉变化），
+     还会让浏览器把双击当成"尝试原生缩放"吞掉，dblclick 事件干脆不触发——双指、双击缩放两个都失效 */
+  #lightboxBody { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; touch-action: none; }
   /* 双保险：CSS 层面也禁掉图片原生拖拽（dragstart preventDefault 之外的兜底） */
   #lightboxBody img { -webkit-user-drag: none; }
   #lightboxBody.zoomed { cursor: grab; }

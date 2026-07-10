@@ -81,7 +81,14 @@ export default {
 
     // ── 运维控制台：整站在 Cloudflare Access 后面，页面和接口都不再单独校验 token ──
     if (url.pathname === "/admin/ops") {
-      return env.ASSETS.fetch(new Request(new URL("/admin-ops.html", request.url), request));
+      // 之前文件叫 admin-ops.html，跟 URL 路径 /admin/ops 的目录结构对不上，静态资产
+      // 服务找不到匹配项才落到这里；这里又显式拼了 /admin-ops.html 再 fetch——带 .html
+      // 后缀的请求会被 Cloudflare 静态资产服务 307 重定向回不带后缀的规范路径，
+      // 由于这条路由没在 run_worker_first 里、每次都会再落回这个 Worker handler，
+      // 死循环，浏览器报"重定向次数过多"，运维控制台完全进不去。
+      // 现在文件已经挪到 public/admin/ops.html（跟 URL 结构对齐），直接 fetch 原始
+      // request（不拼后缀）就能走清爽 URL 解析命中，不再需要显式拼路径
+      return env.ASSETS.fetch(request);
     }
     if (url.pathname === "/admin/ops-status") {
       return handleOpsStatus(request, env, url);
@@ -161,7 +168,12 @@ export default {
     }
 
     if (url.pathname === "/map") {
-      const mapHtmlResp = await env.ASSETS.fetch(new Request(new URL("/map.html", request.url), request));
+      // 注意：这里必须 fetch 原始 request（路径就是 /map，不带后缀）——
+      // 之前显式拼过 /map.html 再 fetch，Cloudflare 静态资产服务对"带 .html 后缀的请求"
+      // 会自动 307 重定向到不带后缀的规范路径（也就是 /map 自己）；而 /map 又在
+      // run_worker_first 里强制走 Worker，Worker 再次请求 /map.html，再次被重定向，
+      // 死循环，浏览器报"重定向次数过多"，地图页完全进不去
+      const mapHtmlResp = await env.ASSETS.fetch(request);
       const mapToken = JSON.stringify(env.MAPBOX_PUBLIC_TOKEN || "").replace(/<\//g, "<\\/");
       return new HTMLRewriter()
         .on("head", {
@@ -3034,7 +3046,7 @@ async function handleBackfillPhotosIndex(request, env, url) {
 }
 
 // ---------- 运维控制台 API：状态总览 / 照片查询 / 数据修复 ----------
-// 控制台页面在 public/admin-ops.html（/admin/ops 路由直出）。站点整体在 Cloudflare Access
+// 控制台页面在 public/admin/ops.html（/admin/ops 路由直出）。站点整体在 Cloudflare Access
 // 后面，管理接口和相簿时期的决策一致：不再单独校验 token
 
 // 系统状态总览：索引量、待打分/待查地点积压、推送队列、后台任务标记位
