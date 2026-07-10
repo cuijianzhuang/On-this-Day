@@ -779,6 +779,8 @@ async function handleSearch(request, env, url) {
       headers: { "content-type": "application/json; charset=utf-8" },
     });
   }
+  // 查询里有 ps.tags 列，老库要先补列（同 loadScoresForKeys 的注释）
+  await ensureAuxTables(env);
   // 转义 LIKE 元字符，用户输入的 % _ 按字面匹配
   const like = "%" + q.replace(/[\\%_]/g, (m) => "\\" + m) + "%";
   const { results } = await env.DB.prepare(
@@ -2495,6 +2497,10 @@ function chunkArray(arr, size) {
 // 只查指定 key 列表（用于 /api/memories：一天命中的照片就几十张，不用每次把整张表读出来）
 async function loadScoresForKeys(env, keys) {
   if (keys.length === 0) return {};
+  // SELECT 里有 tags 列，老库要先由 ensureAuxTables 补列——这是首页 /api/memories 的
+  // 必经之路，部署后如果只指望 Cron 那边先跑到 ALTER，最长 15 分钟内首页每个请求都会
+  // 因 "no such column: tags" 直接 500，整站等于挂了（memo 化，稳态只是一次布尔判断）
+  await ensureAuxTables(env);
   const batches = await Promise.all(
     chunkArray(keys, 100).map((batch) => {
       const placeholders = batch.map(() => "?").join(",");
