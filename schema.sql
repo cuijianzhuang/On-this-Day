@@ -4,7 +4,8 @@ CREATE TABLE IF NOT EXISTS photo_scores (
   has_face INTEGER NOT NULL DEFAULT 0,
   caption TEXT,
   raw_response TEXT,
-  updated_at TEXT
+  updated_at TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0  -- 打分次数：文案一直不达标（AI 失败/翻不成中文）的照片到上限后退出自动重试队列；老库由 ensureAuxTables() 运行时 ALTER 补列
 );
 
 CREATE TABLE IF NOT EXISTS photo_places (

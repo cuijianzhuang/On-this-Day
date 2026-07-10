@@ -384,6 +384,11 @@ async function ensureAuxTables(env) {
       "CREATE INDEX IF NOT EXISTS idx_photos_index_year ON photos_index(year)"
     ),
   ]);
+  // 打分重试计数列（见 NEEDS_SCORE_SQL）：老库没有这一列，SQLite 的 ALTER 不支持
+  // IF NOT EXISTS，靠"列已存在就报错"这一点保证只加一次，重复执行吞掉错误即可
+  try {
+    await env.DB.prepare("ALTER TABLE photo_scores ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0").run();
+  } catch { /* 列已存在 */ }
   _auxTablesReady = true;
 }
 
@@ -866,7 +871,11 @@ async function runBackgroundMaintenance(env) {
     while (Date.now() < locateDeadline) {
       const unlocated = await collectCandidates(env, findUnlocatedKeys, priorityDays, BATCH_SIZE);
       if (unlocated.length === 0) break;
-      beat.located += await enrichLocations(env, unlocated);
+      const n = await enrichLocations(env, unlocated);
+      beat.located += n;
+      // 整批一张都没落库（大概率地理编码被限流）：下一轮 collectCandidates 还是同一批，
+      // 别在剩余预算里空转硬刷 Mapbox，等下一趟 Cron 再来
+      if (n === 0) break;
     }
     if (beat.located > 0) console.log(`locate loop: ${beat.located} photos processed`);
   } catch (err) {
@@ -1359,12 +1368,14 @@ async function getCapturedMonthDay(bucket, key) {
   if (!result || !result.month || !result.day) {
     const head = await bucket.head(key);
     if (head && head.uploaded) {
-      const d = new Date(head.uploaded);
+      // 兜底日期按北京时间（UTC+8）取，跟 bjToday()/推送/索引展示的口径一致——
+      // 直接 getFullYear() 在 Workers（UTC）上会把北京 0-8 点上传的照片记到前一天
+      const d = new Date(new Date(head.uploaded).getTime() + 8 * 3600 * 1000);
       result = {
         ...(result || {}),
-        year: String(d.getFullYear()),
-        month: String(d.getMonth() + 1).padStart(2, "0"),
-        day: String(d.getDate()).padStart(2, "0"),
+        year: String(d.getUTCFullYear()),
+        month: String(d.getUTCMonth() + 1).padStart(2, "0"),
+        day: String(d.getUTCDate()).padStart(2, "0"),
       };
     }
   }
@@ -1944,7 +1955,11 @@ const MIME_TYPES = {
 
 // ---------- 图片代理 ----------
 async function handleImage(request, env, url) {
-  const key = decodeURIComponent(url.pathname.replace(/^\/img\//, ""));
+  // 畸形百分号序列（如 /img/%E0%A4%A）会让 decodeURIComponent 抛 URIError，
+  // 不接住就是 1101 内部错误而不是 400
+  let key;
+  try { key = decodeURIComponent(url.pathname.replace(/^\/img\//, "")); }
+  catch { return new Response("Bad Request", { status: 400 }); }
   if (!key) return new Response("Bad Request", { status: 400 });
 
   // 视频播放（哪怕只是 preload="metadata" 取个封面帧）天生靠 Range 请求局部读取文件，
@@ -1969,9 +1984,11 @@ async function handleImage(request, env, url) {
   headers.set("content-type", MIME_TYPES[ext] || "application/octet-stream");
   headers.set("accept-ranges", "bytes"); // 告诉浏览器这个资源支持区间请求，视频才会用 Range 来读
   if (url.searchParams.get("dl") === "1") {
-    // 下载模式：附带文件名触发浏览器另存为
+    // 下载模式：附带文件名触发浏览器另存为。用 RFC 5987 的 filename*——
+    // HTTP 头值只接受 ISO-8859-1，中文文件名塞进 filename="…" 会让 headers.set
+    // 直接抛错（整个请求 500），文件名里的引号也会把头值截断
     const filename = key.split("/").pop();
-    headers.set("content-disposition", `attachment; filename="${filename}"`);
+    headers.set("content-disposition", `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
   } else {
     // 强制 inline，避免浏览器把 R2 上传时附带的 content-disposition: attachment 带过来触发下载
     headers.set("content-disposition", "inline");
@@ -2012,11 +2029,24 @@ async function handleImageRange(env, key, rangeHeader, url) {
   }
 
   const match = rangeHeader.match(/bytes=(\d*)-(\d*)/);
-  if (!match) return new Response("Invalid Range", { status: 416 });
+  if (!match || (!match[1] && !match[2])) return new Response("Invalid Range", { status: 416 });
 
-  let start = match[1] ? parseInt(match[1], 10) : 0;
-  let end = match[2] ? parseInt(match[2], 10) : totalSize - 1;
-  if (start >= totalSize || end >= totalSize || start > end) {
+  let start, end;
+  if (!match[1]) {
+    // 后缀语义 bytes=-N 是"最后 N 字节"，不是 0..N——之前按 start=0 解析，
+    // 播放器要文件尾部的 moov box 却拿到了文件开头
+    const suffixLen = Math.min(parseInt(match[2], 10), totalSize);
+    if (suffixLen === 0) {
+      return new Response("Range Not Satisfiable", { status: 416, headers: { "content-range": `bytes */${totalSize}` } });
+    }
+    start = totalSize - suffixLen;
+    end = totalSize - 1;
+  } else {
+    start = parseInt(match[1], 10);
+    // 规范要求 end 越界时截到文件末尾而不是 416——浏览器经常发超长区间探测
+    end = match[2] ? Math.min(parseInt(match[2], 10), totalSize - 1) : totalSize - 1;
+  }
+  if (start >= totalSize || start > end) {
     return new Response("Range Not Satisfiable", { status: 416, headers: { "content-range": `bytes */${totalSize}` } });
   }
 
@@ -2184,7 +2214,10 @@ async function generateHeicPreview(env, key) {
 
 
 async function handleThumb(request, env, url) {
-  const origKey = decodeURIComponent(url.pathname.replace(/^\/thumb\//, ""));
+  // 同 handleImage：畸形百分号序列要接住，返回 400 而不是 1101
+  let origKey;
+  try { origKey = decodeURIComponent(url.pathname.replace(/^\/thumb\//, "")); }
+  catch { return new Response("Bad Request", { status: 400 }); }
   if (!origKey) return new Response("Bad Request", { status: 400 });
 
   const width  = Math.min(Math.max(Number(url.searchParams.get("w")) || 400, 1), 2000);
@@ -2194,7 +2227,9 @@ async function handleThumb(request, env, url) {
   // 存进 PREVIEWS 的 WebP 缩略图路径：thumbs/{尺寸}/{原始路径去扩展名}.webp
   const dimStr   = height ? `${width}x${height}` : `${width}`;
   const thumbKey = `thumbs/${dimStr}/${origKey.replace(/\.[^.]+$/, "")}.webp`;
-  const publicUrl = `${env.PREVIEWS_PUBLIC_URL}/${thumbKey}`;
+  // 302 的 Location 必须逐段 encode（跟 HEIC 预览兜底那条路径一致）——
+  // 文件名带空格/#/非 ASCII 时裸拼出来的 Location 头是坏的（# 后面整段被当 fragment 丢掉）
+  const publicUrl = `${env.PREVIEWS_PUBLIC_URL}/${thumbKey.split("/").map(encodeURIComponent).join("/")}`;
 
   // 先查边缘缓存（302 本身也可以缓存，省掉每次的 PREVIEWS.head 调用）
   const cacheKey = new Request(`https://thumb-redirect/${thumbKey}`);
@@ -2300,10 +2335,13 @@ async function loadScoresForKeys(env, keys) {
 }
 
 async function saveScore(env, key, info) {
+  // attempts 每写一次 +1：打分成功（文案有中文）后这行不再匹配 NEEDS_SCORE_SQL，计数无所谓；
+  // 一直失败的照片计数涨到 SCORE_RETRY_LIMIT 后退出自动重试队列
   await env.DB.prepare(
-    "INSERT INTO photo_scores (key, score, has_face, caption, raw_response, updated_at) VALUES (?, ?, ?, ?, ?, ?) " +
+    "INSERT INTO photo_scores (key, score, has_face, caption, raw_response, updated_at, attempts) VALUES (?, ?, ?, ?, ?, ?, 1) " +
       "ON CONFLICT(key) DO UPDATE SET score = excluded.score, has_face = excluded.has_face, " +
-      "caption = excluded.caption, raw_response = excluded.raw_response, updated_at = excluded.updated_at"
+      "caption = excluded.caption, raw_response = excluded.raw_response, updated_at = excluded.updated_at, " +
+      "attempts = photo_scores.attempts + 1"
   )
     .bind(key, info.score, info.hasFace ? 1 : 0, info.caption || "", info.rawResponse || "", new Date().toISOString())
     .run();
@@ -2393,11 +2431,18 @@ function needsScoring(scores, key) {
 // photo_scores（含 raw_response 大文本列）读进内存逐个过滤——那是 Cron 里最大的内存包袱。
 // "文案没有中文"用 字节数==字符数（纯 ASCII）近似：有中文时 UTF-8 字节数必然大于字符数。
 // 跟正则 /[一-鿿]/ 的口径差在纯 emoji/带音标文案会被当成"有内容"，但文案是提示词约定的中文，
-// 实际打出来不会是那两种
+// 实际打出来不会是那两种。
+// attempts 上限：AI 持续失败/文案怎么翻都不是中文的照片，重试这么多次之后不再进队列——
+// findUnscoredKeys 无排序（rowid 稳定），没有上限的话队首几张顽固失败的照片会永久霸占
+// 每一批（跟之前查地点卡死是同一个病），打分流水线整个停摆还白烧 AI 配额。
+// 到上限的照片可在运维控制台「重新打分」（会先删行，计数归零）
+const SCORE_RETRY_LIMIT = 5;
 const NEEDS_SCORE_SQL =
-  "(s.key IS NULL OR s.caption IS NULL OR s.caption = '' OR length(CAST(s.caption AS BLOB)) = length(s.caption))";
+  "(s.key IS NULL OR ((s.caption IS NULL OR s.caption = '' OR length(CAST(s.caption AS BLOB)) = length(s.caption)) " +
+  `AND COALESCE(s.attempts, 0) < ${SCORE_RETRY_LIMIT}))`;
 
 async function findUnscoredKeys(env, { month, day, limit }) {
+  await ensureAuxTables(env); // NEEDS_SCORE_SQL 引用 attempts 列，老库要先补列
   const conds = ["i.type = 'image'", NEEDS_SCORE_SQL];
   const binds = [];
   if (month && day) { conds.push("i.month = ?", "i.day = ?"); binds.push(month, day); }
@@ -2444,6 +2489,7 @@ async function collectCandidates(env, findFn, priorityDays, poolSize) {
 
 // 给一批 key 打分并存进 D1（内部会跳过已经打过分+有文案的 key），返回这次实际处理了几张
 async function scoreKeys(env, keys) {
+  await ensureAuxTables(env); // saveScore 写 attempts 列，老库要先补列
   const scores = await loadScoresForKeys(env, keys);
   const toScore = keys.filter((key) => needsScoring(scores, key));
   for (const key of toScore) {
@@ -2509,7 +2555,10 @@ async function getExifGps(bucket, key) {
 }
 
 // 用 Mapbox 的 Geocoding API 把经纬度转成地名。这里用的是 secret token，只在服务端调用，
-// 绝不能把它放进前端代码（前端地图页用的是另一个 public token）
+// 绝不能把它放进前端代码（前端地图页用的是另一个 public token）。
+// 失败（限流/网络/token 问题）返回 null，跟"查成功但这片区域没有地名"（空字符串）严格区分——
+// 调用方对 null 不落库、留给下一批重试；之前失败也返回 ""，批量跑的时候撞一次 429，
+// 这张照片的地名就永久空了（行已存在，不会再被 findUnlocatedKeys 选中）
 async function reverseGeocode(env, lat, lon) {
   try {
     const url =
@@ -2518,23 +2567,24 @@ async function reverseGeocode(env, lat, lon) {
     const resp = await fetch(url);
     if (!resp.ok) {
       console.error("reverseGeocode failed", resp.status, await resp.text(), "lat/lon:", lat, lon, "token set:", !!env.MAPBOX_TOKEN);
-      return "";
+      return null;
     }
     const data = await resp.json();
     const feature = data.features && data.features[0];
     return (feature && feature.text) || "";
   } catch (err) {
     console.error("reverseGeocode threw", err);
-    return "";
+    return null;
   }
 }
 
-// 给一批 key 查地点并存回 R2（内部会跳过已经查过的 key，不管查到没查到都算"查过"）
-// 返回这次实际处理了几张。视频跳过，没有 GPS 信息的也会记一个空结果，避免下次又重新查一遍
+// 给一批 key 查地点并存进 D1（内部会跳过已经查过的 key，不管查到没查到都算"查过"）
+// 返回这次实际落库了几张。视频跳过，没有 GPS 信息的也会记一个空结果，避免下次又重新查一遍
 // 存的是 {lat, lon, name}（不只是地名文字），这样地图页才能直接拿来打点，不用再重新读一遍 EXIF
 async function enrichLocations(env, keys) {
   const places = await loadPlacesForKeys(env, keys);
   const toProcess = keys.filter((key) => !(key in places) && IMAGE_EXT.test(key));
+  let saved = 0;
   for (const key of toProcess) {
     // 单张隔离：EXIF 解析/R2 读取抛错时记一行空结果让队列前进，否则一张坏照片
     // 会让每次 Cron 都在同一批卡死（findUnlocatedKeys 无排序，坏照片永远排最前）。
@@ -2543,16 +2593,21 @@ async function enrichLocations(env, keys) {
       const gps = await getExifGps(env.PHOTOS, key);
       if (gps) {
         const name = await reverseGeocode(env, gps.lat, gps.lon);
+        // 地理编码临时失败（限流/网络）：不落库，这张留给下一批重试——
+        // 这时候落一行空地名会把"有 GPS 的照片"永久固化成没有地名
+        if (name === null) continue;
         await savePlace(env, key, { lat: gps.lat, lon: gps.lon, name });
       } else {
         await savePlace(env, key, { lat: null, lon: null, name: "" });
       }
+      saved++;
     } catch (err) {
       console.error("enrichLocations: failed on", key, err);
       await savePlace(env, key, { lat: null, lon: null, name: "" });
+      saved++;
     }
   }
-  return toProcess.length;
+  return saved;
 }
 
 // 管理端点：每次调用只处理一小批未打分的照片（避免单次请求超时/超 CPU 限制），
@@ -2582,29 +2637,37 @@ async function handleScorePhotos(request, env, url) {
 // 历史积压图片批量触发 Workflow，解决两个 backlog 场景：
 //   1. 普通 JPEG 未打分：直接触发，Workflow step 3 打分
 //   2. 历史 HEIC 无预览图（cron 只转今天的）：Workflow step 2 先转码，step 3 再打分
-// 每次调用触发 limit 张（默认 50，上限 200），多次调用直到 remaining=0
+// 每次调用触发 limit 张（默认 50，上限 200），调用方拿 lastKey 作为下一批的 after 翻页，
+// 直到 attempted=0
 async function handleBackfillWorkflows(request, env, url) {
   const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 200);
-  const offset = Math.max(0, Number(url.searchParams.get("offset")) || 0);
+  const after = url.searchParams.get("after") || "";
 
-  // ORDER BY pi.key 保证分页顺序稳定；OFFSET 由调用方递增，每批推进一页，
-  // 不受"照片是否已打完分"影响——循环的停止条件是"这一页已没有照片"而非 remaining=0。
+  // keyset 分页（pi.key > after）：游标是 key 本身而不是行位置。之前用 OFFSET——
+  // 循环期间早批触发的 Workflow 陆续打完分，行从 "ps.key IS NULL" 过滤集里消失、
+  // 后面的行前移，而 offset 照常递增，中间的照片被整页跳过（"全部已触发"是假的）。
+  // keyset 游标不受过滤集收缩影响，行消失只会让后续页变短，不会跳行
   const { results } = await env.DB.prepare(
     "SELECT pi.key FROM photos_index pi " +
     "LEFT JOIN photo_scores ps ON pi.key = ps.key " +
-    "WHERE pi.type = 'image' AND ps.key IS NULL " +
-    "ORDER BY pi.key LIMIT ? OFFSET ?"
-  ).bind(limit, offset).all();
+    "WHERE pi.type = 'image' AND ps.key IS NULL AND pi.key > ? " +
+    "ORDER BY pi.key LIMIT ?"
+  ).bind(after, limit).all();
 
-  // 用确定性实例 ID 避免同一照片被重复触发；已有运行中 Workflow 的照片 catch 住跳过
+  // 确定性实例 ID 防同一照片重复触发。用 key 的哈希而不是 key 本身截断——
+  // 之前 slice(0,64) 在长文件名下会把不同照片截成同一个 ID，冲突的那张静默永不触发；
+  // 再带上当天日期：Workflows 实例 ID 在保留期内永久唯一（含已完成/已失败的实例），
+  // 纯 key 派生的 ID 一旦用过，失败的照片就永远无法重触发，带日期则隔天自然解锁
+  const day = new Date().toISOString().slice(0, 10).replace(/-/g, "");
   let triggered = 0;
   for (const { key } of results) {
-    const instanceId = ("bf-" + key).replace(/[^a-zA-Z0-9\-_]/g, "-").slice(0, 64);
+    const digest = createHash("sha256").update(key).digest("hex").slice(0, 16);
+    const instanceId = `bf-${digest}-${day}`;
     try {
       await env.PHOTO_WORKFLOW.create({ params: { key }, id: instanceId });
       triggered++;
     } catch {
-      // 已有运行中的 Workflow 实例，跳过
+      // 今天已为这张照片建过实例（运行中或刚失败），跳过
     }
   }
 
@@ -2614,12 +2677,18 @@ async function handleBackfillWorkflows(request, env, url) {
     "WHERE pi.type = 'image' AND ps.key IS NULL"
   ).first();
 
-  // attempted: 本页实际取到的行数，调用方用它判断是否已翻到末尾（=0 则全部触发完毕）
-  return Response.json({ triggered, attempted: results.length, remaining: remainRow.n });
+  // attempted: 本页实际取到的行数（=0 则全部触发完毕）；lastKey: 下一批的 after 游标
+  return Response.json({
+    triggered,
+    attempted: results.length,
+    lastKey: results.length ? results[results.length - 1].key : null,
+    remaining: remainRow.n,
+  });
 }
 
 // 管理端点：跟 /admin/score-photos 同样的批处理思路，把存量照片库的拍摄地点一次性查完。
-// 因为要遵守 Nominatim 1 次/秒的限速，limit 故意给得比打分接口小一点，避免单次请求跑太久超时
+// Mapbox Geocoding 有分钟级限速（免费档 600 次/分钟），limit 故意给得比打分接口小一点，
+// 避免单次请求跑太久超时；被限流的照片 enrichLocations 不落库，下一批自动重试
 async function handleLocatePhotos(request, env, url) {
   const limit = Math.min(Number(url.searchParams.get("limit")) || 10, 20);
 

@@ -1918,14 +1918,17 @@
         content.querySelectorAll('.cell').forEach((cell) => cellObserver.observe(cell));
         content.querySelectorAll('.cell video[data-src]').forEach((v) => videoLazyObserver.observe(v));
 
-        // "跳到某一年"下拉菜单：照片加载完才知道有哪些年份，这时候再填充菜单内容、解锁按钮
+        // "跳到某一年"下拉菜单：照片加载完才知道有哪些年份，这时候再填充菜单内容、解锁按钮。
+        // 菜单必须跟正在展示的年份块（visibleYears/yearPrefix）同一套——农历模式渲染的块
+        // id 是 lunar-year-YYYY，之前菜单固定用公历的 data.years + 'year-' 前缀，
+        // 农历模式下点年份找不到元素，滚动没反应、份数也是公历的数
         yearToggle.disabled = false;
-        yearMenu.innerHTML = data.years.map((y, i) =>
+        yearMenu.innerHTML = visibleYears.map((y, i) =>
           '<button style="animation-delay:' + (i * 0.05) + 's" onclick="jumpToYear(' + y.year + ')"><span class="y">' + y.year + ' 年</span>' +
           '<span class="c">' + y.photos.length + ' 份</span></button>'
         ).join('');
         window.jumpToYear = function (year) {
-          const el = document.getElementById('year-' + year);
+          const el = document.getElementById(yearPrefix + year);
           if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 24, behavior: 'smooth' });
           yearMenu.classList.remove('open');
         };

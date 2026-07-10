@@ -14,6 +14,10 @@ routes = [
 [assets]
 directory = "./public"
 binding = "ASSETS"
+# 静态资产默认"资产优先"：请求命中资产时 Worker 根本不会执行。map.html 拆成静态文件后，
+# /map 会被 html_handling 直接映射到 map.html 应答，Worker 里的 MAPBOX_TOKEN 注入被短路，
+# 地图整个挂掉；"/" 同理被 index.html 短路，og meta 注入不生效。这两个路径必须强制先走 Worker
+run_worker_first = ["/", "/map"]
 
 # 实时共享房间：每个日期一个 DO 实例，处理 WebSocket 连接 + 持久化点赞数据
 [[durable_objects.bindings]]
