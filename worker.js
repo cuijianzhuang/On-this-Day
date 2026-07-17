@@ -131,6 +131,10 @@ export default {
       return handleSearch(request, env, url);
     }
 
+    if (url.pathname === "/api/bot/query") {
+      return handleBotQuery(request, env, url);
+    }
+
     if (url.pathname === "/api/note") {
       return handleNote(request, env, url);
     }
@@ -808,6 +812,94 @@ async function handleSearch(request, env, url) {
       "content-type": "application/json; charset=utf-8",
       "cache-control": "public, max-age=300",
     },
+  });
+}
+
+// ── 互动 bot 查询接口 ─────────────────────────────────────────────────────────
+// 给 Telegram Serverless 侧的 bot handler 用（设计文档见 TELEGRAM-BOT.md）。
+// 架构原则：bot 是哑管道，意图解析和数据查询全部在这里做——逻辑留在有 D1/R2 的
+// 这一侧（可本地测试、复用现有函数），Telegram 侧只剩转发和渲染，越薄越好。
+// 返回的照片 URL 是 PREVIEWS 公开桶的 tg/ 直链（复用每日推送的 tgPhotoUrl）——
+// Telegram 服务器要能直接抓图，而站点本身在 Cloudflare Access 后面它抓不到。
+// 鉴权：整站 Cloudflare Access，bot 侧带 Access Service Token 调用（控制台建
+// token 做机器对机器放行），Worker 代码不做额外校验，与 /admin/* 的决策一致
+async function handleBotQuery(request, env, url) {
+  await ensureAuxTables(env);
+  const q = (url.searchParams.get("q") || "").trim().slice(0, 40);
+
+  // 意图解析：今天/空 → 那年今日；"M月D日"/"M-D" → 指定日期；
+  // 随机/惊喜 → 随机挑一个有照片的日子；其他 → 关键词搜索（文案/地名/标签）
+  let month = null, day = null, mode = "search";
+  const dateMatch = q.match(/^(\d{1,2})\s*[月\-\/.]\s*(\d{1,2})\s*日?$/);
+  if (!q || q === "今天" || /^\/?(today|start)$/i.test(q)) {
+    ({ month, day } = bjToday());
+    mode = "day";
+  } else if (dateMatch && Number(dateMatch[1]) >= 1 && Number(dateMatch[1]) <= 12 && Number(dateMatch[2]) >= 1 && Number(dateMatch[2]) <= 31) {
+    month = String(dateMatch[1]).padStart(2, "0");
+    day = String(dateMatch[2]).padStart(2, "0");
+    mode = "day";
+  } else if (/^\/?(随机|惊喜|random|surprise)$/i.test(q)) {
+    // 只在"有照片的日子"里随机，抽不到空日子
+    const row = await env.DB.prepare(
+      "SELECT month, day FROM photos_index WHERE type = 'image' GROUP BY month, day ORDER BY RANDOM() LIMIT 1"
+    ).first();
+    if (row) { month = row.month; day = row.day; mode = "day"; }
+  }
+
+  const PHOTO_LIMIT = 5; // 跟每日推送同一口径：最多带 5 张，多的引导去网页看
+  let rows = [], total = 0, text = "";
+
+  if (mode === "day" && month && day) {
+    // 选片逻辑与 sendDailyMemories 一致：有分的按分数优先，没分的按上传时间补位
+    const { results } = await env.DB.prepare(
+      `SELECT pi.key AS key, pi.year, ps.caption FROM photos_index pi
+       LEFT JOIN photo_scores ps ON pi.key = ps.key
+       WHERE pi.month = ? AND pi.day = ? AND pi.type = 'image'
+       ORDER BY ps.score DESC, pi.uploaded DESC LIMIT ?`
+    ).bind(month, day, PHOTO_LIMIT).all();
+    rows = results;
+    const cntRow = await env.DB.prepare(
+      "SELECT COUNT(*) AS n, COUNT(DISTINCT year) AS y FROM photos_index WHERE month = ? AND day = ? AND type = 'image'"
+    ).bind(month, day).first();
+    total = cntRow?.n ?? 0;
+    text = total > 0
+      ? `📅 ${parseInt(month)} 月 ${parseInt(day)} 日，那些年的此刻\n横跨 ${cntRow.y} 个年头 · 共 ${total} 张`
+      : `${parseInt(month)} 月 ${parseInt(day)} 日还没有照片`;
+  } else {
+    // 关键词搜索：跟 /api/search 同一套 LIKE 匹配（文案/地名/标签）
+    const like = "%" + q.replace(/[\\%_]/g, (m) => "\\" + m) + "%";
+    const { results } = await env.DB.prepare(
+      `SELECT pi.key AS key, pi.year, pi.month, pi.day, ps.caption FROM photos_index pi
+       LEFT JOIN photo_scores ps ON ps.key = pi.key
+       LEFT JOIN photo_places pp ON pp.key = pi.key
+       WHERE pi.type = 'image' AND (ps.caption LIKE ?1 ESCAPE '\\' OR pp.name LIKE ?1 ESCAPE '\\' OR ps.tags LIKE ?1 ESCAPE '\\')
+       ORDER BY ps.score DESC, pi.year DESC LIMIT ${PHOTO_LIMIT}`
+    ).bind(like).all();
+    rows = results;
+    total = rows.length;
+    text = total > 0 ? `🔍 找到与「${q}」相关的照片` : `没有找到与「${q}」相关的照片，换个词试试？`;
+  }
+
+  // 逐张生成 Telegram 能直接抓取的公开直链；单张生成失败（坏图/额度）跳过不阻塞
+  const photos = [];
+  for (const r of rows) {
+    const photoUrl = await tgPhotoUrl(env, r.key);
+    if (photoUrl) {
+      photos.push({
+        url: photoUrl,
+        year: r.year,
+        caption: [r.year + " 年", r.caption || ""].filter(Boolean).join(" · "),
+      });
+    }
+  }
+
+  // webUrl 给 bot 拼"去网页看全部"按钮/链接（网页在 Access 后面，家人浏览器里本来就登录过）
+  const webUrl = mode === "day" && month && day
+    ? `${SITE_ORIGIN}/?month=${month}&day=${day}`
+    : SITE_ORIGIN;
+
+  return new Response(JSON.stringify({ q, mode, month, day, total, text, webUrl, photos }), {
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   });
 }
 
