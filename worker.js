@@ -409,6 +409,31 @@ function anniversaryOccurrenceUTC(year, month, day) {
   return Date.UTC(year, Number(month) - 1, d);
 }
 
+// 纪念日的"下一次/今天是不是"判定统一走这一个函数，公历/农历都吐出一批候选 UTC 时间戳
+// （不是单个日期）：公历每年固定一个，农历得多算几个候选，原因见下。之后调用方只管从
+// 候选里找"今天在不在里面"和"离现在最近的未来一个"，不用关心两种历法各自的换算细节。
+//
+// 农历部分复用 worker.js 里"那年今日 · 农历同日"那套 lunarToSolar()：同一个农历 (月,日) 在
+// 公历某一年可能落在这年年初（腊月/冬月常见），也可能这年根本没有对应的闰月（比如闰四月
+// 不是每年都有）。所以对 bjYear 前后各取一年的农历年份都换算一遍，换算失败（返回 null，
+// 即"这年没有这个闰月/日"）就跳过，凑齐候选后再排序去重——比如今年没有闰四月，
+// 这条闰四月的纪念日在候选列表里就没有"今年"这一项，自然顺延到下一个真的有这个闰月的年份
+function occurrenceCandidatesUTC(a, bjYear) {
+  if (a.calendar === "lunar") {
+    const lm = Number(a.month), ld = Number(a.day), isLeap = !!a.is_leap;
+    const seen = new Set();
+    for (const ly of [bjYear - 1, bjYear, bjYear + 1, bjYear + 2]) {
+      const s = lunarToSolar(ly, lm, ld, isLeap);
+      if (s) seen.add(Date.UTC(s.year, s.month - 1, s.day));
+    }
+    return [...seen].sort((x, y) => x - y);
+  }
+  return [
+    anniversaryOccurrenceUTC(bjYear, a.month, a.day),
+    anniversaryOccurrenceUTC(bjYear + 1, a.month, a.day),
+  ];
+}
+
 // remind_days_before 存的是逗号分隔的天数列表（比如 "7,3,1"），支持多个提前提醒节点
 function parseRemindDays(raw) {
   return String(raw || "")
@@ -422,7 +447,7 @@ async function checkAnniversaries(env) {
   await ensureAuxTables(env);
 
   const { results } = await env.DB.prepare(
-    "SELECT title, month, day, year_start, remind_days_before FROM anniversaries"
+    "SELECT title, month, day, year_start, remind_days_before, calendar, is_leap FROM anniversaries"
   ).all();
   if (!results.length) return;
 
@@ -432,7 +457,8 @@ async function checkAnniversaries(env) {
 
   const lines = [];
   for (const a of results) {
-    if (anniversaryOccurrenceUTC(bjYear, a.month, a.day) === todayUTC) {
+    const candidates = occurrenceCandidatesUTC(a, bjYear);
+    if (candidates.includes(todayUTC)) {
       let line = `🎉 今天是「${a.title}」`;
       if (a.year_start) line += `（第 ${bjYear - a.year_start} 年）`;
       lines.push(line);
@@ -440,10 +466,9 @@ async function checkAnniversaries(env) {
     }
     const remindDays = parseRemindDays(a.remind_days_before);
     if (!remindDays.length) continue;
-    // 今年这个 月/日 还没到就用今年，已经过了就是明年的下一次
-    let occUTC = anniversaryOccurrenceUTC(bjYear, a.month, a.day);
-    if (occUTC < todayUTC) occUTC = anniversaryOccurrenceUTC(bjYear + 1, a.month, a.day);
-    const daysLeft = Math.round((occUTC - todayUTC) / 86400000);
+    const future = candidates.filter((t) => t > todayUTC);
+    if (!future.length) continue; // 超出农历换算表范围（1900-2050）等极端情况，跳过
+    const daysLeft = Math.round((Math.min(...future) - todayUTC) / 86400000);
     if (remindDays.includes(daysLeft)) {
       lines.push(`📅 还有 ${daysLeft} 天是「${a.title}」`);
     }
@@ -471,9 +496,18 @@ function validateAnniversaryBody(body) {
   if (!title || !/^\d{2}$/.test(month || "") || !/^\d{2}$/.test(day || "")) {
     return { error: "title/month/day required, month/day format MM/DD" };
   }
+  const calendar = body.calendar === "lunar" ? "lunar" : "solar";
   const mNum = Number(month), dNum = Number(day);
-  if (mNum < 1 || mNum > 12 || dNum < 1 || dNum > 31) {
+  // 农历月最多 30 天，没有 31 号；闰月只在农历下有意义
+  const maxDay = calendar === "lunar" ? 30 : 31;
+  if (mNum < 1 || mNum > 12 || dNum < 1 || dNum > maxDay) {
     return { error: "invalid month/day" };
+  }
+  const isLeap = calendar === "lunar" && !!body.isLeap;
+  // 闰月不是每年都有，得扫一遍完整换算表范围（1900-2050）才能确认这个农历日期真实存在，
+  // 不能只试一年就判定——否则"今年没有闰四月"会被误判成用户把月/日/闰月填错了
+  if (calendar === "lunar" && !hasAnyLunarOccurrence(mNum, dNum, isLeap)) {
+    return { error: "该农历日期在 1900-2050 范围内从未出现过，请检查月/日/闰月是否填对" };
   }
   let yearStart = null;
   if (body.yearStart !== undefined && body.yearStart !== null && body.yearStart !== "") {
@@ -487,7 +521,16 @@ function validateAnniversaryBody(body) {
     ? body.remindDaysBefore.join(",")
     : body.remindDaysBefore;
   const remindDaysBefore = [...new Set(parseRemindDays(rawRemind))].sort((a, b) => b - a).slice(0, 5).join(",");
-  return { title, month, day, yearStart, remindDaysBefore };
+  return { title, month, day, yearStart, remindDaysBefore, calendar, isLeap };
+}
+
+// 闰月不是每年都有，某一年换算失败不代表这个农历日期本身填错了——扫一遍完整的换算表范围
+// （1900-2050）再判定，避免"今年恰好没有这个闰月"被误判成用户输入无效
+function hasAnyLunarOccurrence(lm, ld, isLeap) {
+  for (let y = 1900; y < 2050; y++) {
+    if (lunarToSolar(y, lm, ld, isLeap)) return true;
+  }
+  return false;
 }
 
 // 运维端点：纪念日增删改查，家人自己在 /admin/ops 维护，不用改代码
@@ -496,7 +539,8 @@ async function handleAnniversaries(request, env, url) {
 
   if (request.method === "GET") {
     const { results } = await env.DB.prepare(
-      "SELECT id, title, month, day, year_start, remind_days_before, created_at FROM anniversaries ORDER BY month, day"
+      "SELECT id, title, month, day, year_start, remind_days_before, calendar, is_leap, created_at " +
+      "FROM anniversaries ORDER BY month, day"
     ).all();
     return Response.json({ anniversaries: results });
   }
@@ -508,8 +552,9 @@ async function handleAnniversaries(request, env, url) {
     if (v.error) return Response.json({ error: v.error }, { status: 400 });
 
     const result = await env.DB.prepare(
-      "INSERT INTO anniversaries (title, month, day, year_start, remind_days_before, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-    ).bind(v.title, v.month, v.day, v.yearStart, v.remindDaysBefore, new Date().toISOString()).run();
+      "INSERT INTO anniversaries (title, month, day, year_start, remind_days_before, calendar, is_leap, created_at) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    ).bind(v.title, v.month, v.day, v.yearStart, v.remindDaysBefore, v.calendar, v.isLeap ? 1 : 0, new Date().toISOString()).run();
     return Response.json({ ok: true, id: result.meta.last_row_id });
   }
 
@@ -525,8 +570,9 @@ async function handleAnniversaries(request, env, url) {
     if (!existing) return Response.json({ error: "not found" }, { status: 404 });
 
     await env.DB.prepare(
-      "UPDATE anniversaries SET title = ?, month = ?, day = ?, year_start = ?, remind_days_before = ? WHERE id = ?"
-    ).bind(v.title, v.month, v.day, v.yearStart, v.remindDaysBefore, id).run();
+      "UPDATE anniversaries SET title = ?, month = ?, day = ?, year_start = ?, remind_days_before = ?, " +
+      "calendar = ?, is_leap = ? WHERE id = ?"
+    ).bind(v.title, v.month, v.day, v.yearStart, v.remindDaysBefore, v.calendar, v.isLeap ? 1 : 0, id).run();
     return Response.json({ ok: true });
   }
 
@@ -553,7 +599,7 @@ async function handleAnniversariesUpcoming(request, env, url) {
   if (cached) return cached;
 
   const { results } = await env.DB.prepare(
-    "SELECT title, month, day, year_start FROM anniversaries"
+    "SELECT title, month, day, year_start, calendar, is_leap FROM anniversaries"
   ).all();
 
   const bj = new Date(Date.now() + 8 * 60 * 60 * 1000);
@@ -564,13 +610,15 @@ async function handleAnniversariesUpcoming(request, env, url) {
   const today = [];
   const upcoming = [];
   for (const a of results) {
-    if (anniversaryOccurrenceUTC(bjYear, a.month, a.day) === todayUTC) {
+    const candidates = occurrenceCandidatesUTC(a, bjYear);
+    if (candidates.includes(todayUTC)) {
       today.push({ title: a.title, nth: a.year_start ? bjYear - a.year_start : null });
       continue;
     }
-    let occUTC = anniversaryOccurrenceUTC(bjYear, a.month, a.day);
-    let occYear = bjYear;
-    if (occUTC < todayUTC) { occYear = bjYear + 1; occUTC = anniversaryOccurrenceUTC(occYear, a.month, a.day); }
+    const future = candidates.filter((t) => t > todayUTC);
+    if (!future.length) continue;
+    const occUTC = Math.min(...future);
+    const occYear = new Date(occUTC).getUTCFullYear();
     const daysLeft = Math.round((occUTC - todayUTC) / 86400000);
     if (daysLeft <= 14) {
       upcoming.push({ title: a.title, daysLeft, nth: a.year_start ? occYear - a.year_start : null });
@@ -613,15 +661,23 @@ async function ensureAuxTables(env) {
     env.DB.prepare(
       "CREATE INDEX IF NOT EXISTS idx_photos_index_year ON photos_index(year)"
     ),
-    // 纪念日（生日/结婚纪念日等）：跟照片拍摄日无关的手动条目，month/day 按公历重复循环，
-    // year_start 可选，用来算"第 N 年"；remind_days_before 是逗号分隔的提前提醒天数列表
-    // （比如 "7,3,1"），支持同一个纪念日设多个提前提醒节点，见 parseRemindDays()
+    // 纪念日（生日/结婚纪念日等）：跟照片拍摄日无关的手动条目。calendar 是 'solar'/'lunar'，
+    // month/day 按对应历法重复循环（农历闰月靠 is_leap 区分，比如闰四月和普通四月同月同日
+    // 但 is_leap 不同）；year_start 可选，用来算"第 N 年"；remind_days_before 是逗号分隔的
+    // 提前提醒天数列表（比如 "7,3,1"），支持同一个纪念日设多个提前提醒节点，见 parseRemindDays()
     env.DB.prepare(
       "CREATE TABLE IF NOT EXISTS anniversaries (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, " +
       "month TEXT NOT NULL, day TEXT NOT NULL, year_start INTEGER, remind_days_before TEXT NOT NULL DEFAULT '', " +
-      "created_at TEXT NOT NULL)"
+      "calendar TEXT NOT NULL DEFAULT 'solar', is_leap INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)"
     ),
   ]);
+  // 老库（这两列上线前建的表）靠 ALTER 补列，重复执行吞掉"列已存在"的报错即可
+  try {
+    await env.DB.prepare("ALTER TABLE anniversaries ADD COLUMN calendar TEXT NOT NULL DEFAULT 'solar'").run();
+  } catch { /* 列已存在 */ }
+  try {
+    await env.DB.prepare("ALTER TABLE anniversaries ADD COLUMN is_leap INTEGER NOT NULL DEFAULT 0").run();
+  } catch { /* 列已存在 */ }
   // 打分重试计数列（见 NEEDS_SCORE_SQL）：老库没有这一列，SQLite 的 ALTER 不支持
   // IF NOT EXISTS，靠"列已存在就报错"这一点保证只加一次，重复执行吞掉错误即可
   try {

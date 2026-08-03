@@ -468,15 +468,26 @@ input:focus { border-color: var(--border-focus); }
   </div>
   <div class="actions">
     <div class="field"><label>标题</label><input id="avTitle" style="width:160px" placeholder="奶奶生日" /></div>
-    <div class="field"><label>月 MM</label><input id="avMonth" style="width:56px" maxlength="2" placeholder="07" /></div>
-    <div class="field"><label>日 DD</label><input id="avDay" style="width:56px" maxlength="2" placeholder="08" /></div>
+    <div class="field">
+      <label>历法</label>
+      <select id="avCalendar" style="width:76px" onchange="onAnnivCalendarChange()">
+        <option value="solar">公历</option>
+        <option value="lunar">农历</option>
+      </select>
+    </div>
+    <div class="field"><label id="avMonthLabel">月 MM</label><input id="avMonth" style="width:56px" maxlength="2" placeholder="07" /></div>
+    <div class="field"><label id="avDayLabel">日 DD</label><input id="avDay" style="width:56px" maxlength="2" placeholder="08" /></div>
+    <div class="field" id="avLeapField" style="display:none">
+      <label>&nbsp;</label>
+      <label style="display:flex;align-items:center;gap:.3rem;height:34px"><input type="checkbox" id="avLeap" style="width:auto" />闰月</label>
+    </div>
     <div class="field"><label>起始年（选填，算第几年）</label><input id="avYearStart" style="width:96px" maxlength="4" placeholder="1958" /></div>
     <div class="field"><label>提前提醒天数（逗号分隔，最多5个）</label><input id="avRemind" style="width:110px" placeholder="7,3,1" /></div>
     <button class="primary" id="btn-anniv-submit" onclick="submitAnniversary()">添加</button>
     <button id="btn-anniv-cancel" onclick="cancelEditAnniversary()" style="display:none">取消编辑</button>
   </div>
   <div class="anniv-list" id="annivList"><div class="anniv-empty">加载中…</div></div>
-  <div class="hint">北京时间零点跟"那年今日"推送同一个 Cron 触发：命中当天推「今天是…」，每个提前提醒天数各自命中时推「还有 N 天是…」。2 月 29 日的纪念日在非闰年按 2 月 28 日处理。首页顶部也会显示同样的提醒，可以关闭。</div>
+  <div class="hint">北京时间零点跟"那年今日"推送同一个 Cron 触发：命中当天推「今天是…」，每个提前提醒天数各自命中时推「还有 N 天是…」。2 月 29 日的纪念日在非闰年按 2 月 28 日处理；农历闰月不是每年都有，没轮到的年份会自动顺延到下一次真实出现的年份。首页顶部也会显示同样的提醒，可以关闭。</div>
 </div>
 
 <!-- Log -->
@@ -880,10 +891,12 @@ function loadAnniversaries() {
     items.forEach(function(a) {
       var row = document.createElement('div');
       row.className = 'anniv-row';
+      var isLunar = a.calendar === 'lunar';
+      var dateLabel = (isLunar ? '农历' + (a.is_leap ? '闰' : '') : '') + parseInt(a.month) + '/' + parseInt(a.day);
       var meta = a.year_start ? (a.year_start + ' 年起') : '';
       if (a.remind_days_before) meta += (meta ? ' · ' : '') + '提前 ' + a.remind_days_before + ' 天提醒';
       row.innerHTML =
-        '<span class="ar-date">' + a.month + '/' + a.day + '</span>' +
+        '<span class="ar-date">' + escHtml(dateLabel) + '</span>' +
         '<span class="ar-title">' + escHtml(a.title) + '</span>' +
         '<span class="ar-meta">' + escHtml(meta) + '</span>' +
         '<button data-act="edit">编辑</button>' +
@@ -898,6 +911,12 @@ function loadAnniversaries() {
     document.getElementById('annivList').innerHTML = '<div class="anniv-empty">加载失败</div>';
   });
 }
+function onAnnivCalendarChange() {
+  var isLunar = document.getElementById('avCalendar').value === 'lunar';
+  document.getElementById('avLeapField').style.display = isLunar ? '' : 'none';
+  document.getElementById('avMonthLabel').textContent = isLunar ? '农历月' : '月 MM';
+  document.getElementById('avDayLabel').textContent = isLunar ? '农历日' : '日 DD';
+}
 function readAnniversaryForm() {
   return {
     title: document.getElementById('avTitle').value.trim(),
@@ -905,6 +924,8 @@ function readAnniversaryForm() {
     day: document.getElementById('avDay').value.trim().padStart(2, '0'),
     yearStart: document.getElementById('avYearStart').value.trim(),
     remind: document.getElementById('avRemind').value.trim(),
+    calendar: document.getElementById('avCalendar').value,
+    isLeap: document.getElementById('avLeap').checked,
   };
 }
 function resetAnniversaryForm() {
@@ -913,6 +934,9 @@ function resetAnniversaryForm() {
   document.getElementById('avDay').value = '';
   document.getElementById('avYearStart').value = '';
   document.getElementById('avRemind').value = '';
+  document.getElementById('avCalendar').value = 'solar';
+  document.getElementById('avLeap').checked = false;
+  onAnnivCalendarChange();
   _annivEditingId = null;
   document.getElementById('btn-anniv-submit').textContent = '添加';
   document.getElementById('btn-anniv-cancel').style.display = 'none';
@@ -924,6 +948,9 @@ function startEditAnniversary(a) {
   document.getElementById('avDay').value = a.day;
   document.getElementById('avYearStart').value = a.year_start || '';
   document.getElementById('avRemind').value = a.remind_days_before || '';
+  document.getElementById('avCalendar').value = a.calendar === 'lunar' ? 'lunar' : 'solar';
+  document.getElementById('avLeap').checked = !!a.is_leap;
+  onAnnivCalendarChange();
   document.getElementById('btn-anniv-submit').textContent = '保存修改';
   document.getElementById('btn-anniv-cancel').style.display = '';
   document.getElementById('avTitle').focus();
@@ -938,6 +965,7 @@ function submitAnniversary() {
     title: f.title, month: f.month, day: f.day,
     yearStart: f.yearStart ? Number(f.yearStart) : null,
     remindDaysBefore: f.remind,
+    calendar: f.calendar, isLeap: f.isLeap,
   };
   var isEdit = !!_annivEditingId;
   if (isEdit) payload.id = _annivEditingId;
