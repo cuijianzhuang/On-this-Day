@@ -192,11 +192,11 @@ input:focus { border-color: var(--border-focus); }
 /* ── Anniversaries ── */
 .anniv-list { margin-top: .8rem; display: flex; flex-direction: column; gap: .4rem; }
 .anniv-row {
-  display: flex; align-items: center; gap: .6rem;
+  display: flex; align-items: center; flex-wrap: wrap; gap: .6rem;
   padding: .5rem .7rem; border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: rgba(255,255,255,.02);
 }
-.anniv-row .ar-date { font-variant-numeric: tabular-nums; color: var(--text-sub); font-size: .74rem; min-width: 5ch; }
+.anniv-row .ar-date { font-variant-numeric: tabular-nums; color: var(--text-sub); font-size: .74rem; min-width: 5ch; white-space: nowrap; }
 .anniv-row .ar-title { flex: 1; font-size: .82rem; }
 .anniv-row .ar-meta { font-size: .68rem; color: var(--text-dim); }
 .anniv-empty { font-size: .74rem; color: var(--text-dim); padding: .4rem 0; }
@@ -893,6 +893,7 @@ function loadAnniversaries() {
       row.className = 'anniv-row';
       var isLunar = a.calendar === 'lunar';
       var dateLabel = (isLunar ? '农历' + (a.is_leap ? '闰' : '') : '') + parseInt(a.month) + '/' + parseInt(a.day);
+      if (isLunar && a.solar_display) dateLabel += ' → ' + a.solar_display;
       var meta = a.year_start ? (a.year_start + ' 年起') : '';
       if (a.remind_days_before) meta += (meta ? ' · ' : '') + '提前 ' + a.remind_days_before + ' 天提醒';
       row.innerHTML =

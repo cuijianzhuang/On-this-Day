@@ -434,6 +434,23 @@ function occurrenceCandidatesUTC(a, bjYear) {
   ];
 }
 
+// 运维列表用：农历纪念日的月/日每年对应的公历日期都不一样，光看"农历3月3"猜不出今年
+// 具体是哪天，这里算出来给管理页面标出来。优先取今年（bjYear）落地的那次；碰上今年没有
+// 这个闰月的情况，就找候选里最近的未来一次，同时标出年份提醒"不是今年"
+function lunarDisplayDate(a, bjYear) {
+  if (a.calendar !== "lunar") return null;
+  const candidates = occurrenceCandidatesUTC(a, bjYear);
+  const thisYearUTC = candidates.find((t) => new Date(t).getUTCFullYear() === bjYear);
+  if (thisYearUTC !== undefined) {
+    const d = new Date(thisYearUTC);
+    return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+  }
+  const future = candidates.filter((t) => t >= Date.UTC(bjYear, 0, 1));
+  if (!future.length) return null;
+  const d = new Date(Math.min(...future));
+  return `${d.getUTCFullYear()}年${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+}
+
 // remind_days_before 存的是逗号分隔的天数列表（比如 "7,3,1"），支持多个提前提醒节点
 function parseRemindDays(raw) {
   return String(raw || "")
@@ -542,7 +559,9 @@ async function handleAnniversaries(request, env, url) {
       "SELECT id, title, month, day, year_start, remind_days_before, calendar, is_leap, created_at " +
       "FROM anniversaries ORDER BY month, day"
     ).all();
-    return Response.json({ anniversaries: results });
+    const bjYear = new Date(Date.now() + 8 * 60 * 60 * 1000).getUTCFullYear();
+    const anniversaries = results.map((a) => ({ ...a, solar_display: lunarDisplayDate(a, bjYear) }));
+    return Response.json({ anniversaries });
   }
 
   if (request.method === "POST") {
@@ -610,9 +629,10 @@ async function handleAnniversariesUpcoming(request, env, url) {
   const today = [];
   const upcoming = [];
   for (const a of results) {
+    const isLunar = a.calendar === "lunar";
     const candidates = occurrenceCandidatesUTC(a, bjYear);
     if (candidates.includes(todayUTC)) {
-      today.push({ title: a.title, nth: a.year_start ? bjYear - a.year_start : null });
+      today.push({ title: a.title, nth: a.year_start ? bjYear - a.year_start : null, lunar: isLunar });
       continue;
     }
     const future = candidates.filter((t) => t > todayUTC);
@@ -621,7 +641,7 @@ async function handleAnniversariesUpcoming(request, env, url) {
     const occYear = new Date(occUTC).getUTCFullYear();
     const daysLeft = Math.round((occUTC - todayUTC) / 86400000);
     if (daysLeft <= 14) {
-      upcoming.push({ title: a.title, daysLeft, nth: a.year_start ? occYear - a.year_start : null });
+      upcoming.push({ title: a.title, daysLeft, nth: a.year_start ? occYear - a.year_start : null, lunar: isLunar });
     }
   }
   upcoming.sort((x, y) => x.daysLeft - y.daysLeft);

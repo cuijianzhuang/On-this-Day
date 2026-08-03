@@ -403,10 +403,10 @@
     if (data.date && localStorage.getItem(ANNIV_DISMISS_KEY) === data.date) return;
     const items = [];
     for (const a of (data.today || [])) {
-      items.push('🎉 今天是「' + a.title + '」' + (a.nth ? '（第 ' + a.nth + ' 年）' : ''));
+      items.push('🎉 ' + (a.lunar ? '🌙 ' : '') + '今天是「' + a.title + '」' + (a.nth ? '（第 ' + a.nth + ' 年）' : ''));
     }
     for (const a of (data.upcoming || [])) {
-      items.push('📅 还有 ' + a.daysLeft + ' 天是「' + a.title + '」');
+      items.push('📅 ' + (a.lunar ? '🌙 ' : '') + '还有 ' + a.daysLeft + ' 天是「' + a.title + '」');
     }
     if (!items.length) return;
     banner.textContent = '';
