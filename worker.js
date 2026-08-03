@@ -1516,7 +1516,10 @@ function solarToLunar(sy, sm, sd) {
 function lunarToSolar(ly, lm, ld, isLeapMonth) {
   if (ly < 1900 || ly >= 2050) return null;
   const leap = _leapMonth(ly);
-  if (isLeapMonth && leap !== lm) isLeapMonth = false;
+  // 请求的闰月这年根本不存在（比如闰四月，但这年真正的闰月是闰五月或者压根没有闰月）时必须
+  // 直接判定失败——退化成"当年普通月份"会让调用方把这年当成一次真实的闰月纪念日/照片匹配，
+  // 于是闰月纪念日每年都提前庆祝、"农历同日"匹配也会混进不该出现的普通月同日照片
+  if (isLeapMonth && leap !== lm) return null;
   const dm = isLeapMonth ? _leapDays(ly) : _monthDays(ly, lm);
   if (ld > dm) return null;
   let offset = 0;
