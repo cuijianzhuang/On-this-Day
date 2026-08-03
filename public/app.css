@@ -367,6 +367,12 @@
   }
   .anniv-banner[hidden] { display: none; }
   .anniv-banner .anniv-item + .anniv-item::before { content: '·'; margin: 0 0.45rem; opacity: 0.5; }
+  .anniv-banner .anniv-close {
+    border: none; background: transparent; color: inherit; opacity: 0.55;
+    font-size: 0.68rem; line-height: 1; cursor: pointer; padding: 0.1rem 0.2rem;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .anniv-banner .anniv-close:hover { opacity: 1; }
   body.sun-on .anniv-banner { background: rgba(232,96,122,0.12); color: #b8465a; }
   /* 历史上的今天：Wikimedia 大事记，默认折叠成一颗小胶囊，点开是当天的编年列表 */
   .otd { margin: 0.75rem auto 0; max-width: 620px; padding: 0 1.2rem; }

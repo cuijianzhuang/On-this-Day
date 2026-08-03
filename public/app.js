@@ -392,17 +392,21 @@
     el.classList.add('show');
   }).catch(() => {});
 
-  // 纪念日提醒：跟今日诗词一样，只看真实"今天"，跟浏览哪个历史日期无关
+  // 纪念日提醒：跟今日诗词一样，只看真实"今天"，跟浏览哪个历史日期无关。
+  // data.date 是后端算出的北京日期（YYYY-MM-DD），关闭 banner 时存这个 key 而不是浏览器本地
+  // 日期——避免跨时区/跨零点的边界上，"今天"两边算得不一样导致关闭状态失效或误伤明天
+  const ANNIV_DISMISS_KEY = 'annivBannerDismissedDate';
   fetch('/api/anniversaries/upcoming').then(r => r.ok ? r.json() : null).then(data => {
     if (!data) return;
     const banner = document.getElementById('annivBanner');
     if (!banner) return;
+    if (data.date && localStorage.getItem(ANNIV_DISMISS_KEY) === data.date) return;
     const items = [];
     for (const a of (data.today || [])) {
-      items.push('🎉 今天是「' + a.title + '」' + (a.nth ? '（第 ' + a.nth + ' 年）' : ''));
+      items.push('🎉 ' + (a.lunar ? '🌙 ' : '') + '今天是「' + a.title + '」' + (a.nth ? '（第 ' + a.nth + ' 年）' : ''));
     }
     for (const a of (data.upcoming || [])) {
-      items.push('📅 还有 ' + a.daysLeft + ' 天是「' + a.title + '」');
+      items.push('📅 ' + (a.lunar ? '🌙 ' : '') + '还有 ' + a.daysLeft + ' 天是「' + a.title + '」');
     }
     if (!items.length) return;
     banner.textContent = '';
@@ -412,6 +416,16 @@
       span.textContent = text; // 内容来自数据库自建条目，非第三方，但仍用 textContent 保持一致习惯
       banner.appendChild(span);
     });
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'anniv-close';
+    closeBtn.type = 'button';
+    closeBtn.setAttribute('aria-label', '关闭提醒');
+    closeBtn.textContent = '✕';
+    closeBtn.onclick = () => {
+      banner.hidden = true;
+      if (data.date) { try { localStorage.setItem(ANNIV_DISMISS_KEY, data.date); } catch {} }
+    };
+    banner.appendChild(closeBtn);
     banner.hidden = false;
   }).catch(() => {});
 
@@ -600,9 +614,22 @@
     renderCalendar();
   };
 
+  // 头部这几个下拉（日期/年份/更多功能/搜索）共享同一小块屏幕区域，各自独立 toggle 的话
+  // 一次能同时开好几个，彼此叠在一起完全遮挡——所以开任意一个之前，先把其余全关掉，
+  // 同一时刻只允许一个下拉展开。closeAllHeaderMenus 引用的几个 const 会在下面陆续声明，
+  // 但这个函数只在点击时才真正执行，那时候全部已经初始化完毕，不受声明顺序影响
+  function closeAllHeaderMenus(except) {
+    if (datePicker !== except) datePicker.classList.remove('open');
+    if (yearMenu !== except) yearMenu.classList.remove('open');
+    if (navMenu !== except) navMenu.classList.remove('open');
+    if (searchPanel !== except) searchPanel.classList.remove('open');
+  }
+
   dateToggle.onclick = (e) => {
     e.stopPropagation();
-    datePicker.classList.toggle('open');
+    const willOpen = !datePicker.classList.contains('open');
+    closeAllHeaderMenus();
+    if (willOpen) datePicker.classList.add('open');
   };
 
   // "跳到某一年"下拉菜单
@@ -610,7 +637,9 @@
   const yearMenu = document.getElementById('yearMenu');
   yearToggle.onclick = (e) => {
     e.stopPropagation();
-    yearMenu.classList.toggle('open');
+    const willOpen = !yearMenu.classList.contains('open');
+    closeAllHeaderMenus();
+    if (willOpen) yearMenu.classList.add('open');
   };
 
   // "更多功能"下拉：年度回忆/全家最爱/足迹地图/数据总览/运维控制台入口
@@ -618,7 +647,9 @@
   const navMenu = document.getElementById('navMenu');
   navMenuToggle.onclick = (e) => {
     e.stopPropagation();
-    navMenu.classList.toggle('open');
+    const willOpen = !navMenu.classList.contains('open');
+    closeAllHeaderMenus();
+    if (willOpen) navMenu.classList.add('open');
   };
 
   // 照片搜索：搜 AI 说明文字和拍摄地名，防抖 350ms，回车立即搜
@@ -630,8 +661,12 @@
 
   searchToggle.onclick = (e) => {
     e.stopPropagation();
-    const opened = searchPanel.classList.toggle('open');
-    if (opened) setTimeout(() => searchInput.focus(), 60);
+    const willOpen = !searchPanel.classList.contains('open');
+    closeAllHeaderMenus();
+    if (willOpen) {
+      searchPanel.classList.add('open');
+      setTimeout(() => searchInput.focus(), 60);
+    }
   };
 
   function runSearch() {
