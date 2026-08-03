@@ -358,6 +358,16 @@
   .daily-poem .poem-source { color: #5a5a5e; font-style: normal; margin-left: 0.4rem; }
   /* text-shadow 会从 .daily-poem 继承下来，这里只用补一下浅色模式下的字色，对比度才够 */
   body.sun-on .daily-poem .poem-source { color: #44444a; }
+  /* 纪念日提醒：命中/临近手动纪念日时才显示的小胶囊条，风格跟 otd-toggle 呼应 */
+  .anniv-banner {
+    display: inline-flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+    justify-content: center; margin: 0.75rem auto 0; padding: 0.3rem 0.9rem;
+    border-radius: 999px; background: rgba(232,96,122,0.14); color: #e8929e;
+    font-size: 0.76rem; letter-spacing: 0.01em; max-width: 620px;
+  }
+  .anniv-banner[hidden] { display: none; }
+  .anniv-banner .anniv-item + .anniv-item::before { content: '·'; margin: 0 0.45rem; opacity: 0.5; }
+  body.sun-on .anniv-banner { background: rgba(232,96,122,0.12); color: #b8465a; }
   /* 历史上的今天：Wikimedia 大事记，默认折叠成一颗小胶囊，点开是当天的编年列表 */
   .otd { margin: 0.75rem auto 0; max-width: 620px; padding: 0 1.2rem; }
   .otd-toggle {

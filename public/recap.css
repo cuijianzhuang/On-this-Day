@@ -40,8 +40,10 @@
     background: rgba(255,255,255,0.12); backdrop-filter: blur(12px); color: #fff;
     cursor: pointer; text-decoration: none; font-size: 0.9rem;
   }
+  .btn[hidden] { display: none; }
   #back { top: max(1rem, env(safe-area-inset-top)); left: max(1rem, env(safe-area-inset-left)); }
   #music { top: max(1rem, env(safe-area-inset-top)); right: max(1rem, env(safe-area-inset-right)); }
+  #trailLink { top: max(1rem, env(safe-area-inset-top)); right: calc(max(1rem, env(safe-area-inset-right)) + 3rem); }
   #yearNav {
     /* 年头一多（这个库跨了 2018-2026 共 9 个年份）flex 行原本没有宽度上限，会从左边
        溢出屏幕、够不着也点不到——加 left 界定右边界，超宽时横向可滑，

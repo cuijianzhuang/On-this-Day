@@ -392,6 +392,29 @@
     el.classList.add('show');
   }).catch(() => {});
 
+  // 纪念日提醒：跟今日诗词一样，只看真实"今天"，跟浏览哪个历史日期无关
+  fetch('/api/anniversaries/upcoming').then(r => r.ok ? r.json() : null).then(data => {
+    if (!data) return;
+    const banner = document.getElementById('annivBanner');
+    if (!banner) return;
+    const items = [];
+    for (const a of (data.today || [])) {
+      items.push('🎉 今天是「' + a.title + '」' + (a.nth ? '（第 ' + a.nth + ' 年）' : ''));
+    }
+    for (const a of (data.upcoming || [])) {
+      items.push('📅 还有 ' + a.daysLeft + ' 天是「' + a.title + '」');
+    }
+    if (!items.length) return;
+    banner.textContent = '';
+    items.forEach(text => {
+      const span = document.createElement('span');
+      span.className = 'anniv-item';
+      span.textContent = text; // 内容来自数据库自建条目，非第三方，但仍用 textContent 保持一致习惯
+      banner.appendChild(span);
+    });
+    banner.hidden = false;
+  }).catch(() => {});
+
   // 历史上的今天（Wikimedia）：跟着正在浏览的日期走，loadMemories 每次切日期都会重新拉。
   // 折叠态是单条轮播（每 8 秒淡入淡出换一条大事记），点开是完整列表（展开时暂停轮播，
   // 展开状态跨日期保持）。接口 204/失败就整块隐藏；第三方内容只用 textContent 渲染

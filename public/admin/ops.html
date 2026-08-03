@@ -189,6 +189,17 @@ input:focus { border-color: var(--border-focus); }
 .hint { font-size: .68rem; color: var(--text-dim); margin-top: .6rem; line-height: 1.7; }
 .bulk-wrap { display: flex; align-items: center; gap: .4rem; }
 .bulk-prog { font-size: .7rem; font-variant-numeric: tabular-nums; color: var(--text-sub); min-width: 8ch; }
+/* ── Anniversaries ── */
+.anniv-list { margin-top: .8rem; display: flex; flex-direction: column; gap: .4rem; }
+.anniv-row {
+  display: flex; align-items: center; gap: .6rem;
+  padding: .5rem .7rem; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: rgba(255,255,255,.02);
+}
+.anniv-row .ar-date { font-variant-numeric: tabular-nums; color: var(--text-sub); font-size: .74rem; min-width: 5ch; }
+.anniv-row .ar-title { flex: 1; font-size: .82rem; }
+.anniv-row .ar-meta { font-size: .68rem; color: var(--text-dim); }
+.anniv-empty { font-size: .74rem; color: var(--text-dim); padding: .4rem 0; }
 /* ── Photo search ── */
 .search-row { display: flex; gap: .5rem; margin-bottom: .75rem; }
 .search-row input { flex: 1; }
@@ -446,6 +457,25 @@ input:focus { border-color: var(--border-focus); }
     </div>
     <div class="hint">「改拍摄日期」自动清新旧两天缓存；文件名/EXIF 带日期的照片，重跑「日期重扫」会覆盖手动修改。「从索引移除」不删 R2 原图。</div>
   </div>
+</div>
+
+<!-- Anniversaries -->
+<div class="card">
+  <div class="card-head">
+    <div class="card-icon" style="background:rgba(232,96,122,.14);font-size:.9rem">🎂</div>
+    <h2>纪念日提醒</h2>
+    <button onclick="loadAnniversaries()">刷新</button>
+  </div>
+  <div class="actions">
+    <div class="field"><label>标题</label><input id="avTitle" style="width:160px" placeholder="奶奶生日" /></div>
+    <div class="field"><label>月 MM</label><input id="avMonth" style="width:56px" maxlength="2" placeholder="07" /></div>
+    <div class="field"><label>日 DD</label><input id="avDay" style="width:56px" maxlength="2" placeholder="08" /></div>
+    <div class="field"><label>起始年（选填，算第几年）</label><input id="avYearStart" style="width:96px" maxlength="4" placeholder="1958" /></div>
+    <div class="field"><label>提前提醒天数</label><input id="avRemind" style="width:64px" maxlength="2" placeholder="3" /></div>
+    <button class="primary" onclick="addAnniversary()">添加</button>
+  </div>
+  <div class="anniv-list" id="annivList"><div class="anniv-empty">加载中…</div></div>
+  <div class="hint">北京时间零点跟"那年今日"推送同一个 Cron 触发：命中当天推「今天是…」，进入提前提醒窗口推「还有 N 天是…」。首页顶部也会显示同样的提醒。</div>
 </div>
 
 <!-- Log -->
@@ -836,6 +866,68 @@ function stopBulk(id, stopId) {
   document.getElementById(stopId.replace('-stop', '-prog')).textContent = '';
   toast('已停止', 'info');
 }
+
+// ── Anniversaries ───────────────────────────────────────────────────────────
+function loadAnniversaries() {
+  api('/admin/anniversaries').then(function(d) {
+    var list = document.getElementById('annivList');
+    var items = d.anniversaries || [];
+    if (!items.length) { list.innerHTML = '<div class="anniv-empty">还没有纪念日，加一个吧</div>'; return; }
+    list.innerHTML = '';
+    items.forEach(function(a) {
+      var row = document.createElement('div');
+      row.className = 'anniv-row';
+      var meta = a.year_start ? (a.year_start + ' 年起') : '';
+      if (a.remind_days_before) meta += (meta ? ' · ' : '') + '提前 ' + a.remind_days_before + ' 天提醒';
+      row.innerHTML =
+        '<span class="ar-date">' + a.month + '/' + a.day + '</span>' +
+        '<span class="ar-title">' + escHtml(a.title) + '</span>' +
+        '<span class="ar-meta">' + escHtml(meta) + '</span>' +
+        '<button class="danger" data-id="' + a.id + '">删除</button>';
+      row.querySelector('button').addEventListener('click', function() {
+        confirmThen('删除纪念日「' + a.title + '」？', '删除', function() { deleteAnniversary(a.id); });
+      });
+      list.appendChild(row);
+    });
+  }).catch(function() {
+    document.getElementById('annivList').innerHTML = '<div class="anniv-empty">加载失败</div>';
+  });
+}
+function addAnniversary() {
+  var title = document.getElementById('avTitle').value.trim();
+  var month = document.getElementById('avMonth').value.trim().padStart(2, '0');
+  var day = document.getElementById('avDay').value.trim().padStart(2, '0');
+  var yearStart = document.getElementById('avYearStart').value.trim();
+  var remind = document.getElementById('avRemind').value.trim();
+  if (!title || !/^\d{2}$/.test(month) || !/^\d{2}$/.test(day)) {
+    toast('标题和月/日必填', 'err'); return;
+  }
+  api('/admin/anniversaries', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title: title, month: month, day: day,
+      yearStart: yearStart ? Number(yearStart) : null,
+      remindDaysBefore: remind ? Number(remind) : 0,
+    }),
+  }).then(function() {
+    toast('已添加', 'ok');
+    document.getElementById('avTitle').value = '';
+    document.getElementById('avMonth').value = '';
+    document.getElementById('avDay').value = '';
+    document.getElementById('avYearStart').value = '';
+    document.getElementById('avRemind').value = '';
+    loadAnniversaries();
+  }).catch(function() {});
+}
+function deleteAnniversary(id) {
+  api('/admin/anniversaries', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: id }),
+  }).then(function() { toast('已删除', 'ok'); loadAnniversaries(); }).catch(function() {});
+}
+loadAnniversaries();
 
 loadStatus();
 </script>
