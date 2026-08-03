@@ -398,6 +398,25 @@ async function sendDailyMemories(env) {
 // ── 纪念日提醒 ──────────────────────────────────────────────────────────────────
 // 跟"那年今日"的照片无关的手动条目（生日、结婚纪念日…），北京时间零点跟 sendDailyMemories
 // 同一个 Cron 触发，命中当天或进入提前提醒窗口就推 Telegram 文字消息
+function isLeapYear(y) { return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0; }
+
+// 算某年的"月/日"落在哪天的 UTC 时间戳。2 月 29 日在非闰年直接传给 Date.UTC 会自动
+// 进位成 3 月 1 日（比如 Date.UTC(2023,1,29) === 2023-03-01），既不是"没有这一天"该有的
+// 表现，也会让下面的天数差算串——闰年生日约定俗成按 2 月 28 日过，这里退化成那一天
+function anniversaryOccurrenceUTC(year, month, day) {
+  let d = Number(day);
+  if (Number(month) === 2 && d === 29 && !isLeapYear(year)) d = 28;
+  return Date.UTC(year, Number(month) - 1, d);
+}
+
+// remind_days_before 存的是逗号分隔的天数列表（比如 "7,3,1"），支持多个提前提醒节点
+function parseRemindDays(raw) {
+  return String(raw || "")
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isInteger(n) && n > 0 && n <= 30);
+}
+
 async function checkAnniversaries(env) {
   if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) return;
   await ensureAuxTables(env);
@@ -409,24 +428,23 @@ async function checkAnniversaries(env) {
 
   const bj = new Date(Date.now() + 8 * 60 * 60 * 1000);
   const bjYear = bj.getUTCFullYear();
-  const todayMonth = String(bj.getUTCMonth() + 1).padStart(2, "0");
-  const todayDay = String(bj.getUTCDate()).padStart(2, "0");
   const todayUTC = Date.UTC(bjYear, bj.getUTCMonth(), bj.getUTCDate());
 
   const lines = [];
   for (const a of results) {
-    if (a.month === todayMonth && a.day === todayDay) {
+    if (anniversaryOccurrenceUTC(bjYear, a.month, a.day) === todayUTC) {
       let line = `🎉 今天是「${a.title}」`;
       if (a.year_start) line += `（第 ${bjYear - a.year_start} 年）`;
       lines.push(line);
       continue;
     }
-    if (!a.remind_days_before) continue;
+    const remindDays = parseRemindDays(a.remind_days_before);
+    if (!remindDays.length) continue;
     // 今年这个 月/日 还没到就用今年，已经过了就是明年的下一次
-    let occUTC = Date.UTC(bjYear, Number(a.month) - 1, Number(a.day));
-    if (occUTC < todayUTC) occUTC = Date.UTC(bjYear + 1, Number(a.month) - 1, Number(a.day));
+    let occUTC = anniversaryOccurrenceUTC(bjYear, a.month, a.day);
+    if (occUTC < todayUTC) occUTC = anniversaryOccurrenceUTC(bjYear + 1, a.month, a.day);
     const daysLeft = Math.round((occUTC - todayUTC) / 86400000);
-    if (daysLeft === a.remind_days_before) {
+    if (remindDays.includes(daysLeft)) {
       lines.push(`📅 还有 ${daysLeft} 天是「${a.title}」`);
     }
   }
@@ -446,7 +464,33 @@ async function checkAnniversaries(env) {
   }
 }
 
-// 运维端点：纪念日增删查，家人自己在 /admin/ops 维护，不用改代码
+// 校验 + 归一化纪念日表单字段，POST（新建）和 PATCH（编辑）共用同一套规则
+function validateAnniversaryBody(body) {
+  const title = typeof body.title === "string" ? body.title.trim().slice(0, 60) : "";
+  const month = body.month, day = body.day;
+  if (!title || !/^\d{2}$/.test(month || "") || !/^\d{2}$/.test(day || "")) {
+    return { error: "title/month/day required, month/day format MM/DD" };
+  }
+  const mNum = Number(month), dNum = Number(day);
+  if (mNum < 1 || mNum > 12 || dNum < 1 || dNum > 31) {
+    return { error: "invalid month/day" };
+  }
+  let yearStart = null;
+  if (body.yearStart !== undefined && body.yearStart !== null && body.yearStart !== "") {
+    yearStart = Number(body.yearStart);
+    if (!Number.isInteger(yearStart) || yearStart < 1900 || yearStart > 2100) {
+      return { error: "invalid yearStart" };
+    }
+  }
+  // 前端传数组（多个提前提醒天数）或逗号分隔字符串都接受，统一去重、裁到 0-30、最多 5 个
+  const rawRemind = Array.isArray(body.remindDaysBefore)
+    ? body.remindDaysBefore.join(",")
+    : body.remindDaysBefore;
+  const remindDaysBefore = [...new Set(parseRemindDays(rawRemind))].sort((a, b) => b - a).slice(0, 5).join(",");
+  return { title, month, day, yearStart, remindDaysBefore };
+}
+
+// 运维端点：纪念日增删改查，家人自己在 /admin/ops 维护，不用改代码
 async function handleAnniversaries(request, env, url) {
   await ensureAuxTables(env);
 
@@ -460,28 +504,30 @@ async function handleAnniversaries(request, env, url) {
   if (request.method === "POST") {
     let body;
     try { body = await request.json(); } catch { return Response.json({ error: "bad json" }, { status: 400 }); }
-    const title = typeof body.title === "string" ? body.title.trim().slice(0, 60) : "";
-    const month = body.month, day = body.day;
-    if (!title || !/^\d{2}$/.test(month || "") || !/^\d{2}$/.test(day || "")) {
-      return Response.json({ error: "title/month/day required, month/day format MM/DD" }, { status: 400 });
-    }
-    const mNum = Number(month), dNum = Number(day);
-    if (mNum < 1 || mNum > 12 || dNum < 1 || dNum > 31) {
-      return Response.json({ error: "invalid month/day" }, { status: 400 });
-    }
-    let yearStart = null;
-    if (body.yearStart !== undefined && body.yearStart !== null && body.yearStart !== "") {
-      yearStart = Number(body.yearStart);
-      if (!Number.isInteger(yearStart) || yearStart < 1900 || yearStart > 2100) {
-        return Response.json({ error: "invalid yearStart" }, { status: 400 });
-      }
-    }
-    const remindDaysBefore = Math.max(0, Math.min(30, Number(body.remindDaysBefore) || 0));
+    const v = validateAnniversaryBody(body);
+    if (v.error) return Response.json({ error: v.error }, { status: 400 });
 
     const result = await env.DB.prepare(
       "INSERT INTO anniversaries (title, month, day, year_start, remind_days_before, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-    ).bind(title, month, day, yearStart, remindDaysBefore, new Date().toISOString()).run();
+    ).bind(v.title, v.month, v.day, v.yearStart, v.remindDaysBefore, new Date().toISOString()).run();
     return Response.json({ ok: true, id: result.meta.last_row_id });
+  }
+
+  if (request.method === "PATCH") {
+    let body;
+    try { body = await request.json(); } catch { return Response.json({ error: "bad json" }, { status: 400 }); }
+    const id = Number(body.id);
+    if (!id) return Response.json({ error: "id required" }, { status: 400 });
+    const v = validateAnniversaryBody(body);
+    if (v.error) return Response.json({ error: v.error }, { status: 400 });
+
+    const existing = await env.DB.prepare("SELECT id FROM anniversaries WHERE id = ?").bind(id).first();
+    if (!existing) return Response.json({ error: "not found" }, { status: 404 });
+
+    await env.DB.prepare(
+      "UPDATE anniversaries SET title = ?, month = ?, day = ?, year_start = ?, remind_days_before = ? WHERE id = ?"
+    ).bind(v.title, v.month, v.day, v.yearStart, v.remindDaysBefore, id).run();
+    return Response.json({ ok: true });
   }
 
   if (request.method === "DELETE") {
@@ -496,7 +542,8 @@ async function handleAnniversaries(request, env, url) {
   return new Response("Method Not Allowed", { status: 405 });
 }
 
-// 首页用：今天命中的 + 未来 14 天内最近的几个纪念日，边缘缓存一小时（够用又不会显示一整天过时）
+// 首页用：今天命中的 + 未来 14 天内最近的几个纪念日，边缘缓存一小时（够用又不会显示一整天过时）。
+// 带上 bj 日期（date 字段），前端拿它做"今天已关闭过 banner"的去重 key，不用信浏览器本地时区
 async function handleAnniversariesUpcoming(request, env, url) {
   await ensureAuxTables(env);
 
@@ -511,20 +558,19 @@ async function handleAnniversariesUpcoming(request, env, url) {
 
   const bj = new Date(Date.now() + 8 * 60 * 60 * 1000);
   const bjYear = bj.getUTCFullYear();
-  const todayMonth = String(bj.getUTCMonth() + 1).padStart(2, "0");
-  const todayDay = String(bj.getUTCDate()).padStart(2, "0");
   const todayUTC = Date.UTC(bjYear, bj.getUTCMonth(), bj.getUTCDate());
+  const dateKey = `${bjYear}-${String(bj.getUTCMonth() + 1).padStart(2, "0")}-${String(bj.getUTCDate()).padStart(2, "0")}`;
 
   const today = [];
   const upcoming = [];
   for (const a of results) {
-    if (a.month === todayMonth && a.day === todayDay) {
+    if (anniversaryOccurrenceUTC(bjYear, a.month, a.day) === todayUTC) {
       today.push({ title: a.title, nth: a.year_start ? bjYear - a.year_start : null });
       continue;
     }
-    let occUTC = Date.UTC(bjYear, Number(a.month) - 1, Number(a.day));
+    let occUTC = anniversaryOccurrenceUTC(bjYear, a.month, a.day);
     let occYear = bjYear;
-    if (occUTC < todayUTC) { occYear = bjYear + 1; occUTC = Date.UTC(occYear, Number(a.month) - 1, Number(a.day)); }
+    if (occUTC < todayUTC) { occYear = bjYear + 1; occUTC = anniversaryOccurrenceUTC(occYear, a.month, a.day); }
     const daysLeft = Math.round((occUTC - todayUTC) / 86400000);
     if (daysLeft <= 14) {
       upcoming.push({ title: a.title, daysLeft, nth: a.year_start ? occYear - a.year_start : null });
@@ -532,7 +578,7 @@ async function handleAnniversariesUpcoming(request, env, url) {
   }
   upcoming.sort((x, y) => x.daysLeft - y.daysLeft);
 
-  const response = new Response(JSON.stringify({ today, upcoming: upcoming.slice(0, 3) }), {
+  const response = new Response(JSON.stringify({ date: dateKey, today, upcoming: upcoming.slice(0, 3) }), {
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=3600" },
   });
   await cache.put(cacheKey, response.clone());
@@ -568,10 +614,11 @@ async function ensureAuxTables(env) {
       "CREATE INDEX IF NOT EXISTS idx_photos_index_year ON photos_index(year)"
     ),
     // 纪念日（生日/结婚纪念日等）：跟照片拍摄日无关的手动条目，month/day 按公历重复循环，
-    // year_start 可选，用来算"第 N 年"；remind_days_before 是提前几天在 Cron 里预告推送
+    // year_start 可选，用来算"第 N 年"；remind_days_before 是逗号分隔的提前提醒天数列表
+    // （比如 "7,3,1"），支持同一个纪念日设多个提前提醒节点，见 parseRemindDays()
     env.DB.prepare(
       "CREATE TABLE IF NOT EXISTS anniversaries (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, " +
-      "month TEXT NOT NULL, day TEXT NOT NULL, year_start INTEGER, remind_days_before INTEGER NOT NULL DEFAULT 0, " +
+      "month TEXT NOT NULL, day TEXT NOT NULL, year_start INTEGER, remind_days_before TEXT NOT NULL DEFAULT '', " +
       "created_at TEXT NOT NULL)"
     ),
   ]);

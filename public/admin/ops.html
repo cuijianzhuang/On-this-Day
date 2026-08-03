@@ -471,11 +471,12 @@ input:focus { border-color: var(--border-focus); }
     <div class="field"><label>月 MM</label><input id="avMonth" style="width:56px" maxlength="2" placeholder="07" /></div>
     <div class="field"><label>日 DD</label><input id="avDay" style="width:56px" maxlength="2" placeholder="08" /></div>
     <div class="field"><label>起始年（选填，算第几年）</label><input id="avYearStart" style="width:96px" maxlength="4" placeholder="1958" /></div>
-    <div class="field"><label>提前提醒天数</label><input id="avRemind" style="width:64px" maxlength="2" placeholder="3" /></div>
-    <button class="primary" onclick="addAnniversary()">添加</button>
+    <div class="field"><label>提前提醒天数（逗号分隔，最多5个）</label><input id="avRemind" style="width:110px" placeholder="7,3,1" /></div>
+    <button class="primary" id="btn-anniv-submit" onclick="submitAnniversary()">添加</button>
+    <button id="btn-anniv-cancel" onclick="cancelEditAnniversary()" style="display:none">取消编辑</button>
   </div>
   <div class="anniv-list" id="annivList"><div class="anniv-empty">加载中…</div></div>
-  <div class="hint">北京时间零点跟"那年今日"推送同一个 Cron 触发：命中当天推「今天是…」，进入提前提醒窗口推「还有 N 天是…」。首页顶部也会显示同样的提醒。</div>
+  <div class="hint">北京时间零点跟"那年今日"推送同一个 Cron 触发：命中当天推「今天是…」，每个提前提醒天数各自命中时推「还有 N 天是…」。2 月 29 日的纪念日在非闰年按 2 月 28 日处理。首页顶部也会显示同样的提醒，可以关闭。</div>
 </div>
 
 <!-- Log -->
@@ -868,6 +869,8 @@ function stopBulk(id, stopId) {
 }
 
 // ── Anniversaries ───────────────────────────────────────────────────────────
+var _annivEditingId = null;
+
 function loadAnniversaries() {
   api('/admin/anniversaries').then(function(d) {
     var list = document.getElementById('annivList');
@@ -883,8 +886,10 @@ function loadAnniversaries() {
         '<span class="ar-date">' + a.month + '/' + a.day + '</span>' +
         '<span class="ar-title">' + escHtml(a.title) + '</span>' +
         '<span class="ar-meta">' + escHtml(meta) + '</span>' +
-        '<button class="danger" data-id="' + a.id + '">删除</button>';
-      row.querySelector('button').addEventListener('click', function() {
+        '<button data-act="edit">编辑</button>' +
+        '<button class="danger" data-act="del">删除</button>';
+      row.querySelector('[data-act="edit"]').addEventListener('click', function() { startEditAnniversary(a); });
+      row.querySelector('[data-act="del"]').addEventListener('click', function() {
         confirmThen('删除纪念日「' + a.title + '」？', '删除', function() { deleteAnniversary(a.id); });
       });
       list.appendChild(row);
@@ -893,30 +898,56 @@ function loadAnniversaries() {
     document.getElementById('annivList').innerHTML = '<div class="anniv-empty">加载失败</div>';
   });
 }
-function addAnniversary() {
-  var title = document.getElementById('avTitle').value.trim();
-  var month = document.getElementById('avMonth').value.trim().padStart(2, '0');
-  var day = document.getElementById('avDay').value.trim().padStart(2, '0');
-  var yearStart = document.getElementById('avYearStart').value.trim();
-  var remind = document.getElementById('avRemind').value.trim();
-  if (!title || !/^\d{2}$/.test(month) || !/^\d{2}$/.test(day)) {
+function readAnniversaryForm() {
+  return {
+    title: document.getElementById('avTitle').value.trim(),
+    month: document.getElementById('avMonth').value.trim().padStart(2, '0'),
+    day: document.getElementById('avDay').value.trim().padStart(2, '0'),
+    yearStart: document.getElementById('avYearStart').value.trim(),
+    remind: document.getElementById('avRemind').value.trim(),
+  };
+}
+function resetAnniversaryForm() {
+  document.getElementById('avTitle').value = '';
+  document.getElementById('avMonth').value = '';
+  document.getElementById('avDay').value = '';
+  document.getElementById('avYearStart').value = '';
+  document.getElementById('avRemind').value = '';
+  _annivEditingId = null;
+  document.getElementById('btn-anniv-submit').textContent = '添加';
+  document.getElementById('btn-anniv-cancel').style.display = 'none';
+}
+function startEditAnniversary(a) {
+  _annivEditingId = a.id;
+  document.getElementById('avTitle').value = a.title;
+  document.getElementById('avMonth').value = a.month;
+  document.getElementById('avDay').value = a.day;
+  document.getElementById('avYearStart').value = a.year_start || '';
+  document.getElementById('avRemind').value = a.remind_days_before || '';
+  document.getElementById('btn-anniv-submit').textContent = '保存修改';
+  document.getElementById('btn-anniv-cancel').style.display = '';
+  document.getElementById('avTitle').focus();
+}
+function cancelEditAnniversary() { resetAnniversaryForm(); }
+function submitAnniversary() {
+  var f = readAnniversaryForm();
+  if (!f.title || !/^\d{2}$/.test(f.month) || !/^\d{2}$/.test(f.day)) {
     toast('标题和月/日必填', 'err'); return;
   }
+  var payload = {
+    title: f.title, month: f.month, day: f.day,
+    yearStart: f.yearStart ? Number(f.yearStart) : null,
+    remindDaysBefore: f.remind,
+  };
+  var isEdit = !!_annivEditingId;
+  if (isEdit) payload.id = _annivEditingId;
   api('/admin/anniversaries', {
-    method: 'POST',
+    method: isEdit ? 'PATCH' : 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      title: title, month: month, day: day,
-      yearStart: yearStart ? Number(yearStart) : null,
-      remindDaysBefore: remind ? Number(remind) : 0,
-    }),
+    body: JSON.stringify(payload),
   }).then(function() {
-    toast('已添加', 'ok');
-    document.getElementById('avTitle').value = '';
-    document.getElementById('avMonth').value = '';
-    document.getElementById('avDay').value = '';
-    document.getElementById('avYearStart').value = '';
-    document.getElementById('avRemind').value = '';
+    toast(isEdit ? '已保存' : '已添加', 'ok');
+    resetAnniversaryForm();
     loadAnniversaries();
   }).catch(function() {});
 }
@@ -925,7 +956,11 @@ function deleteAnniversary(id) {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id: id }),
-  }).then(function() { toast('已删除', 'ok'); loadAnniversaries(); }).catch(function() {});
+  }).then(function() {
+    toast('已删除', 'ok');
+    if (_annivEditingId === id) resetAnniversaryForm();
+    loadAnniversaries();
+  }).catch(function() {});
 }
 loadAnniversaries();
 

@@ -392,11 +392,15 @@
     el.classList.add('show');
   }).catch(() => {});
 
-  // 纪念日提醒：跟今日诗词一样，只看真实"今天"，跟浏览哪个历史日期无关
+  // 纪念日提醒：跟今日诗词一样，只看真实"今天"，跟浏览哪个历史日期无关。
+  // data.date 是后端算出的北京日期（YYYY-MM-DD），关闭 banner 时存这个 key 而不是浏览器本地
+  // 日期——避免跨时区/跨零点的边界上，"今天"两边算得不一样导致关闭状态失效或误伤明天
+  const ANNIV_DISMISS_KEY = 'annivBannerDismissedDate';
   fetch('/api/anniversaries/upcoming').then(r => r.ok ? r.json() : null).then(data => {
     if (!data) return;
     const banner = document.getElementById('annivBanner');
     if (!banner) return;
+    if (data.date && localStorage.getItem(ANNIV_DISMISS_KEY) === data.date) return;
     const items = [];
     for (const a of (data.today || [])) {
       items.push('🎉 今天是「' + a.title + '」' + (a.nth ? '（第 ' + a.nth + ' 年）' : ''));
@@ -412,6 +416,16 @@
       span.textContent = text; // 内容来自数据库自建条目，非第三方，但仍用 textContent 保持一致习惯
       banner.appendChild(span);
     });
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'anniv-close';
+    closeBtn.type = 'button';
+    closeBtn.setAttribute('aria-label', '关闭提醒');
+    closeBtn.textContent = '✕';
+    closeBtn.onclick = () => {
+      banner.hidden = true;
+      if (data.date) { try { localStorage.setItem(ANNIV_DISMISS_KEY, data.date); } catch {} }
+    };
+    banner.appendChild(closeBtn);
     banner.hidden = false;
   }).catch(() => {});
 
