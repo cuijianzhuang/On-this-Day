@@ -614,9 +614,22 @@
     renderCalendar();
   };
 
+  // 头部这几个下拉（日期/年份/更多功能/搜索）共享同一小块屏幕区域，各自独立 toggle 的话
+  // 一次能同时开好几个，彼此叠在一起完全遮挡——所以开任意一个之前，先把其余全关掉，
+  // 同一时刻只允许一个下拉展开。closeAllHeaderMenus 引用的几个 const 会在下面陆续声明，
+  // 但这个函数只在点击时才真正执行，那时候全部已经初始化完毕，不受声明顺序影响
+  function closeAllHeaderMenus(except) {
+    if (datePicker !== except) datePicker.classList.remove('open');
+    if (yearMenu !== except) yearMenu.classList.remove('open');
+    if (navMenu !== except) navMenu.classList.remove('open');
+    if (searchPanel !== except) searchPanel.classList.remove('open');
+  }
+
   dateToggle.onclick = (e) => {
     e.stopPropagation();
-    datePicker.classList.toggle('open');
+    const willOpen = !datePicker.classList.contains('open');
+    closeAllHeaderMenus();
+    if (willOpen) datePicker.classList.add('open');
   };
 
   // "跳到某一年"下拉菜单
@@ -624,7 +637,9 @@
   const yearMenu = document.getElementById('yearMenu');
   yearToggle.onclick = (e) => {
     e.stopPropagation();
-    yearMenu.classList.toggle('open');
+    const willOpen = !yearMenu.classList.contains('open');
+    closeAllHeaderMenus();
+    if (willOpen) yearMenu.classList.add('open');
   };
 
   // "更多功能"下拉：年度回忆/全家最爱/足迹地图/数据总览/运维控制台入口
@@ -632,7 +647,9 @@
   const navMenu = document.getElementById('navMenu');
   navMenuToggle.onclick = (e) => {
     e.stopPropagation();
-    navMenu.classList.toggle('open');
+    const willOpen = !navMenu.classList.contains('open');
+    closeAllHeaderMenus();
+    if (willOpen) navMenu.classList.add('open');
   };
 
   // 照片搜索：搜 AI 说明文字和拍摄地名，防抖 350ms，回车立即搜
@@ -644,8 +661,12 @@
 
   searchToggle.onclick = (e) => {
     e.stopPropagation();
-    const opened = searchPanel.classList.toggle('open');
-    if (opened) setTimeout(() => searchInput.focus(), 60);
+    const willOpen = !searchPanel.classList.contains('open');
+    closeAllHeaderMenus();
+    if (willOpen) {
+      searchPanel.classList.add('open');
+      setTimeout(() => searchInput.focus(), 60);
+    }
   };
 
   function runSearch() {

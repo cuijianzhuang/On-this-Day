@@ -334,6 +334,10 @@
     return 2 * R * Math.asin(Math.sqrt(a));
   }
   const TRAIL_STOP_KM = 15; // 同一次停留内的照片彼此距离阈值，超过判定为下一个停留点
+  // 只画最近几个停留点之间的连线（"彗星尾巴"），不画从头到尾的完整轨迹——家庭相册的
+  // 拍摄地点通常绝大部分集中在常住城市，偶尔才有几次出行，如果把整段历史的连线都摞在一起，
+  // 每次"回家"都会在同一片区域再画一条线，越播放线越多，最后叠成一团乱麻，完全看不出方向
+  const TRAIL_WINDOW = 5;
 
   let _trailStops = [];
   let _trailIdx = 0;
@@ -353,19 +357,35 @@
     _trailStops = stops;
     document.getElementById('trailBtn').hidden = stops.length < 2;
 
-    map.addSource('trail-line', { type: 'geojson', data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [] } } });
+    // lineMetrics 开启后可以用 line-progress 表达式做渐变——尾部（旧）透明，头部（新）不透明，
+    // 视觉上是一条正在消失的彗星尾巴，而不是一条实心线段
+    map.addSource('trail-line', {
+      type: 'geojson', lineMetrics: true,
+      data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [] } },
+    });
+    const gradient = ['interpolate', ['linear'], ['line-progress'], 0, 'rgba(232,96,122,0)', 1, 'rgba(232,96,122,0.9)'];
+    map.addLayer({
+      id: 'trail-glow', type: 'line', source: 'trail-line',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-width': 8, 'line-blur': 4, 'line-gradient': gradient },
+    });
     map.addLayer({
       id: 'trail-line', type: 'line', source: 'trail-line',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': '#e8607a', 'line-width': 2.5, 'line-opacity': 0.85 },
+      paint: { 'line-width': 2, 'line-gradient': gradient },
     });
 
     if (autoTrail && stops.length >= 2) startTrail();
   }
 
   function updateTrailLine() {
-    const coords = _trailStops.slice(0, _trailIdx + 1).map(s => [s.lon, s.lat]);
-    map.getSource('trail-line').setData({ type: 'Feature', geometry: { type: 'LineString', coordinates: coords } });
+    const start = Math.max(0, _trailIdx - TRAIL_WINDOW + 1);
+    const coords = _trailStops.slice(start, _trailIdx + 1).map(s => [s.lon, s.lat]);
+    // line-gradient 要求至少两个点才能画出有意义的渐变，只有一个点时给空线，等下一站再显示
+    map.getSource('trail-line').setData({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: coords.length >= 2 ? coords : [] },
+    });
   }
 
   function trailStopLabel(stop) {
