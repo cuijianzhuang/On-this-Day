@@ -7,6 +7,8 @@
   const mapNow = new Date();
   const mapMonth = mapParams.get('month') || String(mapNow.getMonth() + 1).padStart(2, '0');
   const mapDay   = mapParams.get('day')   || String(mapNow.getDate()).padStart(2, '0');
+  const mapYear  = mapParams.get('year') || '';       // 只在全量模式下生效：只播放某一年的足迹
+  const autoTrail = mapParams.get('trail') === '1';   // 从 Recap 页跳过来时自动开始播放
 
   mapboxgl.accessToken = window.MAPBOX_TOKEN;
   const map = new mapboxgl.Map({
@@ -160,7 +162,9 @@
   }
 
   // ── 加载照片 + 聚合图层 ───────────────────────────────────────────────────────
-  const apiUrl = hasDayFilter ? '/api/map-photos?month=' + mapMonth + '&day=' + mapDay : '/api/map-photos';
+  const apiUrl = hasDayFilter
+    ? '/api/map-photos?month=' + mapMonth + '&day=' + mapDay
+    : '/api/map-photos' + (mapYear ? '?year=' + encodeURIComponent(mapYear) : '');
 
   map.on('load', () => {
     fetch(apiUrl)
@@ -315,7 +319,102 @@
             maxZoom: hasDayFilter ? 12 : 4.5,
           });
         }
+
+        // 轨迹回放只在全量模式下开放：/api/map-photos 已经按拍摄日期升序排好了，
+        // 这里只需要按距离把连续的点聚成"停留点"，避免同一次旅行几十张照片飞几十次
+        if (!hasDayFilter) setupTrail(photos);
       });
   });
 
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePopup(); });
+  // ── 轨迹回放：按时间顺序依次飞向每个停留点，画一条渐显的轨迹线 ─────────────────
+  function haversineKm(lat1, lon1, lat2, lon2) {
+    const R = 6371, rad = Math.PI / 180;
+    const dLat = (lat2 - lat1) * rad, dLon = (lon2 - lon1) * rad;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(a));
+  }
+  const TRAIL_STOP_KM = 15; // 同一次停留内的照片彼此距离阈值，超过判定为下一个停留点
+
+  let _trailStops = [];
+  let _trailIdx = 0;
+  let _trailPlaying = false;
+  let _trailTimer = null;
+
+  function setupTrail(photos) {
+    const stops = [];
+    for (const p of photos) {
+      const last = stops[stops.length - 1];
+      if (last && haversineKm(last.lat, last.lon, p.lat, p.lon) < TRAIL_STOP_KM) {
+        last.photos.push(p);
+      } else {
+        stops.push({ lat: p.lat, lon: p.lon, year: p.year, name: p.name, photos: [p] });
+      }
+    }
+    _trailStops = stops;
+    document.getElementById('trailBtn').hidden = stops.length < 2;
+
+    map.addSource('trail-line', { type: 'geojson', data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [] } } });
+    map.addLayer({
+      id: 'trail-line', type: 'line', source: 'trail-line',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': '#e8607a', 'line-width': 2.5, 'line-opacity': 0.85 },
+    });
+
+    if (autoTrail && stops.length >= 2) startTrail();
+  }
+
+  function updateTrailLine() {
+    const coords = _trailStops.slice(0, _trailIdx + 1).map(s => [s.lon, s.lat]);
+    map.getSource('trail-line').setData({ type: 'Feature', geometry: { type: 'LineString', coordinates: coords } });
+  }
+
+  function trailStopLabel(stop) {
+    return [stop.year + ' 年', stop.name].filter(Boolean).join(' · ');
+  }
+
+  function playNextStop() {
+    if (!_trailPlaying) return;
+    if (_trailIdx >= _trailStops.length) { stopTrail(); return; }
+    const stop = _trailStops[_trailIdx];
+    closePopup();
+    map.flyTo({ center: [stop.lon, stop.lat], zoom: mapYear ? 8 : 4.2, duration: 1600, essential: true });
+    updateTrailLine();
+    document.getElementById('trailDate').textContent = trailStopLabel(stop);
+    document.getElementById('trailFill').style.width = (100 * (_trailIdx + 1) / _trailStops.length) + '%';
+    _trailTimer = setTimeout(() => { _trailIdx++; playNextStop(); }, 2600);
+  }
+
+  function startTrail() {
+    if (!_trailStops.length) return;
+    _trailPlaying = true;
+    document.getElementById('trailBar').hidden = false;
+    document.querySelector('.tp-pause').hidden = false;
+    document.querySelector('.tp-play').hidden = true;
+    playNextStop();
+  }
+
+  function pauseTrail() {
+    _trailPlaying = false;
+    clearTimeout(_trailTimer);
+    document.querySelector('.tp-pause').hidden = true;
+    document.querySelector('.tp-play').hidden = false;
+  }
+
+  function stopTrail() {
+    _trailPlaying = false;
+    clearTimeout(_trailTimer);
+    _trailIdx = 0;
+    document.getElementById('trailBar').hidden = true;
+  }
+
+  document.getElementById('trailBtn').addEventListener('click', () => {
+    _trailIdx = 0;
+    startTrail();
+  });
+  document.getElementById('trailPlayPause').addEventListener('click', () => {
+    if (_trailPlaying) pauseTrail();
+    else { _trailPlaying = true; document.querySelector('.tp-pause').hidden = false; document.querySelector('.tp-play').hidden = true; playNextStop(); }
+  });
+  document.getElementById('trailClose').addEventListener('click', stopTrail);
+
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closePopup(); stopTrail(); } });

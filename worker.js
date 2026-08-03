@@ -103,6 +103,14 @@ export default {
       return handleResetFlag(request, env, url);
     }
 
+    if (url.pathname === "/admin/anniversaries") {
+      return handleAnniversaries(request, env, url);
+    }
+
+    if (url.pathname === "/api/anniversaries/upcoming") {
+      return handleAnniversariesUpcoming(request, env, url);
+    }
+
     if (url.pathname === "/api/map-photos") {
       return handleMapPhotos(request, env, url);
     }
@@ -210,6 +218,7 @@ export default {
   async scheduled(event, env, ctx) {
     if (event.cron === "0 16 * * *") {
       ctx.waitUntil(sendDailyMemories(env));
+      ctx.waitUntil(checkAnniversaries(env));
     } else {
       ctx.waitUntil(runBackgroundMaintenance(env));
     }
@@ -386,6 +395,151 @@ async function sendDailyMemories(env) {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ── 纪念日提醒 ──────────────────────────────────────────────────────────────────
+// 跟"那年今日"的照片无关的手动条目（生日、结婚纪念日…），北京时间零点跟 sendDailyMemories
+// 同一个 Cron 触发，命中当天或进入提前提醒窗口就推 Telegram 文字消息
+async function checkAnniversaries(env) {
+  if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) return;
+  await ensureAuxTables(env);
+
+  const { results } = await env.DB.prepare(
+    "SELECT title, month, day, year_start, remind_days_before FROM anniversaries"
+  ).all();
+  if (!results.length) return;
+
+  const bj = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  const bjYear = bj.getUTCFullYear();
+  const todayMonth = String(bj.getUTCMonth() + 1).padStart(2, "0");
+  const todayDay = String(bj.getUTCDate()).padStart(2, "0");
+  const todayUTC = Date.UTC(bjYear, bj.getUTCMonth(), bj.getUTCDate());
+
+  const lines = [];
+  for (const a of results) {
+    if (a.month === todayMonth && a.day === todayDay) {
+      let line = `🎉 今天是「${a.title}」`;
+      if (a.year_start) line += `（第 ${bjYear - a.year_start} 年）`;
+      lines.push(line);
+      continue;
+    }
+    if (!a.remind_days_before) continue;
+    // 今年这个 月/日 还没到就用今年，已经过了就是明年的下一次
+    let occUTC = Date.UTC(bjYear, Number(a.month) - 1, Number(a.day));
+    if (occUTC < todayUTC) occUTC = Date.UTC(bjYear + 1, Number(a.month) - 1, Number(a.day));
+    const daysLeft = Math.round((occUTC - todayUTC) / 86400000);
+    if (daysLeft === a.remind_days_before) {
+      lines.push(`📅 还有 ${daysLeft} 天是「${a.title}」`);
+    }
+  }
+  if (!lines.length) return;
+
+  const text = lines.join("\n");
+  const tgBase = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}`;
+  for (const chatId of tgChatIds(env)) {
+    const resp = await fetch(`${tgBase}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text }),
+    });
+    if (!resp.ok) {
+      console.error(`checkAnniversaries: Telegram API error for chat ${chatId}`, resp.status, await resp.text());
+    }
+  }
+}
+
+// 运维端点：纪念日增删查，家人自己在 /admin/ops 维护，不用改代码
+async function handleAnniversaries(request, env, url) {
+  await ensureAuxTables(env);
+
+  if (request.method === "GET") {
+    const { results } = await env.DB.prepare(
+      "SELECT id, title, month, day, year_start, remind_days_before, created_at FROM anniversaries ORDER BY month, day"
+    ).all();
+    return Response.json({ anniversaries: results });
+  }
+
+  if (request.method === "POST") {
+    let body;
+    try { body = await request.json(); } catch { return Response.json({ error: "bad json" }, { status: 400 }); }
+    const title = typeof body.title === "string" ? body.title.trim().slice(0, 60) : "";
+    const month = body.month, day = body.day;
+    if (!title || !/^\d{2}$/.test(month || "") || !/^\d{2}$/.test(day || "")) {
+      return Response.json({ error: "title/month/day required, month/day format MM/DD" }, { status: 400 });
+    }
+    const mNum = Number(month), dNum = Number(day);
+    if (mNum < 1 || mNum > 12 || dNum < 1 || dNum > 31) {
+      return Response.json({ error: "invalid month/day" }, { status: 400 });
+    }
+    let yearStart = null;
+    if (body.yearStart !== undefined && body.yearStart !== null && body.yearStart !== "") {
+      yearStart = Number(body.yearStart);
+      if (!Number.isInteger(yearStart) || yearStart < 1900 || yearStart > 2100) {
+        return Response.json({ error: "invalid yearStart" }, { status: 400 });
+      }
+    }
+    const remindDaysBefore = Math.max(0, Math.min(30, Number(body.remindDaysBefore) || 0));
+
+    const result = await env.DB.prepare(
+      "INSERT INTO anniversaries (title, month, day, year_start, remind_days_before, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+    ).bind(title, month, day, yearStart, remindDaysBefore, new Date().toISOString()).run();
+    return Response.json({ ok: true, id: result.meta.last_row_id });
+  }
+
+  if (request.method === "DELETE") {
+    let body;
+    try { body = await request.json(); } catch { return Response.json({ error: "bad json" }, { status: 400 }); }
+    const id = Number(body.id);
+    if (!id) return Response.json({ error: "id required" }, { status: 400 });
+    await env.DB.prepare("DELETE FROM anniversaries WHERE id = ?").bind(id).run();
+    return Response.json({ ok: true });
+  }
+
+  return new Response("Method Not Allowed", { status: 405 });
+}
+
+// 首页用：今天命中的 + 未来 14 天内最近的几个纪念日，边缘缓存一小时（够用又不会显示一整天过时）
+async function handleAnniversariesUpcoming(request, env, url) {
+  await ensureAuxTables(env);
+
+  const cache = caches.default;
+  const cacheKey = new Request(`${SITE_ORIGIN}/api/anniversaries/upcoming`);
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  const { results } = await env.DB.prepare(
+    "SELECT title, month, day, year_start FROM anniversaries"
+  ).all();
+
+  const bj = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  const bjYear = bj.getUTCFullYear();
+  const todayMonth = String(bj.getUTCMonth() + 1).padStart(2, "0");
+  const todayDay = String(bj.getUTCDate()).padStart(2, "0");
+  const todayUTC = Date.UTC(bjYear, bj.getUTCMonth(), bj.getUTCDate());
+
+  const today = [];
+  const upcoming = [];
+  for (const a of results) {
+    if (a.month === todayMonth && a.day === todayDay) {
+      today.push({ title: a.title, nth: a.year_start ? bjYear - a.year_start : null });
+      continue;
+    }
+    let occUTC = Date.UTC(bjYear, Number(a.month) - 1, Number(a.day));
+    let occYear = bjYear;
+    if (occUTC < todayUTC) { occYear = bjYear + 1; occUTC = Date.UTC(occYear, Number(a.month) - 1, Number(a.day)); }
+    const daysLeft = Math.round((occUTC - todayUTC) / 86400000);
+    if (daysLeft <= 14) {
+      upcoming.push({ title: a.title, daysLeft, nth: a.year_start ? occYear - a.year_start : null });
+    }
+  }
+  upcoming.sort((x, y) => x.daysLeft - y.daysLeft);
+
+  const response = new Response(JSON.stringify({ today, upcoming: upcoming.slice(0, 3) }), {
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=3600" },
+  });
+  await cache.put(cacheKey, response.clone());
+  return response;
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 // 后加的辅助表（表态镜像/手记）不走手动 schema.sql 流程，运行时自动建表，
 // 每个 isolate 只跑一次，之后就是纯内存判断
 let _auxTablesReady = false;
@@ -412,6 +566,13 @@ async function ensureAuxTables(env) {
     // /api/recap 按年查询用；索引是库级别的，任何一条请求创建过一次之后永久生效
     env.DB.prepare(
       "CREATE INDEX IF NOT EXISTS idx_photos_index_year ON photos_index(year)"
+    ),
+    // 纪念日（生日/结婚纪念日等）：跟照片拍摄日无关的手动条目，month/day 按公历重复循环，
+    // year_start 可选，用来算"第 N 年"；remind_days_before 是提前几天在 Cron 里预告推送
+    env.DB.prepare(
+      "CREATE TABLE IF NOT EXISTS anniversaries (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, " +
+      "month TEXT NOT NULL, day TEXT NOT NULL, year_start INTEGER, remind_days_before INTEGER NOT NULL DEFAULT 0, " +
+      "created_at TEXT NOT NULL)"
     ),
   ]);
   // 打分重试计数列（见 NEEDS_SCORE_SQL）：老库没有这一列，SQLite 的 ALTER 不支持
@@ -3448,8 +3609,18 @@ async function handleMapPhotos(request, env, url) {
   const month = url.searchParams.get("month");
   const day = url.searchParams.get("day");
 
-  // 不带 month/day = 全量模式：地球视角一次拿到所有带定位的照片（聚合渲染交给前端）
+  // 不带 month/day = 全量模式：地球视角一次拿到所有带定位的照片（聚合渲染交给前端）。
+  // 可选 ?year=YYYY 只要某一年的（轨迹回放按年播放用），结果统一按拍摄日期升序排——
+  // 聚合渲染不关心顺序，但轨迹回放要靠这个顺序依次飞点，不用再让前端自己排一遍
   if (!month && !day) {
+    const year = url.searchParams.get("year");
+    if (year && !/^\d{4}$/.test(year)) {
+      return new Response(JSON.stringify({ error: "year must be YYYY" }), {
+        status: 400,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    }
+
     const cache = caches.default;
     const cacheKey = new Request(url.toString());
     const cachedResp = await cache.match(cacheKey);
@@ -3459,8 +3630,9 @@ async function handleMapPhotos(request, env, url) {
       `SELECT pp.key AS key, pp.lat, pp.lon, pp.name, pi.year, pi.month, pi.day, pi.type
        FROM photo_places pp
        JOIN photos_index pi ON pi.key = pp.key
-       WHERE pp.lat IS NOT NULL`
-    ).all();
+       WHERE pp.lat IS NOT NULL ${year ? "AND pi.year = ?" : ""}
+       ORDER BY pi.year, pi.month, pi.day, pp.key`
+    ).bind(...(year ? [year] : [])).all();
     const photos = results.map((r) => ({
       key: r.key,
       url: `/img/${encodeURIComponent(r.key)}`,

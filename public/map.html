@@ -18,8 +18,24 @@
     <span class="mt-sep">·</span>
     <span class="mt-sub">那年今日</span>
   </div>
+  <button class="trail-btn" id="trailBtn" title="播放足迹" hidden>
+    <svg viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20"/></svg>
+  </button>
   <div id="map"></div>
   <div class="map-empty" id="mapEmpty">还没有带定位信息的照片<br />等后台任务慢慢解析，或跑一次 /admin/locate-photos</div>
+  <div class="trail-bar" id="trailBar" hidden>
+    <button class="trail-bar-btn" id="trailPlayPause" title="暂停/继续">
+      <svg class="tp-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+      <svg class="tp-play" viewBox="0 0 24 24" hidden><polygon points="6 4 20 12 6 20"/></svg>
+    </button>
+    <div class="trail-bar-info">
+      <div class="trail-bar-date" id="trailDate">—</div>
+      <div class="trail-bar-progress"><div class="trail-bar-fill" id="trailFill"></div></div>
+    </div>
+    <button class="trail-bar-btn trail-bar-close" id="trailClose" title="退出播放">
+      <svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
 <script src="/map.js" defer></script>
 </body>
 </html>
