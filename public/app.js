@@ -708,6 +708,14 @@
     if (e.key === 'Escape') searchPanel.classList.remove('open');
   });
 
+  // Esc 关掉顶部任意一个展开的下拉。灯箱自己那个 keydown 监听器在灯箱没开时会直接 return，
+  // 所以这里不用担心两边抢同一个按键
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (lightbox.classList.contains('open')) return; // 灯箱开着时 Esc 归灯箱管
+    closeAllHeaderMenus();
+  });
+
   document.addEventListener('click', (e) => {
     if (datePicker.classList.contains('open') && !datePicker.contains(e.target) && e.target !== dateToggle && !dateToggle.contains(e.target)) {
       datePicker.classList.remove('open');
@@ -772,6 +780,10 @@
   const lightboxShare = document.getElementById('lightboxShare');
   const toast = document.getElementById('toast');
 
+  // 系统开了"减弱动态效果"就直接跳转，不做平滑滚动动画
+  const _reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  function scrollBehavior() { return _reduceMotion.matches ? 'auto' : 'smooth'; }
+
   function showToast(msg) {
     toast.textContent = msg;
     toast.classList.add('show');
@@ -784,7 +796,7 @@
   window.addEventListener('scroll', () => {
     backToTop.classList.toggle('show', window.scrollY > window.innerHeight * 0.6);
   }, { passive: true });
-  backToTop.onclick = () => window.scrollTo({ top: 0, behavior: 'smooth' });
+  backToTop.onclick = () => window.scrollTo({ top: 0, behavior: scrollBehavior() });
 
   let allPhotos = [];   // 扁平化的全部照片，按年份顺序
   let currentIndex = -1;
@@ -1115,7 +1127,7 @@
     }).join('');
     // 滚动到当前项
     const activeEl = strip.children[activeIndex];
-    if (activeEl) activeEl.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+    if (activeEl) activeEl.scrollIntoView({ inline: 'center', block: 'nearest', behavior: scrollBehavior() });
   }
 
   function _updateFilmstrip(index) {
@@ -1125,7 +1137,7 @@
       el.classList.toggle('active', i === index);
     });
     const activeEl = strip.children[index];
-    if (activeEl) activeEl.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+    if (activeEl) activeEl.scrollIntoView({ inline: 'center', block: 'nearest', behavior: scrollBehavior() });
   }
 
   function renderSlide(index) {
@@ -1797,8 +1809,7 @@
     document.body.classList.add('custom-cursor-active');
     if (cursorDot) {
       cursorDot.style.opacity = '1';
-      cursorDot.style.left = pointerX + 'px';
-      cursorDot.style.top = pointerY + 'px';
+      cursorDot.style.translate = pointerX + 'px ' + pointerY + 'px';
       cursorDot.classList.toggle('hover', !!e.target.closest(CURSOR_HOVER_SELECTOR));
     }
   });
@@ -1900,10 +1911,12 @@
       if (dist < RIPPLE_RADIUS) {
         const factor = 1 - dist / RIPPLE_RADIUS; // 0~1，越近越强
         const px = dx / center.w, py = dy / center.h;
-        const baseTilt = cell.style.getPropertyValue('--tilt-deg') || '0';
         cell.classList.add('touching');
+        // 只写 3D 倾斜：挂角那点旋转由 CSS 的 rotate 属性单独承担，两者会自动合成
+        // （以前这里带 rotate() 一起写进 transform，但 hangSway 动画也在动 transform，
+        //  动画优先级高于行内 style，整个倾斜效果其实一帧都没显示出来过）
         cell.style.transform =
-          'rotate(' + baseTilt + 'deg) perspective(700px) ' +
+          'perspective(700px) ' +
           'rotateX(' + (-py * 18 * factor).toFixed(2) + 'deg) rotateY(' + (px * 18 * factor).toFixed(2) + 'deg) ' +
           'scale(' + (1 + 0.08 * factor).toFixed(3) + ')';
       } else if (cell.classList.contains('touching')) {
@@ -2146,7 +2159,7 @@
         ).join('');
         window.jumpToYear = function (year) {
           const el = document.getElementById(yearPrefix + year);
-          if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 24, behavior: 'smooth' });
+          if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 24, behavior: scrollBehavior() });
           yearMenu.classList.remove('open');
         };
 

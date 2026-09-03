@@ -10,6 +10,17 @@
   }
   :root { color-scheme: dark; }
   * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+  /* 键盘可达性：:focus-visible 只在键盘导航（Tab）时出现，鼠标点击不会触发，
+     所以补上它不会改变任何鼠标操作下的观感，但键盘用户终于能看见自己走到哪儿了 */
+  :focus-visible {
+    /* 只画轮廓，不碰 border-radius——现代浏览器的 outline 会自动贴合元素圆角，
+       在这儿硬写一个半径反而会把 .date-toggle 这种正圆按钮聚焦时压成圆角方块 */
+    outline: 2px solid #ffd9a0;
+    outline-offset: 2px;
+  }
+  body.sun-on :focus-visible { outline-color: #7a4f0a; }
+  /* 输入框里内容是可以选中的，别被上面的全局 user-select:none 一起禁掉 */
+  input, textarea { user-select: text; -webkit-user-select: text; }
   html, body { scrollbar-width: none; -ms-overflow-style: none; }
   /* overflow-x:hidden 只放 body 上——同时加在 html 上是已知的 iOS Safari 坑，会把纵向滚动整个搞坏 */
   /* touch-action:pan-y 禁止横向滑动手势，只保留纵向滚动 */
@@ -282,7 +293,6 @@
   .sr-meta { color: #8a8a8f; font-size: 0.68rem; font-family: 'Space Grotesk', sans-serif; }
   @media (max-width: 640px) {
     .search-panel { top: 3.4rem; right: 0.8rem; left: 0.8rem; width: auto; }
-    .lunar-toggle { width: 32px; padding: 0; justify-content: center; }
   }
 
   .cal-header { display: flex; align-items: center; justify-content: space-between; }
@@ -440,7 +450,9 @@
     cursor: pointer; background: #f5f5f0; border-radius: 3px;
     padding: 16px 10px 26px; box-shadow: 0 8px 20px rgba(0,0,0,0.5);
     transform-origin: top center;
-    transform: rotate(calc(var(--tilt-deg) * 1deg));
+    /* 挂角用独立变换属性 rotate 写，不占用 transform——transform 要留给 JS 的指尖 3D 倾斜。
+       独立属性的合成顺序固定是 translate → rotate → scale → transform，两边互不覆盖 */
+    rotate: calc(var(--tilt-deg) * 1deg);
     /* 两个动画分别管不同属性：cellFadeIn 只管淡入（带各自的入场延迟），hangSway 管晃动，互不打架 */
     animation: cellFadeIn 0.55s ease var(--enter-delay, 0s) forwards,
                hangSway var(--sway-dur, 5s) ease-in-out var(--sway-delay, 0s) infinite;
@@ -464,10 +476,13 @@
   /* 滚出视野的照片把晃动 + 加载圈动画都暂停掉，照片一多，几十个元素同时跑动画会让整页变卡 */
   .cell.offscreen { animation-play-state: paused; }
   .cell.offscreen .frame-inner::after { animation-play-state: paused; }
+  /* 摇摆只动 rotate/translate 这两个独立变换属性，绝对不要写回 transform——
+     动画声明在层叠里压过行内 style，一旦 hangSway 动了 transform，
+     wallTick 写进 cell.style.transform 的指尖 3D 倾斜就永远显示不出来（曾经的真实 bug） */
   @keyframes hangSway {
-    0%   { transform: rotate(calc(var(--tilt-deg) * 1deg - 4deg)) translateX(-3px); }
-    50%  { transform: rotate(calc(var(--tilt-deg) * 1deg + 4deg)) translateX(3px); }
-    100% { transform: rotate(calc(var(--tilt-deg) * 1deg - 4deg)) translateX(-3px); }
+    0%   { rotate: calc(var(--tilt-deg) * 1deg - 4deg); translate: -3px 0; }
+    50%  { rotate: calc(var(--tilt-deg) * 1deg + 4deg); translate: 3px 0; }
+    100% { rotate: calc(var(--tilt-deg) * 1deg - 4deg); translate: -3px 0; }
   }
   /* 不再强制裁成正方形——加载完之前用 1:1 占位（跟加载圈对齐），加载完去掉占位比例，
      交给 img/video 的 height:auto 撑出真实比例，横图变宽矮、竖图变高窄 */
@@ -1100,7 +1115,11 @@
       padding: 1rem 1rem 1.5rem;
     }
     /* 卡片宽度交给 grid track，去掉行内 width；倾斜在窄屏会让视觉宽度失衡，一并去掉 */
-    .cell { width: 100% !important; height: auto !important; transform: none !important; }
+    .cell {
+      width: 100% !important; height: auto !important;
+      /* 挂角/摇摆现在走独立变换属性，transform:none 已经盖不住它们，要分别清零 */
+      transform: none !important; rotate: 0deg !important; translate: none !important;
+    }
     /* ── 移动端灯箱：全屏图片 + 顶部导航栏 + 底部毛玻璃条 ── */
     /* 详细信息默认不占布局；点顶栏 ⓘ 时变成顶栏之下的全屏浮层 */
     .lightbox-panel { display: none; }
@@ -1181,4 +1200,47 @@
     .cell, .date-toggle, .lightbox-btn, .lightbox-nav, .sunlight-switch .track {
       -webkit-tap-highlight-color: transparent;
     }
+    /* 移动端没有 hover，「▶ 视频」角标和 ❤️ 表态按钮不会像桌面那样一进一出错开，
+       两个都常驻右下角就直接叠成一团——把角标挪到左下角，各占一边 */
+    .play-badge { right: auto; left: 14px; }
+    /* 顶部这几个下拉原来只给 .date-picker/.search-panel 调过位置，
+       .year-menu/.nav-menu 还停在桌面的 right:1.4rem，而触发它们的按钮已经跟着
+       .header-controls 移到了 right:0.8rem——弹出来跟按钮差着大半厘米，对不齐 */
+    .year-menu, .nav-menu {
+      top: 3.4rem;
+      right: max(0.8rem, env(safe-area-inset-right));
+    }
+  }
+  /* ── 无障碍：尊重系统的"减弱动态效果" ─────────────────────────────────────
+     这个页面常驻的无限循环动画很多——每张照片各自的 hangSway 摇摆、光斑的
+     driftGlow/flicker、每个未加载格子的转圈、放映页的 Ken Burns。对前庭敏感
+     （晕动症）的用户是实打实的不适来源，而系统开关早就表达过态度了。
+     只关掉位移/旋转/缩放这类会"动起来"的效果，opacity 淡入淡出保留——
+     那既不引起眩晕，又是页面区分"加载中/已就绪"的主要语言，一并砍掉反而更难用 */
+  @media (prefers-reduced-motion: reduce) {
+    /* 照片墙：保留淡入（去掉入场延迟，直接就位），去掉摇摆和挂角倾斜 */
+    .cell {
+      animation: cellFadeIn 0.3s ease forwards !important;
+      rotate: 0deg !important;
+      translate: none !important;
+    }
+    .cell.touching { transform: none !important; }
+    /* 光斑漂移 / 开灯扫光 / 指尖光点：纯装饰，直接静止 */
+    .sunlight .glow { animation: none !important; }
+    .sun-sweep.play { animation: none !important; }
+    #fingertip { display: none !important; }
+    /* 加载转圈是必要的状态反馈，不能删，但放慢到不刺激的程度 */
+    .cell .frame-inner::after,
+    .lightbox-stage::after,
+    .lb-prog-spin { animation-duration: 2.4s !important; }
+    /* 灯箱切图的位移/缩放特效退化成纯淡入 */
+    .lightbox-stage img, .lightbox-stage video { transition: opacity 0.3s ease !important; }
+    .lightbox-stage img.fx-fade, .lightbox-stage video.fx-fade,
+    .lightbox-stage img.fx-zoom, .lightbox-stage video.fx-zoom,
+    .lightbox-stage img.fx-left, .lightbox-stage video.fx-left,
+    .lightbox-stage img.fx-right, .lightbox-stage video.fx-right { transform: none !important; }
+    /* 菜单项逐条浮现改成直接显示 */
+    .year-menu.open button { animation: none !important; opacity: 1 !important; transform: none !important; }
+    .lb-live-bar.playing .lp-live-icon { animation: none !important; }
+    .online-badge { animation: none !important; }
   }
