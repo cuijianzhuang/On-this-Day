@@ -23,6 +23,7 @@ Access 后面，不需要额外 token），系统状态、批量维护、
 
 管理端点也可直接 curl（同样不需要 token，但要带上能过 Cloudflare Access 的凭证）：
 `/admin/backfill-photos-index?limit=300`、`/admin/reindex-photo-dates?limit=200&offset=0`、
+`/admin/backfill-photo-dims?limit=50&after=<上次返回的 nextKey>`（回填缩略图宽高，返回 `nextKey` 为 null 表示扫完）、
 `/admin/score-photos?limit=10`、`/admin/locate-photos`、`/admin/convert-heic-photos`、
 `/admin/purge-cache?month=MM&day=DD`、`/admin/backfill-workflows`、`/admin/test-telegram`、
 `/admin/ops-status`、`/admin/photo-info?q=…`。
