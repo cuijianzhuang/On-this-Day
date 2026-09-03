@@ -34,6 +34,14 @@ CREATE TABLE IF NOT EXISTS photos_index (
   day TEXT NOT NULL,     -- 拍摄日：文件名带日期的直接解析，没带的靠 EXIF/R2 上传时间兜底（跟 getCapturedMonthDay 同一套逻辑）
   size INTEGER,
   uploaded TEXT,
+  -- 缩略图的像素宽高。用来在 /api/memories 里把真实长宽比发给前端，照片墙的占位框
+  -- 一开始就按正确比例撑开，图片加载完不再从 1:1 跳成真实比例（每张图一次布局位移）。
+  -- 取值来源是"已经生成好的等比缩略图"（fit=scale-down/contain），不是原图——
+  -- Cloudflare Images 的 transform 会应用 EXIF 旋转，竖拍照片原图像素是横的、
+  -- 输出却是竖的，只有量成品才不会把方向搞反。cover/crop 那种裁过的缩略图不能用来量。
+  -- 运行时由 ensureAuxTables() 的 ALTER 自动补列，这里只做文档记录
+  width INTEGER,
+  height INTEGER,
   updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_photos_index_month_day ON photos_index(month, day);

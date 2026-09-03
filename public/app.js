@@ -276,6 +276,47 @@
     return `<div class="lp-section-title">${escHtml(title)}</div><div class="lp-info-table">${rows.map(([l,v,cls]) => _lpRow(l,v,cls)).join('')}</div>`;
   }
 
+  // ── 缩略图地址：直连 PREVIEWS，绕开 /thumb/ 的 302 ────────────────────────────
+  // /thumb/ 的职责其实是"生成缩略图"，生成完只是 302 跳到 PREVIEWS 上一个 key 完全确定的 WebP。
+  // 既然 key 的算法是确定的，前端可以直接拼那个最终地址，省掉每张图一次 Worker 请求 + 一次
+  // 重定向往返——照片墙一屏几十张，省的就是几十次往返（而且那几十次 Worker 请求也是要计费的）。
+  //
+  // 拼法必须跟 worker.js 的 handleThumb 逐字对齐，否则拼出来的 key 对不上就是稳定 404：
+  //   宽高同样夹在 1..2000 → dimStr 有 h 时是 `${w}x${h}`、没有就是 `${w}`
+  //   thumbKey = `thumbs/${dimStr}/${原 key 去扩展名}.webp`，最后逐段 encodeURIComponent
+  // 注意 q 和 fit 都不参与 key（服务端固定 quality 75），所以这里也不能把它们拼进去。
+  //
+  // 缩略图还没生成过时这个地址是 404，onerror 会回落到 /thumb/ 由它现场生成并存好；
+  // 也就是说只有"从没被人看过的照片"才会退化成原来的两跳，看过一次之后永远是直连。
+  // PREVIEWS_BASE 由 worker 的 injectOgTags 注入；万一没注入（本地直开静态文件）就整个退回 /thumb/
+  const PREVIEWS_BASE = String(window.PREVIEWS_BASE || '').replace(/\/+$/, '');
+  function thumbUrls(photoUrl, opts) {
+    const w = Math.min(Math.max(Math.round(opts.w) || 400, 1), 2000);
+    const h = opts.h ? Math.min(Math.max(Math.round(opts.h), 1), 2000) : 0;
+    const params = '?w=' + w + (h ? '&h=' + h : '') + (opts.q ? '&q=' + opts.q : '') +
+      '&fit=' + (opts.fit || 'scale-down');
+    const fallback = photoUrl.replace('/img/', '/thumb/') + params;
+    if (!PREVIEWS_BASE || photoUrl.indexOf('/img/') !== 0) return { direct: fallback, fallback };
+    let key;
+    try { key = decodeURIComponent(photoUrl.slice('/img/'.length)); } catch (_) { return { direct: fallback, fallback }; }
+    const thumbKey = 'thumbs/' + (h ? w + 'x' + h : w) + '/' + key.replace(/\.[^.]+$/, '') + '.webp';
+    return { direct: PREVIEWS_BASE + '/' + thumbKey.split('/').map(encodeURIComponent).join('/'), fallback };
+  }
+
+  // 直连地址加载失败 → 先回落到 /thumb/ 让服务端现场生成一次，还不行才进原来那条退避重试链
+  window.onThumbError = function (img) {
+    img.onerror = null;
+    const fb = img.dataset.thumb;
+    // 没注入 PREVIEWS_BASE 时 direct 本来就等于 fallback，别再把同一个地址重试一遍
+    if (fb && !img.dataset.fellBack && img.getAttribute('src') !== fb) {
+      img.dataset.fellBack = '1';
+      img.onerror = () => { img.onerror = null; scheduleImageRetry(img, fb, img.dataset.src); };
+      img.src = fb;
+      return;
+    }
+    scheduleImageRetry(img, fb || img.src, img.dataset.src);
+  };
+
   // 缩略图第一次加载失败，先按 5s/15s/45s 退避重试原来的 /thumb/ 链接几次（破一下缓存强制重新请求）——
   // 很多裂图只是服务端转码/边缘缓存这会儿还没跟上，过一会儿自己就好了，不用等用户手动刷新整页。
   // 重试次数用完还是不行，才真正走 heicFallback 的现场解码/原图兜底
@@ -1122,8 +1163,8 @@
       if (p.type === 'video') {
         return `<div class="lfs-item${active}" onclick="renderSlide(${i})"><video src="${escAttr(p.url)}#t=0.5" muted preload="metadata" style="width:100%;height:100%;object-fit:cover"></video><span class="lfs-video-badge">▶</span></div>`;
       }
-      const thumb = p.url.replace('/img/', '/thumb/') + '?w=100&q=65&fit=cover';
-      return `<div class="lfs-item${active}" onclick="renderSlide(${i})"><img src="${escAttr(thumb)}" loading="lazy" decoding="async" /></div>`;
+      const t = thumbUrls(p.url, { w: 100, q: 65, fit: 'cover' });
+      return `<div class="lfs-item${active}" onclick="renderSlide(${i})"><img src="${escAttr(t.direct)}" data-thumb="${escAttr(t.fallback)}" loading="lazy" decoding="async" onerror="this.onerror=null;this.src=this.dataset.thumb" /></div>`;
     }).join('');
     // 滚动到当前项
     const activeEl = strip.children[activeIndex];
@@ -2116,7 +2157,16 @@
             // 高分屏封顶在 2x，不然 3x 机型一次性吃满带宽）；转换失败（HEIC 等）就在 onerror 里走浏览器端解码兜底
             const thumbW = Math.round((isMobileLayout ? mobileRenderSize : size) * dpr);
             // 不再传 h= + fit=cover 强制裁成正方形——只限宽，fit=scale-down 按原图比例缩放，不裁内容
-            const thumbSrc = p.url.replace('/img/', '/thumb/') + '?w=' + thumbW + '&q=75&fit=scale-down';
+            const t = thumbUrls(p.url, { w: thumbW, q: 75, fit: 'scale-down' });
+            // 后端量到过这张图的真实长宽比就直接用它撑占位框（--ar），图片加载完不会再有任何位移；
+            // 量不到（视频、或者缩略图还没生成过）就留空，退回原来的 1:1 占位 + 加载完切真实比例。
+            // 这两个值是直接落进 HTML 属性的、不走 escAttr，先强制转成正整数，
+            // 万一接口给了别的类型不至于把属性拼断
+            const arW = Math.round(Number(p.width)) || 0;
+            const arH = Math.round(Number(p.height)) || 0;
+            const hasRatio = arW > 0 && arH > 0;
+            const ratioCls = hasRatio ? ' ratio-known' : '';
+            const ratioStyle = hasRatio ? ` style="--ar:${arW}/${arH}"` : '';
             // _roomReactions 的值是 {emoji: count} 对象，直接 > 0 比较恒为 false（之前初次渲染
             // 计数永远空白，全靠 WS init 后 _syncAllCounts 补），要先用 _totalReactions 聚合成数字
             const reactCnt = _totalReactions(p.key);
@@ -2128,9 +2178,9 @@
               // Live Photo 缩略图：默认显示静态图，悬浮（桌面）/长按（移动端）才播放配对的短视频
               // 网格缩略图上不展示 Live Photo 图标——放大（点开灯箱）才提示，网格里看起来就是张普通照片，
               // 悬浮照样会播放配对视频，算是个不张扬的小彩蛋
-              return `<div class="cell${extraClass}" style="${style}" onclick="openLightbox(${flatIndex}, false)"><div class="frame-inner live-photo-cell" onmouseenter="this.classList.add('playing');const v=this.querySelector('video');v.loop=true;v.currentTime=0;v.play().catch(()=>{})" onmouseleave="this.classList.remove('playing');this.querySelector('video').pause()" ontouchstart="livePhotoTouchStart(this,event)" ontouchend="livePhotoTouchEnd(this,event)" ontouchcancel="livePhotoTouchEnd(this,event)"><img src="${escAttr(thumbSrc)}" data-src="${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.onerror=null;scheduleImageRetry(this,this.src,this.dataset.src)" /><video src="${p.videoUrl}" loop muted playsinline preload="none" class="cell-live-video"></video></div><span class="frame-year">${y.year}</span><button class="react-btn" data-key="${escAttr(p.key)}" onclick="event.stopPropagation();doReact(this)">❤️<span class="react-cnt">${reactCntText}</span></button></div>`;
+              return `<div class="cell${extraClass}" style="${style}" onclick="openLightbox(${flatIndex}, false)"><div class="frame-inner live-photo-cell${ratioCls}"${ratioStyle} onmouseenter="this.classList.add('playing');const v=this.querySelector('video');v.loop=true;v.currentTime=0;v.play().catch(()=>{})" onmouseleave="this.classList.remove('playing');this.querySelector('video').pause()" ontouchstart="livePhotoTouchStart(this,event)" ontouchend="livePhotoTouchEnd(this,event)" ontouchcancel="livePhotoTouchEnd(this,event)"><img src="${escAttr(t.direct)}" data-thumb="${escAttr(t.fallback)}" data-src="${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="onThumbError(this)" /><video src="${p.videoUrl}" loop muted playsinline preload="none" class="cell-live-video"></video></div><span class="frame-year">${y.year}</span><button class="react-btn" data-key="${escAttr(p.key)}" onclick="event.stopPropagation();doReact(this)">❤️<span class="react-cnt">${reactCntText}</span></button></div>`;
             }
-            return `<div class="cell${extraClass}" style="${style}" onclick="openLightbox(${flatIndex}, false)"><div class="frame-inner"><img src="${escAttr(thumbSrc)}" data-src="${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.onerror=null;scheduleImageRetry(this,this.src,this.dataset.src)" /></div><span class="frame-year">${y.year}</span><button class="react-btn" data-key="${escAttr(p.key)}" onclick="event.stopPropagation();doReact(this)">❤️<span class="react-cnt">${reactCntText}</span></button></div>`;
+            return `<div class="cell${extraClass}" style="${style}" onclick="openLightbox(${flatIndex}, false)"><div class="frame-inner${ratioCls}"${ratioStyle}><img src="${escAttr(t.direct)}" data-thumb="${escAttr(t.fallback)}" data-src="${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="onThumbError(this)" /></div><span class="frame-year">${y.year}</span><button class="react-btn" data-key="${escAttr(p.key)}" onclick="event.stopPropagation();doReact(this)">❤️<span class="react-cnt">${reactCntText}</span></button></div>`;
           }).join('');
           const showMoreBtn = extraCount > 0
             ? `<button class="show-more-btn" data-total="${y.photos.length}" onclick="toggleShowMore(this)">展开查看全部 ${y.photos.length} 张 ›</button>`

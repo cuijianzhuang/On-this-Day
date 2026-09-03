@@ -484,13 +484,19 @@
     50%  { rotate: calc(var(--tilt-deg) * 1deg + 4deg); translate: 3px 0; }
     100% { rotate: calc(var(--tilt-deg) * 1deg - 4deg); translate: -3px 0; }
   }
-  /* 不再强制裁成正方形——加载完之前用 1:1 占位（跟加载圈对齐），加载完去掉占位比例，
-     交给 img/video 的 height:auto 撑出真实比例，横图变宽矮、竖图变高窄 */
-  .cell .frame-inner { position: relative; width: 100%; aspect-ratio: 1; overflow: hidden; border-radius: 1px; background: #1c1c1e; }
-  .cell .frame-inner:has(.loaded) { aspect-ratio: auto; }
+  /* 占位比例。不裁成正方形，横图就该宽矮、竖图就该高窄，分两种情况：
+     一、后端量到过真实长宽比（.ratio-known + 行内 --ar）：占位框从第一帧起就是正确比例，
+         图片加载完什么都不用变——这是消掉"每张图加载完跳一下"那次布局位移的关键。
+     二、量不到（视频、或缩略图还没生成过）：保持老行为，先 1:1 占位（跟加载圈对齐），
+         加载完切 aspect-ratio:auto，交给 img/video 的 height:auto 撑出真实比例 */
+  .cell .frame-inner { position: relative; width: 100%; aspect-ratio: var(--ar, 1); overflow: hidden; border-radius: 1px; background: #1c1c1e; }
+  .cell .frame-inner:not(.ratio-known):has(.loaded) { aspect-ratio: auto; }
   /* 彻底解不出来、放弃兜底的（give-up，见 heicFallback）没有真图片可以撑比例——
-     强制改回方形占位，不然一张没有任何尺寸的裂图会让整个格子塌成一条薄片 */
-  .cell .frame-inner:has(.give-up) { aspect-ratio: 1; }
+     退回占位比例（量到过就用真实比例，没量到就 1:1），不然一张没有任何尺寸的裂图
+     会让整个格子塌成一条薄片。
+     选择器必须写满 :not(.ratio-known) 这一段把特指度顶到跟上面那条 auto 规则同级（0,3,0）：
+     give-up 的元素同时也带着 .loaded（见 heicFallback 最后那行），少写一段就会被 auto 那条压过去 */
+  .cell .frame-inner:not(.ratio-known):has(.give-up) { aspect-ratio: var(--ar, 1); }
   .cell img, .cell video {
     display: block; width: 100%; height: auto;
     opacity: 0; transition: opacity 0.4s ease;

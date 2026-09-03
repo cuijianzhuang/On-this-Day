@@ -33,7 +33,8 @@
 - **历史上的今天**：Wikimedia Feed API 的当日大事记（中文维基精选优先、英文兜底），折叠在诗词下方，跟着正在浏览的日期切换；边缘缓存 7 天，接口挂了整块隐藏不影响主页面
 
 ### 数据索引（photos_index）
-- R2 里的照片/视频不再靠每次访问现场 `list()` 扫描——D1 索引表 `photos_index`（key, type, year, month, day, size, uploaded），按 month/day 建了索引
+- R2 里的照片/视频不再靠每次访问现场 `list()` 扫描——D1 索引表 `photos_index`（key, type, year, month, day, size, uploaded, width, height），按 month/day 建了索引
+- **缩略图宽高（消除布局跳动）**：`width`/`height` 存的是等比缩略图的像素尺寸，`/api/memories` 一并下发，前端用它把照片墙的占位框一开始就撑成正确比例——图片加载完不再从 1:1 跳成真实比例（一屏几十张就是几十次布局位移）。取值只从**已生成的等比缩略图**量（`/thumb/` 生成时顺手 `IMAGES.info()`，不计费），不量原图：Images 的 transform 会应用 EXIF 旋转，竖拍照片原图像素是横的、输出却是竖的，量原图会把方向搞反；`fit=cover` 那种裁过的也不能用来量。存量照片由 Cron 慢慢回填（只探测 PREVIEWS 里已有的缩略图，不触发任何转换），或手动跑 `/admin/backfill-photo-dims`
 - **R2 Event Notification → Queue → Workflow** 增量维护：新文件一上传，`queue()` consumer 只负责触发 `PhotoProcessingWorkflow`，索引、HEIC 转预览、AI 打分、查地点、清缓存分散到 Workflow 的独立步骤里（每步持久化、独立重试）；删除事件轻量内联处理，同步清掉索引/打分/地点/预览图/日期缓存
 - 首次部署或存量库很大时跑一次性回填：`GET /admin/backfill-photos-index?token=xxx&limit=200`；Cron 也会自动补，**全部补完后写 `backfill_done_at` 标记，降频为每天核对一次**，不再空转扫桶
 - **存量日期重算**：索引日期规则变更后（见"核心逻辑"），Cron 在回填的对侧分钟自动分批重算存量行（每趟 200 行，进度存 KV，扫完写 `reindex_dates_done_at` 后永久跳过），修正的行顺手清掉新旧两天的缓存；`/admin/reindex-photo-dates` 可手动加速
@@ -42,6 +43,7 @@
 - `/api/memories`、`/api/map-photos` 结果用 Workers Cache API 缓存；新文件上传/删除时自动清对应日期的缓存
 - `/img/` 图片字节显式缓存在边缘节点；206 Range 响应（视频拖动）不缓存
 - `/thumb/` 缩略图由 Cloudflare Images binding 转成 WebP 后写入 `PREVIEWS` 桶，302 跳公开预览 URL，后续同尺寸请求不再重复转换；转码失败时 HEIC 回退到预转 JPEG 预览（而不是浏览器显示不了的原图）
+- **前端直连缩略图，跳过 302**：缩略图在 PREVIEWS 里的 key 是完全确定的（`thumbs/{w}/{原key去扩展名}.webp`），所以照片墙和胶片卷直接拼最终地址，不再每张图先请求 `/thumb/` 再跟一次重定向——一屏几十张就是省掉几十次往返和几十个 Worker 请求。地址由 `window.PREVIEWS_BASE`（worker 注入首页）拼出，算法必须和 `handleThumb` 逐字一致；缩略图还没生成时直连是 404，前端 `onerror` 回落到 `/thumb/` 由它现场生成，所以只有"从没被看过的照片"才会退化成原来的两跳
 - 页面 CSS/JS 由 Cloudflare Static Assets 托管，Worker 只处理动态路由
 - **零境外 CDN 依赖**：Space Grotesk 字体自托管（可变字体单个 latin 子集 woff2，22KB 覆盖 400-600 字重）；heic2any（1.3MB）也在 `public/vendor/` 自托管且**懒加载**——只在"服务端转码缺失 + 缩略图加载失败"的兜底路径第一次被走到时才动态注入
 - AI 打分、查地点、HEIC 转码、索引回填等批量后台处理走 **Cron 定时任务**，跟用户访问完全分开
@@ -108,7 +110,7 @@ Photos/MobileBackup/iPhone/{年}/{月}/{文件名}
 
 元数据都存在 **D1**（`memories-db`）：
 
-- `photos_index (key, type, year, month, day, size, uploaded, updated_at)` —— 照片/视频索引，R2 Event Notification 增量维护
+- `photos_index (key, type, year, month, day, size, uploaded, width, height, updated_at)` —— 照片/视频索引，R2 Event Notification 增量维护；`width`/`height` 是等比缩略图的像素尺寸，用于前端占位比例
 - `photo_scores (key, score, has_face, caption, raw_response, updated_at)` —— AI 打分/文案结果
 - `photo_places (key, lat, lon, name)` —— 反向地理编码结果
 - `photo_reactions (key, emoji, count)` —— 表态计数镜像（权威数据在 DO Storage，这张表供"全家最爱"跨日期聚合）
@@ -231,6 +233,7 @@ push 到 `master` 即触发 GitHub Actions（`.github/workflows/deploy.yml`）�
 | `GET /admin/locate-photos?limit=10` | 批量查拍摄地点 |
 | `GET /admin/convert-heic-photos?limit=3` | 批量 HEIC 转 JPEG 预览 |
 | `GET /admin/backfill-photos-index?limit=200` | 存量文件回填进 photos_index |
+| `GET /admin/backfill-photo-dims?limit=50&after=` | 存量照片回填缩略图宽高（只读已有缩略图，不触发转换）|
 | `GET /admin/reindex-photo-dates?limit=200&offset=0` | 按新规则重算存量索引行的年月日（Cron 会自动跑，此端点用于手动加速；按返回的 `nextOffset` 翻页，`null` 表示扫完） |
 | `GET /admin/backfill-workflows?limit=20` | 历史积压照片批量触发 Workflow（转码+打分一条龙） |
 | `GET /admin/purge-cache?month=MM&day=DD` | 手动清某天的边缘缓存 |

@@ -39,7 +39,7 @@ export default {
     }
 
     if (url.pathname.startsWith("/thumb/")) {
-      return handleThumb(request, env, url);
+      return handleThumb(request, env, url, ctx);
     }
 
     if (url.pathname === "/admin/score-photos") {
@@ -60,6 +60,10 @@ export default {
 
     if (url.pathname === "/admin/backfill-photos-index") {
       return handleBackfillPhotosIndex(request, env, url);
+    }
+
+    if (url.pathname === "/admin/backfill-photo-dims") {
+      return handleBackfillPhotoDims(request, env, url);
     }
 
     if (url.pathname === "/admin/reindex-photo-dates") {
@@ -205,7 +209,7 @@ export default {
     // 预览卡片能带上"当天最高分照片 + 日期标题"，链接不再是光秃秃一行字
     if (url.pathname === "/") {
       const assetResp = await env.ASSETS.fetch(request);
-      return injectOgTags(assetResp, url);
+      return injectOgTags(assetResp, url, env);
     }
 
     // 其余请求（/favicon.svg、/app.css、/app.js 等）交给 Static Assets CDN
@@ -698,6 +702,13 @@ async function ensureAuxTables(env) {
   try {
     await env.DB.prepare("ALTER TABLE anniversaries ADD COLUMN is_leap INTEGER NOT NULL DEFAULT 0").run();
   } catch { /* 列已存在 */ }
+  // 缩略图像素宽高：前端拿它按真实比例撑占位框，消掉每张图加载完的那次布局跳动
+  try {
+    await env.DB.prepare("ALTER TABLE photos_index ADD COLUMN width INTEGER").run();
+  } catch { /* 列已存在 */ }
+  try {
+    await env.DB.prepare("ALTER TABLE photos_index ADD COLUMN height INTEGER").run();
+  } catch { /* 列已存在 */ }
   // 打分重试计数列（见 NEEDS_SCORE_SQL）：老库没有这一列，SQLite 的 ALTER 不支持
   // IF NOT EXISTS，靠"列已存在就报错"这一点保证只加一次，重复执行吞掉错误即可
   try {
@@ -1146,7 +1157,7 @@ async function handleAppIcon(request, env, url) {
 
 // 首页 HTML 注入 og meta。month/day 都是校验过的两位数字，title 只含数字和汉字，
 // 不存在注入面
-function injectOgTags(assetResp, url) {
+function injectOgTags(assetResp, url, env) {
   const today = bjToday();
   const month = /^\d{2}$/.test(url.searchParams.get("month") || "") ? url.searchParams.get("month") : today.month;
   const day = /^\d{2}$/.test(url.searchParams.get("day") || "") ? url.searchParams.get("day") : today.day;
@@ -1161,9 +1172,15 @@ function injectOgTags(assetResp, url) {
     `<meta property="og:image:width" content="1200">` +
     `<meta property="og:image:height" content="630">` +
     `<meta name="twitter:card" content="summary_large_image">`;
+  // 缩略图公开域名下发给前端：app.js 拿它直接拼 PREVIEWS 上的 WebP 地址，
+  // 不再每张图先请求 /thumb/ 等一个 302 再跳过去（一屏几十张就是几十次多余往返）。
+  // 拼错或者缩略图还没生成时前端会 onerror 回落到 /thumb/，由它现场生成，行为不变
+  const previewsBase = JSON.stringify(env && env.PREVIEWS_PUBLIC_URL ? env.PREVIEWS_PUBLIC_URL : "")
+    .replace(/<\//g, "<\\/");
   return new HTMLRewriter()
     .on("head", {
       element(el) {
+        el.prepend(`<script>window.PREVIEWS_BASE=${previewsBase};</script>`, { html: true });
         el.append(tags, { html: true });
       },
     })
@@ -1300,6 +1317,29 @@ async function runBackgroundMaintenance(env) {
     beat.errors.push((doBackfillThisTick ? "backfill: " : "reindex: ") + (err?.message || err));
   }
 
+  // 存量照片的宽高回填。跟上面那对回填/重扫不同，这一段很轻——只对 PREVIEWS 里"已经生成过"的
+  // 等比缩略图做 head/get/info，一次只把一张几十 KB 的 WebP 拿在手上，不解原图、不调 transform，
+  // 所以不用参与单双 tick 的内存轮换，每轮都跑一小批就行。
+  // 游标扫到表尾就写完成标记永久跳过：之后新生成的缩略图在 handleThumb 里当场就量了（见
+  // measureAndRecordDims），不需要这里再兜底
+  try {
+    if (!(await env.KV.get("dims_backfill_done_at"))) {
+      const after = (await env.KV.get("dims_backfill_cursor")) || "";
+      const res = await backfillPhotoDimsBatch(env, 25, after);
+      beat.dimsMeasured = res.measured;
+      if (res.nextKey == null) {
+        await env.KV.put("dims_backfill_done_at", new Date().toISOString());
+        await env.KV.delete("dims_backfill_cursor");
+        console.log(`backfillPhotoDims: 全表扫描完成，仍无缩略图可量的还有 ${res.stillUnmeasured} 张`);
+      } else {
+        await env.KV.put("dims_backfill_cursor", res.nextKey);
+      }
+    }
+  } catch (err) {
+    console.error("backfillPhotoDims failed", err);
+    beat.errors.push("dims: " + (err?.message || err));
+  }
+
   // 之前这里用 listAll() 扫一遍整个 R2 桶 + matchPhotosForDay() 对每个年份再扫一遍、
   // 并发读一批 EXIF——8000+ 张照片之后这套组合在 Cron 里稳定触发 exceededMemory，
   // 整个 Cron 任务直接被杀掉，打分/查地点/HEIC 转码全都没跑成。改成查 photos_index 表，
@@ -1417,6 +1457,9 @@ function pairLivePhotos(objs, year) {
         type: "live",
         size: image.size,
         uploaded: image.uploaded,
+        // 宽高可能还没量到（这张图的等比缩略图从没生成过），那就不发——
+        // 前端拿不到就退回原来的 1:1 占位，不是错误状态
+        ...(image.width && image.height ? { width: image.width, height: image.height } : {}),
         year,
       });
     } else if (image || video) {
@@ -1427,6 +1470,7 @@ function pairLivePhotos(objs, year) {
         type: video ? "video" : "image",
         size: obj.size,
         uploaded: obj.uploaded,
+        ...(obj.width && obj.height ? { width: obj.width, height: obj.height } : {}),
         year,
       });
     }
@@ -1577,7 +1621,7 @@ async function matchLunarPhotos(env, month, day, excludeKeys) {
   const conds = triples.map(() => "(year = ? AND month = ? AND day = ?)").join(" OR ");
   const binds = triples.flatMap((t) => [t.year, t.month, t.day]);
   const { results } = await env.DB.prepare(
-    `SELECT key, year, month, day, size, uploaded FROM photos_index WHERE ${conds}`
+    `SELECT key, year, month, day, size, uploaded, width, height FROM photos_index WHERE ${conds}`
   ).bind(...binds).all();
 
   const byYearRows = new Map();
@@ -1604,8 +1648,11 @@ async function matchPhotosForDay(env, month, day) {
   // photos_index 在写入时就用跟这里完全相同的规则算好了拍摄日（文件名带日期直接解析，没带的
   // 走 EXIF/上传时间兜底，见 computePhotoMeta），所以这里直接按索引查，不用再现场 list() 扫 R2 +
   // 对每个没带日期的文件单独读一次 EXIF——之前这套组合是"切日期卡顿/首次加载等好几秒"的根源
+  // ensureAuxTables 里 ALTER 出来的 width/height 老库可能还没有——先确保补列跑过，
+  // 否则这条 SELECT 会因 "no such column: width" 把整个 /api/memories 打成 500
+  await ensureAuxTables(env);
   const { results } = await env.DB.prepare(
-    "SELECT key, year, size, uploaded FROM photos_index WHERE month = ? AND day = ?"
+    "SELECT key, year, size, uploaded, width, height FROM photos_index WHERE month = ? AND day = ?"
   )
     .bind(month, day)
     .all();
@@ -2689,7 +2736,7 @@ async function generateHeicPreview(env, key) {
 }
 
 
-async function handleThumb(request, env, url) {
+async function handleThumb(request, env, url, ctx) {
   // 同 handleImage：畸形百分号序列要接住，返回 400 而不是 1101
   let origKey;
   try { origKey = decodeURIComponent(url.pathname.replace(/^\/thumb\//, "")); }
@@ -2735,6 +2782,14 @@ async function handleThumb(request, env, url) {
       httpMetadata: { contentType: "image/webp", cacheControl: "public, max-age=31536000, immutable" },
     });
 
+    // 顺手量一下成品的像素宽高存进 photos_index，前端拿它按真实比例撑占位框（见 recordPhotoDimensions）。
+    // 量的是刚生成的这份 WebP 而不是原图：transform 会应用 EXIF 旋转，竖拍照片的原图像素是横的、
+    // 输出却是竖的，只有量成品方向才不会反。.info() 不计费，且这里本来就已经把 buf 拿在手上了
+    if (isUncroppedFit(fit)) {
+      const record = measureAndRecordDims(env, origKey, buf);
+      if (ctx) ctx.waitUntil(record); else await record;
+    }
+
     const resp = thumbRedirect(publicUrl);
     await caches.default.put(cacheKey, resp.clone());
     return resp;
@@ -2753,6 +2808,35 @@ async function handleThumb(request, env, url) {
     }
     return handleImage(request, env, new URL(url.toString().replace("/thumb/", "/img/")));
   }
+}
+
+// 只有等比缩放出来的缩略图才能用来量长宽比——cover/crop 是按目标框裁过的，
+// 量出来是目标框的比例（比如搜索结果那个 96x96 方图），拿去撑占位框会把每张照片都摆成正方形
+function isUncroppedFit(fit) {
+  return fit === "scale-down" || fit === "contain";
+}
+
+// 量出一张（等比）缩略图的像素宽高并写进 photos_index。宽高只用来算比例，
+// 存的是缩略图尺寸而不是原图尺寸——比例一样，而且不用再去解一遍原图
+async function measureAndRecordDims(env, origKey, bytes) {
+  try {
+    const info = await env.IMAGES.info(new Blob([bytes]).stream());
+    if (!info || !info.width || !info.height) return;
+    await recordPhotoDimensions(env, origKey, info.width, info.height);
+  } catch (err) {
+    // 量不出来不影响缩略图本身——前端拿不到宽高就退回 1:1 占位，纯粹少一层优化
+    console.error("measureAndRecordDims failed for", origKey, err);
+  }
+}
+
+// 只更新已存在的索引行；照片还没进 photos_index 时不要在这里插半行进去，
+// 那会造出一条没有 year/month/day 的记录，"那年今日"按日期查根本带不出来，
+// 反而挡住后面 computePhotoMeta 正常的 INSERT
+async function recordPhotoDimensions(env, key, width, height) {
+  await ensureAuxTables(env);
+  await env.DB.prepare("UPDATE photos_index SET width = ?, height = ? WHERE key = ?")
+    .bind(width, height, key)
+    .run();
 }
 
 // 正式缩略图的 key 含尺寸、内容不可变，302 直接给一年 immutable，省掉每天每节点一次回源；
@@ -3414,6 +3498,74 @@ async function handleReindexPhotoDates(request, env, url) {
   const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
   const result = await reindexPhotoDatesBatch(env, limit, offset);
 
+  return new Response(JSON.stringify(result), {
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+}
+
+// 存量照片的宽高回填。新照片走 handleThumb 生成缩略图时顺手量（见 measureAndRecordDims），
+// 但库里已有的几千张不会主动触发生成——这里专门捡"缩略图早就生成过、只是当时还没量"的那批：
+// 只对 PREVIEWS 里已存在的等比缩略图做 head + get + info，全程不调用 transform，不产生任何
+// 转换计费。探不到现成缩略图的就跳过（留 NULL），等它第一次被浏览时自然量到。
+//
+// 探测宽度列表 = 前端实际会请求的那些等比宽度：1600 是灯箱大图（照片被点开过就有），
+// 其余是照片墙格子宽 × 设备像素比（1x / 2x）。移动端宽度是按视口算的、无法穷举，
+// 探不中就留给下次浏览
+const THUMB_PROBE_WIDTHS = [1600, 460, 420, 380, 340, 300, 230, 210, 190, 170, 150];
+
+async function backfillPhotoDimsBatch(env, limit, afterKey = "") {
+  await ensureAuxTables(env);
+  // 视频没有 IMAGES 能解的缩略图，排除掉，否则每轮都在它们身上白探一遍。
+  // 按 key 游标推进而不是 OFFSET：量到宽高的行会从 width IS NULL 这个过滤里掉出去，
+  // 用 OFFSET 的话后面的行会整体前移，每轮都跳过一段没处理的
+  const { results } = await env.DB.prepare(
+    "SELECT key FROM photos_index WHERE type = 'image' AND (width IS NULL OR height IS NULL) " +
+    "AND key > ? ORDER BY key LIMIT ?"
+  ).bind(afterKey, limit).all();
+
+  let measured = 0, missing = 0;
+  for (const { key } of results) {
+    const base = key.replace(/\.[^.]+$/, "");
+    let hit = null;
+    for (const w of THUMB_PROBE_WIDTHS) {
+      const thumbKey = `thumbs/${w}/${base}.webp`;
+      if (await env.PREVIEWS.head(thumbKey)) { hit = thumbKey; break; }
+    }
+    if (!hit) { missing++; continue; }
+    const obj = await env.PREVIEWS.get(hit);
+    if (!obj) { missing++; continue; }
+    try {
+      const info = await env.IMAGES.info(obj.body);
+      if (info && info.width && info.height) {
+        await recordPhotoDimensions(env, key, info.width, info.height);
+        measured++;
+      } else {
+        missing++;
+      }
+    } catch (err) {
+      console.error("backfillPhotoDims: info failed for", hit, err);
+      missing++;
+    }
+  }
+
+  const remainingRow = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM photos_index WHERE type = 'image' AND (width IS NULL OR height IS NULL)"
+  ).first();
+  // 这一批取满了说明后面还有，游标停在最后一个 key 上；不满就说明扫到表尾了
+  const nextKey = results.length === limit ? results[results.length - 1].key : null;
+  return {
+    scanned: results.length,
+    measured,
+    missing,
+    nextKey,
+    // 探不到现成缩略图的行会永远留在这个计数里，它归零不是完成条件，只是个观测值
+    stillUnmeasured: remainingRow ? remainingRow.n : 0,
+  };
+}
+
+async function handleBackfillPhotoDims(request, env, url) {
+  const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 200);
+  const result = await backfillPhotoDimsBatch(env, limit, url.searchParams.get("after") || "");
   return new Response(JSON.stringify(result), {
     headers: { "content-type": "application/json; charset=utf-8" },
   });
