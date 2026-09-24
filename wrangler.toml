@@ -109,8 +109,10 @@ head_sampling_rate = 1
 
 
 [vars]
-# ADMIN_TOKEN 是敏感密钥，不提交到 git——部署时由 GitHub Actions 通过 wrangler secret 注入，
-# 本地开发用 `wrangler secret put ADMIN_TOKEN` 手动设置一次即可
+# 这里只放可以公开提交的值。敏感值一律 `wrangler secret put`，不要写进这个文件。
+# 需要手动设一次的 secret 只有 MAPBOX_TOKEN（反向地理编码，创建 token 时必须勾 Geocoding
+# 权限，没勾会一直 403）——它不在 GitHub Actions 的同步列表里，换账号重建时最容易漏。
+# TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 由 Actions 从 GitHub Secrets 同步，不用手动设。
 # MAPBOX_PUBLIC_TOKEN 是公开的 pk. token，会发到浏览器，可以安全提交
 MAPBOX_PUBLIC_TOKEN = "pk.eyJ1IjoiY3VpcGx1cyIsImEiOiJjbHYxMnA0ZTAwMm5lMm5wYzJjeXJwOGQyIn0.tdHoQD-xn2jC_pY1R_1Sag"
 PREVIEWS_PUBLIC_URL = "https://previews.cuijianzhuang.com"
