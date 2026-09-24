@@ -91,17 +91,20 @@ jobs:
           command: deploy
 
       # Secret 是持久的：deploy 不会清掉已设置的 secret，这步只是把 GitHub Secrets 的最新值
-      # 同步过去，绝大多数时候是幂等空转。只要 Cloudflare Build 的 Git 连接还没断开，
-      # 它的"非生产分支构建"随时会传未部署版本触发 10215 拒绝——那不影响本次部署的正确性，
+      # 同步过去，绝大多数时候是幂等空转。同理，这里不发某个 key 也不会把它删掉——
+      # ADMIN_TOKEN 就是这么移出列表的：worker.js 已经一处都不再读它（整站挡在
+      # Cloudflare Access 后面，管理端点不再单独校验 token），留着只会让每个照文档
+      # 配置的人白配一个 secret，而已经设进 Worker 的那份不受影响。
+      # 只要 Cloudflare Build 的 Git 连接还没断开，它的"非生产分支构建"随时会传未部署
+      # 版本触发 10215 拒绝——那不影响本次部署的正确性，
       # 所以 continue-on-error：同步得上就同步，同步不上不拉红整个 workflow
       - name: Sync secrets
         continue-on-error: true
         run: |
-          jq -n '{ADMIN_TOKEN: env.ADMIN_TOKEN, TELEGRAM_BOT_TOKEN: env.TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID: env.TELEGRAM_CHAT_ID}' \
+          jq -n '{TELEGRAM_BOT_TOKEN: env.TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID: env.TELEGRAM_CHAT_ID}' \
             | npx wrangler secret bulk
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
