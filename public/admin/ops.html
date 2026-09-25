@@ -112,7 +112,7 @@ body {
 }
 .card-head h2 { font-size: .95rem; font-weight: 600; flex: 1; }
 /* ── Stat tiles ── */
-.stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(145px, 1fr)); gap: 9px; }
+.stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 9px; }
 .stat {
   background: rgba(0,0,0,.3);
   border: 1px solid var(--border);
@@ -131,6 +131,7 @@ body {
 .stat.warn .v { color: var(--amber); }
 .stat.danger .v { color: var(--red); }
 .stat .l { font-size: .65rem; color: var(--text-sub); margin-top: .25rem; line-height: 1.4; }
+.stat .sub { font-size: .62rem; color: var(--text-dim); margin-top: .15rem; font-variant-numeric: tabular-nums; }
 /* ── Flag pills ── */
 .flags { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .8rem; }
 .pill {
@@ -141,12 +142,21 @@ body {
 .pill.ok { background: var(--green-dim); border-color: rgba(52,199,89,.25); color: var(--green); }
 .pill.warn { background: var(--amber-dim); border-color: rgba(245,166,35,.3); color: var(--amber); }
 /* ── Recent indexed ── */
-.recent-list {
-  margin-top: .8rem; padding-top: .75rem;
-  border-top: 1px solid var(--border);
-  font-size: .7rem; font-family: ui-monospace, Menlo, Consolas, monospace;
-  color: var(--text-sub); line-height: 1.9; overflow-x: auto; white-space: nowrap;
+/* 以前是把 8 条记录用"·"串成一行、横向滚动，路径又长，一屏只看得到一条半 */
+.recent-list { margin-top: .8rem; padding-top: .75rem; border-top: 1px solid var(--border); }
+.recent-list:empty { display: none; }
+.recent-title { font-size: .68rem; color: var(--text-dim); font-weight: 600; margin-bottom: .35rem; }
+.recent-row {
+  display: flex; align-items: baseline; gap: .7rem; width: 100%;
+  padding: .28rem .45rem; margin: 0 -.45rem; border: none; border-radius: 6px;
+  background: none; color: var(--text-sub); font-weight: 400; font-size: .72rem; text-align: left;
+  cursor: pointer; white-space: nowrap;
 }
+.recent-row:hover { background: var(--surface-hover); color: var(--text); border: none; }
+.recent-row .rr-date { font-variant-numeric: tabular-nums; color: var(--text-dim); flex-shrink: 0; }
+.recent-row .rr-name { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--text); flex-shrink: 0; }
+.recent-row .rr-dir { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.recent-row .rr-type { font-size: .62rem; color: var(--purple); flex-shrink: 0; }
 /* ── Buttons ── */
 button {
   display: inline-flex; align-items: center; gap: .35rem;
@@ -182,13 +192,27 @@ input[type="text"], input[type="search"], input:not([type]) {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: .42rem .7rem;
-  color: var(--text); font-size: .8rem; outline: none;
+  color: var(--text); font-size: .8rem; font-family: inherit; line-height: 1.25; outline: none;
   transition: border-color .14s;
 }
-input:focus { border-color: var(--border-focus); }
+/* 下拉框原来没被上面这条覆盖，显示成浏览器原生的白色控件，跟旁边的深色输入框格格不入 */
+select {
+  appearance: none; -webkit-appearance: none;
+  background: rgba(0,0,0,.4) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238a8a90' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right .6rem center;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: .42rem 1.7rem .42rem .7rem;
+  color: var(--text); font-size: .8rem; font-family: inherit; line-height: 1.25; outline: none; cursor: pointer;
+}
+select option { background: #16161c; color: var(--text); }
+input:focus, select:focus { border-color: var(--border-focus); }
 .hint { font-size: .68rem; color: var(--text-dim); margin-top: .6rem; line-height: 1.7; }
 .bulk-wrap { display: flex; align-items: center; gap: .4rem; }
 .bulk-prog { font-size: .7rem; font-variant-numeric: tabular-nums; color: var(--text-sub); min-width: 8ch; }
+.bulk-prog:empty { display: none; } /* 没在跑时不占位，不然两个"全量"按钮中间空出一大截 */
+.detail-links { margin-top: .35rem; }
+.detail-links a { font-size: .7rem; color: var(--blue); text-decoration: none; }
+.detail-links a:hover { text-decoration: underline; }
+.search-count { font-size: .68rem; color: var(--text-dim); margin-bottom: .5rem; }
 /* ── Anniversaries ── */
 .anniv-list { margin-top: .8rem; display: flex; flex-direction: column; gap: .4rem; }
 .anniv-row {
@@ -308,6 +332,19 @@ input:focus { border-color: var(--border-focus); }
   .topbar { padding: .75rem 1rem; }
   .page { padding: 1rem 1rem 0; }
   .stats { grid-template-columns: repeat(3, 1fr); }
+  .kbd-hint { display: none; } /* Ctrl+K 在手机上没有意义 */
+  /* 纪念日表单：标题独占一行，历法/月/日才能排在同一行，不会把"月"和"日"拆到两行 */
+  .field-wide { flex: 1 1 100%; }
+  .field-wide input { width: 100% !important; }
+  /* 纪念日：标题和说明上下叠，按钮留在右侧——原来挤在一行里，标题被压成两行、删除按钮单独掉到下一行 */
+  .anniv-row { display: grid; grid-template-columns: auto 1fr auto auto; column-gap: .5rem; row-gap: .1rem; align-items: center; }
+  .anniv-row .ar-date { grid-row: 1 / 3; }
+  .anniv-row .ar-title { grid-column: 2; }
+  .anniv-row .ar-meta { grid-column: 2; grid-row: 2; }
+  .anniv-row button { grid-row: 1 / 3; }
+  .anniv-row button[data-act="edit"] { grid-column: 3; }
+  .anniv-row button[data-act="del"] { grid-column: 4; }
+  .recent-row .rr-dir { display: none; }
   .match-grid { grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); }
   .detail-head { flex-direction: column; }
   .detail-thumb { width: 100%; height: 160px; }
@@ -390,8 +427,8 @@ input:focus { border-color: var(--border-focus); }
   <div class="task-section">
     <div class="task-label">缓存清除</div>
     <div class="btn-row">
-      <div class="field"><label>月 MM</label><input id="pgMonth" style="width:64px" maxlength="2" placeholder="07" /></div>
-      <div class="field"><label>日 DD</label><input id="pgDay" style="width:64px" maxlength="2" placeholder="08" /></div>
+      <div class="field"><label>月</label><input id="pgMonth" style="width:64px" maxlength="2" inputmode="numeric" placeholder="MM" /></div>
+      <div class="field"><label>日</label><input id="pgDay" style="width:64px" maxlength="2" inputmode="numeric" placeholder="DD" /></div>
       <button id="btn-purge" onclick="purgeDay()">🗑 清这天边缘缓存</button>
     </div>
   </div>
@@ -411,11 +448,11 @@ input:focus { border-color: var(--border-focus); }
   <div class="card-head">
     <div class="card-icon" style="background:var(--amber-dim);font-size:.9rem">🔧</div>
     <h2>照片数据修复</h2>
-    <span style="font-size:.68rem;color:var(--text-dim)">Ctrl+K 聚焦搜索</span>
+    <span class="kbd-hint" style="font-size:.68rem;color:var(--text-dim)">Ctrl+K 聚焦搜索</span>
   </div>
   <div class="search-row">
     <input id="q" placeholder="按 key 子串搜索：IMG_1234 / 2023/07 / 海边…" onkeydown="if(event.key==='Enter')searchPhoto()" />
-    <button class="primary" onclick="searchPhoto()">搜索</button>
+    <button class="primary" id="btnSearch" onclick="searchPhoto()">搜索</button>
   </div>
   <div id="matches"></div>
 
@@ -425,7 +462,10 @@ input:focus { border-color: var(--border-focus); }
         <img class="detail-thumb" id="dThumb" alt="" />
         <span class="detail-r2-badge ok" id="dR2Badge">R2 ✓</span>
       </div>
-      <div class="kv" id="dInfo"></div>
+      <div style="flex:1;min-width:0">
+        <div class="kv" id="dInfo"></div>
+        <div class="detail-links" id="dLinks"></div>
+      </div>
     </div>
 
     <div class="fix-section">
@@ -467,7 +507,7 @@ input:focus { border-color: var(--border-focus); }
     <button onclick="loadAnniversaries()">刷新</button>
   </div>
   <div class="actions">
-    <div class="field"><label>标题</label><input id="avTitle" style="width:160px" placeholder="奶奶生日" /></div>
+    <div class="field field-wide"><label>标题</label><input id="avTitle" style="width:160px" placeholder="奶奶生日" /></div>
     <div class="field">
       <label>历法</label>
       <select id="avCalendar" style="width:76px" onchange="onAnnivCalendarChange()">
@@ -475,13 +515,13 @@ input:focus { border-color: var(--border-focus); }
         <option value="lunar">农历</option>
       </select>
     </div>
-    <div class="field"><label id="avMonthLabel">月 MM</label><input id="avMonth" style="width:56px" maxlength="2" placeholder="07" /></div>
-    <div class="field"><label id="avDayLabel">日 DD</label><input id="avDay" style="width:56px" maxlength="2" placeholder="08" /></div>
+    <div class="field"><label id="avMonthLabel">月</label><input id="avMonth" style="width:56px" maxlength="2" inputmode="numeric" placeholder="MM" /></div>
+    <div class="field"><label id="avDayLabel">日</label><input id="avDay" style="width:56px" maxlength="2" inputmode="numeric" placeholder="DD" /></div>
     <div class="field" id="avLeapField" style="display:none">
       <label>&nbsp;</label>
       <label style="display:flex;align-items:center;gap:.3rem;height:34px"><input type="checkbox" id="avLeap" style="width:auto" />闰月</label>
     </div>
-    <div class="field"><label>起始年（选填，算第几年）</label><input id="avYearStart" style="width:96px" maxlength="4" placeholder="1958" /></div>
+    <div class="field"><label>起始年（选填，算第几年）</label><input id="avYearStart" style="width:96px" maxlength="4" inputmode="numeric" placeholder="1958" /></div>
     <div class="field"><label>提前提醒天数（逗号分隔，最多5个）</label><input id="avRemind" style="width:110px" placeholder="7,3,1" /></div>
     <button class="primary" id="btn-anniv-submit" onclick="submitAnniversary()">添加</button>
     <button id="btn-anniv-cancel" onclick="cancelEditAnniversary()" style="display:none">取消编辑</button>
@@ -633,10 +673,10 @@ function loadStatus() {
 }
 
 function renderStats(d) {
+  // 索引总量 = 图片 + 视频，原来拆成三张卡；合成一张，6 张卡正好一行（原来 8 张排成 6+2）
   var tiles = [
-    { icon:'📸', v: d.index.total, l:'索引总量', cls: d.index.total > 0 ? 'ok' : '' },
-    { icon:'🖼', v: d.index.byType.image || 0, l:'图片', cls: '' },
-    { icon:'🎬', v: d.index.byType.video || 0, l:'视频', cls: '' },
+    { icon:'📸', v: d.index.total, l:'索引总量', cls: d.index.total > 0 ? 'ok' : '',
+      sub: '图片 ' + (d.index.byType.image || 0) + ' · 视频 ' + (d.index.byType.video || 0) },
     { icon:'🤖', v: d.unscored, l:'待 AI 打分', cls: d.unscored > 50 ? 'danger' : d.unscored > 0 ? 'warn' : 'ok' },
     { icon:'📍', v: d.unlocated, l:'待查地点', cls: d.unlocated > 50 ? 'danger' : d.unlocated > 0 ? 'warn' : 'ok' },
     { icon:'📬', v: d.pendingNotify, l:'待推送', cls: d.pendingNotify > 0 ? 'warn' : 'ok' },
@@ -644,7 +684,8 @@ function renderStats(d) {
     { icon:'📝', v: d.comments, l:'手记条数', cls: '' },
   ];
   document.getElementById('stats').innerHTML = tiles.map(function(t) {
-    return '<div class="stat ' + t.cls + '"><div class="stat-icon">' + t.icon + '</div><div class="v">' + t.v + '</div><div class="l">' + t.l + '</div></div>';
+    return '<div class="stat ' + t.cls + '"><div class="stat-icon">' + t.icon + '</div><div class="v">' + t.v + '</div><div class="l">' + t.l + '</div>' +
+      (t.sub ? '<div class="sub">' + t.sub + '</div>' : '') + '</div>';
   }).join('');
 }
 
@@ -679,9 +720,23 @@ function renderFlags(d) {
 
 function renderRecent(d) {
   var rows = (d.recentIndexed || []);
-  document.getElementById('recent').innerHTML = rows.length
-    ? '最近入库：' + rows.map(function(r){ return r.year + '/' + r.month + '/' + r.day + ' · ' + r.key; }).join(' &nbsp;·&nbsp; ')
-    : '';
+  var box = document.getElementById('recent');
+  if (!rows.length) { box.innerHTML = ''; return; }
+  // 一行一条：拍摄日期、文件名、所在目录；点一下直接在下面「照片数据修复」里打开
+  box.innerHTML = '<div class="recent-title">最近入库（点击查看详情）</div>' + rows.map(function(r) {
+    var parts = r.key.split('/'), name = parts.pop();
+    return '<button class="recent-row" data-key="' + escAttr(r.key) + '" title="' + escAttr(r.key) + '">' +
+      '<span class="rr-date">' + escHtml(r.year + '/' + r.month + '/' + r.day) + '</span>' +
+      '<span class="rr-name">' + escHtml(name) + '</span>' +
+      (r.type === 'video' ? '<span class="rr-type">视频</span>' : '') +
+      '<span class="rr-dir">' + escHtml(parts.join('/')) + '</span></button>';
+  }).join('');
+  box.querySelectorAll('.recent-row').forEach(function(el) {
+    el.addEventListener('click', function() {
+      document.getElementById('q').value = el.dataset.key.split('/').pop();
+      openPhoto(el.dataset.key);
+    });
+  });
 }
 
 // ── Maintenance tasks ─────────────────────────────────────────────────────────
@@ -699,6 +754,14 @@ function runTask(btn, endpoint, params) {
     btn.classList.remove('loading'); btn.disabled = false;
   });
 }
+
+// 清缓存的日期默认填北京时间今天——最常见的场景就是"今天刚传的照片没出来"。
+// 原来输入框里是灰色占位符 07 / 08，看起来像已经填好的值，其实是空的
+(function prefillPurgeDate() {
+  var t = bjDate().toISOString();
+  document.getElementById('pgMonth').value = t.slice(5, 7);
+  document.getElementById('pgDay').value = t.slice(8, 10);
+})();
 
 function purgeDay() {
   var m = (document.getElementById('pgMonth').value.trim() || '').padStart(2, '0');
@@ -719,13 +782,15 @@ function searchPhoto() {
   if (!q) return;
   document.getElementById('detail').classList.remove('open');
   currentKey = null;
+  var sBtn = document.getElementById('btnSearch');
+  sBtn.classList.add('loading'); sBtn.disabled = true;
   api('/admin/photo-info?q=' + encodeURIComponent(q)).then(function(d) {
     var ms = d.matches || [];
     if (!ms.length) {
       document.getElementById('matches').innerHTML = '<div class="hint" style="padding:.5rem 0">没有匹配（只搜已索引的照片）</div>';
       return;
     }
-    document.getElementById('matches').innerHTML = '<div class="match-grid" id="matchGrid">' +
+    document.getElementById('matches').innerHTML = '<div class="search-count">找到 ' + ms.length + ' 张</div><div class="match-grid" id="matchGrid">' +
       ms.map(function(m) {
         var thumb = '/thumb/' + encodeURIComponent(m.key) + '?w=240&h=240&q=65&fit=cover';
         var name = m.key.split('/').pop();
@@ -741,7 +806,7 @@ function searchPhoto() {
         openPhoto(el.dataset.key);
       });
     });
-  }).catch(function(){});
+  }).catch(function(){}).finally(function() { sBtn.classList.remove('loading'); sBtn.disabled = false; });
 }
 function escAttr(s) { return String(s).replace(/"/g, '&quot;'); }
 
@@ -774,6 +839,10 @@ function openPhoto(key) {
     document.getElementById('fxMonth').value = i.month || '';
     document.getElementById('fxDay').value = i.day || '';
     document.getElementById('fxPlace').value = d.place ? (d.place.name || '') : '';
+    // 改完日期 / 地点之后，最直接的核对方式就是去首页看那一天
+    document.getElementById('dLinks').innerHTML = i.month
+      ? '<a href="/?month=' + i.month + '&day=' + i.day + '" target="_blank" rel="noopener">在首页查看 ' + Number(i.month) + '月' + Number(i.day) + '日 ↗</a>'
+      : '';
     det.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }).catch(function(){});
 }
@@ -784,7 +853,6 @@ function copyText(t) {
 
 function fix(action) {
   if (!currentKey) return;
-  var btnId = 'btn-' + action.replace(/-([a-z])/g, function(_, c){ return '-' + c; });
   var btn = document.getElementById('btn-' + action);
   var body = { key: currentKey, action: action };
   if (action === 'set-date') {
@@ -798,7 +866,9 @@ function fix(action) {
   api('/admin/photo-fix', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
     .then(function(d) {
       addLog({ action: action, key: currentKey, result: d });
-      toast(action + ' 完成', 'ok');
+      var FIX_LABELS = { 'set-date': '拍摄日期已保存', 'set-place': '地点名已修改', 'relocate': '已重新查询地点',
+        'rescore': '已重新打分', 'clear-note': '手记已删除', 'remove-index': '已从索引移除' };
+      toast(FIX_LABELS[action] || '完成', 'ok');
       if (action === 'remove-index') {
         document.getElementById('detail').classList.remove('open');
         currentKey = null;
@@ -915,8 +985,8 @@ function loadAnniversaries() {
 function onAnnivCalendarChange() {
   var isLunar = document.getElementById('avCalendar').value === 'lunar';
   document.getElementById('avLeapField').style.display = isLunar ? '' : 'none';
-  document.getElementById('avMonthLabel').textContent = isLunar ? '农历月' : '月 MM';
-  document.getElementById('avDayLabel').textContent = isLunar ? '农历日' : '日 DD';
+  document.getElementById('avMonthLabel').textContent = isLunar ? '农历月' : '月';
+  document.getElementById('avDayLabel').textContent = isLunar ? '农历日' : '日';
 }
 function readAnniversaryForm() {
   return {

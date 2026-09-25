@@ -66,7 +66,7 @@
       { v: d.comments.toLocaleString('zh-CN'), l: '手记留言' },
       { v: d.score.scored.toLocaleString('zh-CN'), l: 'AI 已鉴赏' },
       { v: d.score.avg != null ? d.score.avg : '—', l: '平均颜值分' },
-      { v: d.score.withFacePct + '%', l: '有笑脸照片' },
+      { v: d.score.withFacePct + '%', l: '有人像的照片' }, // 数据是 AI 人脸检测（has_face），不代表在笑
       { v: d.topMonth ? d.topMonth + ' 月' : '—', l: '最爱拍照的月份' },
     ];
     document.getElementById('statGrid').innerHTML = tiles.map(function (t) {
@@ -79,10 +79,21 @@
     renderHighlights(d);
   }
 
-  function renderYearChart(years) {
+  function renderYearChart(rawYears) {
     var section = document.getElementById('yearSection');
     var canvas = document.getElementById('yearChart');
-    if (!years.length) { section.style.display = 'none'; return; }
+    if (!rawYears.length) { section.style.display = 'none'; return; }
+
+    // 接口只返回有照片的年份。直接画的话柱子等距排开，看起来像连续的年份——
+    // 副标题写着"横跨 9 个年头"，图里却只有 5 根柱子，中间没拍照的那几年被悄悄抹掉了。
+    // 补齐首尾之间的每一年，没照片的年份画成一道很淡的底线，空档一眼能看出来
+    var counts = {};
+    rawYears.forEach(function (y) { counts[y.year] = y.count; });
+    var yNums = rawYears.map(function (y) { return Number(y.year); });
+    var years = [];
+    for (var yr = Math.min.apply(null, yNums); yr <= Math.max.apply(null, yNums); yr++) {
+      years.push({ year: String(yr), count: counts[String(yr)] || 0 });
+    }
 
     var dpr = Math.min(window.devicePixelRatio || 1, 2);
     // canvas 的 CSS width:100% 已经让浏览器排好版、天然扣除了 chart-wrap 的左右内边距，
@@ -96,13 +107,22 @@
     ctx.scale(dpr, dpr);
 
     var maxC = years.reduce(function (m, y) { return Math.max(m, y.count); }, 0);
-    var padBottom = 20, padTop = 8;
+    var padBottom = 20, padTop = 18; // 顶部留出柱顶数字的位置
     var gap = 6;
     var barW = (w - gap * (years.length - 1)) / years.length;
 
     years.forEach(function (y, i) {
-      var barH = maxC ? (y.count / maxC) * (h - padBottom - padTop) : 0;
       var x = i * (barW + gap);
+      ctx.font = '10px "Space Grotesk", sans-serif';
+      ctx.textAlign = 'center';
+      if (!y.count) {
+        ctx.fillStyle = 'rgba(255,217,150,0.16)';
+        ctx.fillRect(x, h - padBottom - 2, barW, 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.22)';
+        ctx.fillText(String(y.year).slice(2), x + barW / 2, h - 6);
+        return;
+      }
+      var barH = Math.max((y.count / maxC) * (h - padBottom - padTop), 3);
       var yTop = h - padBottom - barH;
       var grad = ctx.createLinearGradient(0, yTop, 0, h - padBottom);
       grad.addColorStop(0, '#ffd996');
@@ -120,9 +140,12 @@
       ctx.fill();
 
       ctx.fillStyle = 'rgba(255,255,255,0.42)';
-      ctx.font = '10px "Space Grotesk", sans-serif';
-      ctx.textAlign = 'center';
       ctx.fillText(String(y.year).slice(2), x + barW / 2, h - 6);
+      // 柱顶标具体数量；柱子太窄（年份很多）时放不下就不标，免得挤成一团
+      if (barW >= 16) {
+        ctx.fillStyle = 'rgba(255,217,150,0.85)';
+        ctx.fillText(y.count.toLocaleString('zh-CN'), x + barW / 2, yTop - 5);
+      }
     });
   }
 
@@ -133,7 +156,7 @@
     var maxC = items.reduce(function (m, it) { return Math.max(m, it.count); }, 0);
     document.getElementById(listId).innerHTML = items.map(function (it) {
       var pct = maxC ? Math.round((it.count / maxC) * 100) : 0;
-      return '<div class="place-row"><span class="name">' + esc(it.name) + '</span>' +
+      return '<div class="place-row"><span class="name" title="' + esc(it.name) + '">' + esc(it.name) + '</span>' +
         '<span class="bar-track"><span class="bar" style="width:' + pct + '%"></span></span>' +
         '<span class="count">' + it.count + '</span></div>';
     }).join('');

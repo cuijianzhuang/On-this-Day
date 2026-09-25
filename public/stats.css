@@ -30,10 +30,12 @@
   }
   .hero-sub { color: #98989d; font-size: 0.92rem; margin-top: 0.7rem; }
 
+  /* 固定 4 列（8 张卡片正好两行）。原来 auto-fit 在 720px 宽里排成 6 列，第二行孤零零剩 2 张 */
   .stat-grid {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(105px, 1fr));
+    display: grid; grid-template-columns: repeat(4, 1fr);
     gap: 10px; margin-bottom: 2.6rem;
   }
+  @media (max-width: 420px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
   .stat-tile {
     background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06);
     border-radius: 14px; padding: 1rem 0.7rem; text-align: center;
@@ -53,9 +55,10 @@
 
   .place-list { display: flex; flex-direction: column; gap: 6px; }
   .place-row { display: flex; align-items: center; gap: 0.7rem; padding: 0.3rem 0; }
+  /* 标签列定宽：原来是 min/max 区间，名字长短不一时每根条的起点跟着左右错开，排行对不齐 */
   .place-row .name {
-    font-size: 0.8rem; color: #e8e8ec; flex-shrink: 0; min-width: 5.2rem;
-    max-width: 8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 0.8rem; color: #e8e8ec; flex: 0 0 7.5rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .place-row .bar-track { flex: 1; background: rgba(255,255,255,0.06); border-radius: 999px; height: 6px; overflow: hidden; }
   .place-row .bar { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #e8b054, #ffd996); }

@@ -28,7 +28,8 @@
   .card img.loaded { opacity: 1; }
   .badge {
     position: absolute; left: 8px; bottom: 8px; display: flex; align-items: center; gap: 4px;
-    background: rgba(255,180,50,0.16); backdrop-filter: blur(8px); border-radius: 999px;
+    /* 深色半透明底：跟右边日期角标一致。原来是琥珀底配琥珀字，浅色照片上数字直接看不见 */
+    background: rgba(0,0,0,0.5); backdrop-filter: blur(8px); border-radius: 999px;
     padding: 3px 9px; color: #ffd996; font-size: 0.72rem; font-weight: 600;
   }
   .date { position: absolute; right: 8px; bottom: 8px; color: rgba(255,255,255,0.85); font-size: 0.66rem;
