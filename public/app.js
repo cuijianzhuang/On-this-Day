@@ -238,8 +238,8 @@
     '拍摄时间':'<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
     '时区':    '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/>',
     '色彩空间':'<circle cx="12" cy="12" r="10"/><circle cx="8.5" cy="11" r="2.5" fill="none"/><circle cx="15.5" cy="11" r="2.5" fill="none"/><circle cx="12" cy="16" r="2.5" fill="none"/>',
-    '纬度':    '<line x1="12" y1="2" x2="12" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/>',
-    '经度':    '<line x1="12" y1="2" x2="12" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/>',
+    '纬度':    '<circle cx="12" cy="12" r="10"/><path d="M4.5 7h15M2 12h20M4.5 17h15"/>',
+    '经度':    '<circle cx="12" cy="12" r="10"/><path d="M12 2c-3.5 3-3.5 17 0 20M12 2c3.5 3 3.5 17 0 20"/>',
     '海拔':    '<polyline points="23 6 13 16 8 11 1 18"/><polyline points="17 6 23 6 23 12"/>',
     '软件':    '<rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>',
     '焦距':    '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>',
@@ -360,10 +360,14 @@
     return _heicLibPromise;
   }
 
-  window.heicFallback = async function (imgEl, originalUrl, attempt) {
+  // onDone：图片最终显示出来（或彻底放弃）时调用。照片墙格子靠 .loaded 显形，不需要它；
+  // 灯箱里的图靠 .show 显形——以前灯箱走到这条兜底时图其实已经加载好了，却因为没人加 .show
+  // 一直是 opacity:0，用户看到的是永远转圈（1600 宽缩略图转换失败时就会走到这里）
+  window.heicFallback = async function (imgEl, originalUrl, attempt, onDone) {
     attempt = attempt || 0;
+    const done = () => { if (onDone) onDone(); };
     if (!/\.heic$/i.test(originalUrl)) {
-      imgEl.onload = () => imgEl.classList.add('loaded');
+      imgEl.onload = () => { imgEl.classList.add('loaded'); done(); };
       imgEl.src = originalUrl;
       return;
     }
@@ -373,7 +377,7 @@
       const converted = await heic2any({ blob, toType: 'image/jpeg', quality: 0.85 });
       const previewBlob = Array.isArray(converted) ? converted[0] : converted;
       const objUrl = URL.createObjectURL(previewBlob);
-      imgEl.onload = () => imgEl.classList.add('loaded');
+      imgEl.onload = () => { imgEl.classList.add('loaded'); done(); };
       imgEl.src = objUrl;
       // 顺手把现场解码的结果回传存进 PREVIEWS 桶，下次别的访问者就不用再解码一遍了——
       // 哪怕服务端那边重试次数早就用完放弃了，这次浏览器端解码成功一样会被接受存进去
@@ -382,7 +386,7 @@
     } catch {
       if (attempt < HEIC_DECODE_RETRY_DELAYS.length) {
         setTimeout(() => {
-          if (document.body.contains(imgEl)) heicFallback(imgEl, originalUrl, attempt + 1);
+          if (document.body.contains(imgEl)) heicFallback(imgEl, originalUrl, attempt + 1, onDone);
         }, HEIC_DECODE_RETRY_DELAYS[attempt]);
         return;
       }
@@ -390,6 +394,7 @@
       // 多加个 give-up 标记——没有真图片撑不出原图比例，靠这个让方形占位比例继续生效，
       // 不然 frame-inner 会被 :has(.loaded) 那条规则放行成 auto，没尺寸的裂图直接塌成一条薄片
       imgEl.classList.add('loaded', 'give-up');
+      done(); // 放弃了也要通知：灯箱那边据此收起加载圈，而不是一直转
     }
   };
 
@@ -590,7 +595,7 @@
   let currentDay = Number(day);
 
   function renderCalendar() {
-    calMonthLabel.textContent = calViewYear + '年' + String(calViewMonth + 1).padStart(2, '0') + '月';
+    calMonthLabel.textContent = calViewYear + '年' + (calViewMonth + 1) + '月';
     const firstWeekday = (new Date(calViewYear, calViewMonth, 1).getDay() + 6) % 7; // 周一为第一列
     const daysInMonth = new Date(calViewYear, calViewMonth + 1, 0).getDate();
     const isCurrentRealMonth = calViewYear === now.getFullYear() && calViewMonth === now.getMonth();
@@ -781,8 +786,16 @@
   const sunlightLabel = document.getElementById('sunlightLabel');
   sunlightSwitch.checked = true;
   sunlightLabel.textContent = 'KEEP THE SUN OUT';
-  document.body.classList.add('sun-on');
   sunlight.classList.add('on');
+
+  // body.sun-on 会把标题、按钮换成深色字——前提是背后真有一层亮的叶影视频。可 body 背景是纯黑，
+  // "变亮"全靠视频叠上去：视频还没加载（首屏数据到了才开始下）、被系统拒绝自动播放（iOS 低电量
+  // 模式，下面会直接把视频藏掉）、或者加载失败时，深色字就压在纯黑上，标题几乎完全看不见。
+  // 所以开关只表示"用户想要阳光"，真正切成深色字要等视频第一帧出来（playing 事件）
+  let _leafShowing = false;
+  function syncSunMode() {
+    document.body.classList.toggle('sun-on', sunlightSwitch.checked && _leafShowing);
+  }
   ambientAudio.volume = 0.5;
   ambientAudio.play().catch(() => {});
 
@@ -793,16 +806,20 @@
   const leafVideo = document.getElementById('leafVideo');
   let startLeafVideo = () => {};
   if (leafVideo) {
+    const setLeafShowing = (v) => { _leafShowing = v; syncSunMode(); };
     const tryPlayLeaf = () => {
       if (!leafVideo.src) leafVideo.src = leafVideo.dataset.src;
-      leafVideo.play().then(() => { leafVideo.style.display = ''; }).catch(() => { leafVideo.style.display = 'none'; });
+      leafVideo.play().then(() => { leafVideo.style.display = ''; }).catch(() => { leafVideo.style.display = 'none'; setLeafShowing(false); });
     };
+    // 暂停不算"没显示"：暂停的视频仍停在最后一帧，背景照样是亮的；只有真出错才退回深色背景配浅色字
+    leafVideo.addEventListener('playing', () => setLeafShowing(true));
+    leafVideo.addEventListener('error', () => setLeafShowing(false));
     startLeafVideo = tryPlayLeaf;
     window.addEventListener('touchend', tryPlayLeaf, { once: true, passive: true });
     window.addEventListener('click', tryPlayLeaf, { once: true });
   }
   sunlightSwitch.onchange = () => {
-    document.body.classList.toggle('sun-on', sunlightSwitch.checked);
+    syncSunMode();
     sunlight.classList.toggle('on', sunlightSwitch.checked);
     sunlightLabel.textContent = sunlightSwitch.checked ? 'KEEP THE SUN OUT' : 'LET THE SUN IN';
     if (sunlightSwitch.checked) {
@@ -1319,7 +1336,7 @@
             };
           }, 500);
         },
-        () => { heicFallback(img, p.url); }
+        () => { heicFallback(img, p.url, 0, () => showWhenReady(img)); }
       );
 
       // 桌面：悬停左上角「实况」角标播放，移开停止——鼠标扫过照片本身不再触发
@@ -1361,7 +1378,7 @@
       const imgSrc = p.url.replace('/img/', '/thumb/') + '?w=1600&q=85&fit=scale-down';
       _loadImgWithProgress(imgSrc, el,
         () => showWhenReady(el),
-        () => { heicFallback(el, p.url); }
+        () => { heicFallback(el, p.url, 0, () => showWhenReady(el)); }
       );
       lightboxBody.appendChild(el);
     }
@@ -2046,7 +2063,10 @@
       if (seq !== _memSeq) return; // 用户已切换到别的日期，丢弃过期结果
 
       const apply = () => {
-        document.getElementById('title').innerHTML = '<span class="date">' + data.month + '月' + data.day + '日</span>，那些年的此刻';
+        // 接口给的是两位数字符串（"06"），标题里按中文习惯写成"6月14日"——跟分享卡片的 og:title 一致
+        // 两个短语各自是不可拆分的块：窄屏折行时只会在逗号后面断开（"6月14日，/ 那些年的此刻"），
+        // 不会把"那些年"拆到两行，逗号也不会跑到行首
+        document.getElementById('title').innerHTML = '<span class="h1-seg"><span class="date">' + Number(data.month) + '月' + Number(data.day) + '日</span>，</span><span class="h1-seg">那些年的此刻</span>';
         _joinRoom(data.month + '-' + data.day);
 
         // 农历同日段落（后端算好：同一农历日在往年对应的公历日期的照片，公历同日重复的已排除）
