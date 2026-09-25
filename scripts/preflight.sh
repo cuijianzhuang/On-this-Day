@@ -18,7 +18,7 @@ bad()  { printf '  \033[31m✗\033[0m %s\n' "$1"; fail=1; }
 warn() { printf '  \033[33m!\033[0m %s\n' "$1"; }
 
 echo "[1/5] 语法检查"
-for f in worker.js src/lib/*.js public/app.js public/map.js; do
+for f in worker.js $(find src -name "*.js" | sort) public/app.js public/map.js; do
   if node --check "$f" 2>/dev/null; then ok "$f"; else bad "$f 语法错误：$(node --check "$f" 2>&1 | head -3)"; fi
 done
 

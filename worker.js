@@ -13,6 +13,9 @@ import { WorkflowEntrypoint } from "cloudflare:workers";
 import { solarToLunar, lunarToSolar, lunarLabel } from "./src/lib/lunar.js";
 import { findExifItemId, parseExifTiff, parseExifForDisplay } from "./src/lib/exif.js";
 import { IMAGE_EXT, VIDEO_EXT, pairLivePhotos, dateFromFilename } from "./src/lib/media.js";
+import { memoriesCacheKey, mapPhotosDayCacheKey, mapPhotosAllCacheKey, dayCacheKeys } from "./src/lib/cache-keys.js";
+import { cacheLookup, cacheStore, cachePut } from "./src/http.js";
+import { SITE_ORIGIN } from "./src/config.js";
 
 
 const BASE_PREFIX = "Photos/MobileBackup/iPhone/";
@@ -36,7 +39,7 @@ export default {
     }
 
     if (url.pathname.startsWith("/img/")) {
-      return handleImage(request, env, url);
+      return handleImage(request, env, url, ctx);
     }
 
     if (url.pathname.startsWith("/thumb/")) {
@@ -113,15 +116,15 @@ export default {
     }
 
     if (url.pathname === "/api/anniversaries/upcoming") {
-      return handleAnniversariesUpcoming(request, env, url);
+      return handleAnniversariesUpcoming(request, env, url, ctx);
     }
 
     if (url.pathname === "/api/map-photos") {
-      return handleMapPhotos(request, env, url);
+      return handleMapPhotos(request, env, url, ctx);
     }
 
     if (url.pathname === "/api/exif") {
-      return handleExif(request, env, url);
+      return handleExif(request, env, url, ctx);
     }
 
     if (url.pathname === "/api/static-map") {
@@ -129,15 +132,15 @@ export default {
     }
 
     if (url.pathname === "/og-image") {
-      return handleOgImage(request, env, url);
+      return handleOgImage(request, env, url, ctx);
     }
 
     if (url.pathname === "/app-icon") {
-      return handleAppIcon(request, env, url);
+      return handleAppIcon(request, env, url, ctx);
     }
 
     if (url.pathname === "/api/top-loved") {
-      return handleTopLoved(request, env, url);
+      return handleTopLoved(request, env, url, ctx);
     }
 
     if (url.pathname === "/api/search") {
@@ -153,7 +156,7 @@ export default {
     }
 
     if (url.pathname === "/api/recap") {
-      return handleRecap(request, env, url);
+      return handleRecap(request, env, url, ctx);
     }
 
     if (url.pathname === "/recap") {
@@ -161,7 +164,7 @@ export default {
     }
 
     if (url.pathname === "/api/stats") {
-      return handleStats(request, env, url);
+      return handleStats(request, env, url, ctx);
     }
 
     if (url.pathname === "/stats") {
@@ -173,7 +176,7 @@ export default {
     }
 
     if (url.pathname === "/api/onthisday") {
-      return handleOnThisDay(request, env, url);
+      return handleOnThisDay(request, env, url, ctx);
     }
 
     if (url.pathname === "/api/upload-heic-preview" && request.method === "POST") {
@@ -614,13 +617,12 @@ async function handleAnniversaries(request, env, url) {
 
 // 首页用：今天命中的 + 未来 14 天内最近的几个纪念日，边缘缓存一小时（够用又不会显示一整天过时）。
 // 带上 bj 日期（date 字段），前端拿它做"今天已关闭过 banner"的去重 key，不用信浏览器本地时区
-async function handleAnniversariesUpcoming(request, env, url) {
+async function handleAnniversariesUpcoming(request, env, url, ctx) {
   await ensureAuxTables(env);
 
-  const cache = caches.default;
-  const cacheKey = new Request(`${SITE_ORIGIN}/api/anniversaries/upcoming`);
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached;
+  const cacheKey = `${SITE_ORIGIN}/api/anniversaries/upcoming`;
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   const { results } = await env.DB.prepare(
     "SELECT title, month, day, year_start, calendar, is_leap FROM anniversaries"
@@ -654,8 +656,7 @@ async function handleAnniversariesUpcoming(request, env, url) {
   const response = new Response(JSON.stringify({ date: dateKey, today, upcoming: upcoming.slice(0, 3) }), {
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=3600" },
   });
-  await cache.put(cacheKey, response.clone());
-  return response;
+  return cacheStore(ctx, cacheKey, response);
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -757,15 +758,14 @@ function bjToday() {
 // /og-image?month=MM&day=DD：当天最高分照片裁成 1200×630 JPEG（OG 标准尺寸）。
 // 成品按张缓存在 PREVIEWS（og/ 前缀），响应本身走边缘缓存一天——分数更新后
 // 第二天换封面
-async function handleOgImage(request, env, url) {
+async function handleOgImage(request, env, url, ctx) {
   const today = bjToday();
   const month = /^\d{2}$/.test(url.searchParams.get("month") || "") ? url.searchParams.get("month") : today.month;
   const day = /^\d{2}$/.test(url.searchParams.get("day") || "") ? url.searchParams.get("day") : today.day;
 
-  const cache = caches.default;
-  const cacheKey = new Request(`${SITE_ORIGIN}/og-image?month=${month}&day=${day}`);
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached;
+  const cacheKey = `${SITE_ORIGIN}/og-image?month=${month}&day=${day}`;
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   const { results } = await env.DB.prepare(
     `SELECT pi.key AS key FROM photos_index pi
@@ -800,19 +800,17 @@ async function handleOgImage(request, env, url) {
   const resp = new Response(buf, {
     headers: { "content-type": "image/jpeg", "cache-control": "public, max-age=86400" },
   });
-  await cache.put(cacheKey, resp.clone());
-  return resp;
+  return cacheStore(ctx, cacheKey, resp);
 }
 
 // ── 全家最爱 ──────────────────────────────────────────────────────────────────
 // 跨所有日期聚合表态计数（数据来自 MemoryRoom 写入的 photo_reactions 镜像表）。
 // 注意：镜像从部署后开始积累，历史表态要等对应日期的房间再次有人表态才会补进来
-async function handleTopLoved(request, env, url) {
+async function handleTopLoved(request, env, url, ctx) {
   await ensureAuxTables(env);
-  const cache = caches.default;
-  const cacheKey = new Request(`${SITE_ORIGIN}/api/top-loved`);
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached;
+  const cacheKey = `${SITE_ORIGIN}/api/top-loved`;
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   const { results } = await env.DB.prepare(
     `SELECT pr.key AS key, SUM(pr.count) AS total, pi.year, pi.month, pi.day, pi.type
@@ -840,17 +838,18 @@ async function handleTopLoved(request, env, url) {
       "cache-control": "public, max-age=300",
     },
   });
-  await cache.put(cacheKey, response.clone());
-  return response;
+  return cacheStore(ctx, cacheKey, response);
 }
 
 // ── 年度回忆放映 ──────────────────────────────────────────────────────────────
 // 取某一年 AI 评分最高的 40 张，按时间顺序放映。没传 year 就用最近一个有打分照片的年份
-async function handleRecap(request, env, url) {
-  const cache = caches.default;
-  const cacheKey = new Request(url.toString());
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached;
+async function handleRecap(request, env, url, ctx) {
+  // year 缺省或不合法时取最新有打分的年份（见下面），这类请求共用一条缓存；其它参数不进 key
+  const cacheKey = /^\d{4}$/.test(url.searchParams.get("year") || "")
+    ? `${SITE_ORIGIN}/api/recap?year=${url.searchParams.get("year")}`
+    : `${SITE_ORIGIN}/api/recap`;
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   const { results: yearRows } = await env.DB.prepare(
     `SELECT DISTINCT pi.year AS year FROM photos_index pi
@@ -889,19 +888,17 @@ async function handleRecap(request, env, url) {
       "cache-control": "public, max-age=3600",
     },
   });
-  await cache.put(cacheKey, response.clone());
-  return response;
+  return cacheStore(ctx, cacheKey, response);
 }
 
 // ── 数据总览 ──────────────────────────────────────────────────────────────────
 // 全库聚合统计：总量、逐年趋势、常去地点、表态/手记总量、AI 评分统计，
 // 再挑两张"高光时刻"（表态最多 / AI 评分最高）。纯聚合查询，边缘缓存 1 小时足够新鲜
-async function handleStats(request, env, url) {
+async function handleStats(request, env, url, ctx) {
   await ensureAuxTables(env);
-  const cache = caches.default;
-  const cacheKey = new Request(`${SITE_ORIGIN}/api/stats`);
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached;
+  const cacheKey = `${SITE_ORIGIN}/api/stats`;
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   const [
     typeRows, yearRows, monthRows, placeRows, locatedRow, dateRange,
@@ -990,8 +987,7 @@ async function handleStats(request, env, url) {
       "cache-control": "public, max-age=3600",
     },
   });
-  await cache.put(cacheKey, response.clone());
-  return response;
+  return cacheStore(ctx, cacheKey, response);
 }
 
 // ── 照片手记 ──────────────────────────────────────────────────────────────────
@@ -1110,15 +1106,14 @@ async function handleSearch(request, env, url) {
 // ── PWA 应用图标 ──────────────────────────────────────────────────────────────
 // 用全库 AI 评分最高的照片裁成方形做安装图标（PWA manifest + apple-touch-icon），
 // 每个尺寸的成品缓存在 PREVIEWS，边缘缓存一天
-async function handleAppIcon(request, env, url) {
+async function handleAppIcon(request, env, url, ctx) {
   // 64 给浏览器标签页 favicon，180 给 apple-touch-icon，192/512 给 PWA manifest
   const allowed = [64, 180, 192, 512];
   const size = allowed.includes(Number(url.searchParams.get("size"))) ? Number(url.searchParams.get("size")) : 512;
 
-  const cache = caches.default;
-  const cacheKey = new Request(`${SITE_ORIGIN}/app-icon?size=${size}`);
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached;
+  const cacheKey = `${SITE_ORIGIN}/app-icon?size=${size}`;
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   const row = await env.DB.prepare(
     `SELECT pi.key AS key FROM photos_index pi
@@ -1152,8 +1147,7 @@ async function handleAppIcon(request, env, url) {
   const resp = new Response(buf, {
     headers: { "content-type": "image/jpeg", "cache-control": "public, max-age=86400" },
   });
-  await cache.put(cacheKey, resp.clone());
-  return resp;
+  return cacheStore(ctx, cacheKey, resp);
 }
 
 // 首页 HTML 注入 og meta。month/day 都是校验过的两位数字，title 只含数字和汉字，
@@ -1543,10 +1537,9 @@ async function handleMemories(request, env, url, ctx) {
   }
 
   // 同一天会被反复访问，用边缘缓存挡住重复请求，避免每次访问都重新查一遍 D1
-  const cache = caches.default;
-  const cacheKey = new Request(url.toString());
-  const cachedResp = await cache.match(cacheKey);
-  if (cachedResp) return cachedResp;
+  const cacheKey = memoriesCacheKey(month, day, url.searchParams.get("lunar") === "1");
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   const includeLunar = url.searchParams.get("lunar") === "1";
 
@@ -1588,7 +1581,7 @@ async function handleMemories(request, env, url, ctx) {
       "cache-control": "public, max-age=1800",
     },
   });
-  await cache.put(cacheKey, response.clone());
+  const out = await cacheStore(ctx, cacheKey, response);
 
   // AI 打分和查地点不在这里自动触发了——这个接口本来就要为没有日期文件名的照片逐个读 EXIF，
   // 子请求数（R2 读取 + Mapbox 调用）叠加起来很容易超过 Workers 单次调用的子请求上限导致整页挂掉。
@@ -1606,7 +1599,7 @@ async function handleMemories(request, env, url, ctx) {
     }
   }
 
-  return response;
+  return out;
 }
 
 // 列出某 prefix 下所有对象（自动翻页）
@@ -1925,16 +1918,15 @@ async function readHeicExifForDisplay(bucket, key) {
   return parseExifForDisplay(exifBuf.slice(tiffStart));
 }
 
-async function handleExif(request, env, url) {
+async function handleExif(request, env, url, ctx) {
   const key = url.searchParams.get("key");
   if (!key || key.length > 500) return new Response("Bad Request", { status: 400 });
 
   // EXIF 是照片自带的不变元数据，解析一次全网复用——尤其 HEIC 要走一整套
   // ISOBMFF box 查找 + TIFF 解析，之前只有浏览器缓存头，每个访问者都重复解析一遍
-  const cache = caches.default;
-  const cacheKey = new Request(url.toString());
-  const cachedResp = await cache.match(cacheKey);
-  if (cachedResp) return cachedResp;
+  const cacheKey = url.toString();
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   let obj = null;
   let exif = {};
@@ -1958,8 +1950,7 @@ async function handleExif(request, env, url) {
       "access-control-allow-origin": "*",
     },
   });
-  await cache.put(cacheKey, response.clone());
-  return response;
+  return cacheStore(ctx, cacheKey, response);
 }
 
 async function handleStaticMap(request, env, url) {
@@ -1997,7 +1988,7 @@ const MIME_TYPES = {
 };
 
 // ---------- 图片代理 ----------
-async function handleImage(request, env, url) {
+async function handleImage(request, env, url, ctx) {
   // 畸形百分号序列（如 /img/%E0%A4%A）会让 decodeURIComponent 抛 URIError，
   // 不接住就是 1101 内部错误而不是 400
   let key;
@@ -2014,10 +2005,9 @@ async function handleImage(request, env, url) {
 
   // 照片内容不会变（key 不变就是同一份文件），显式用边缘缓存挡住重复的 R2 get，
   // 同一张照片被很多人/很多节点反复请求时，B 类操作能省下不少
-  const cache = caches.default;
-  const cacheKey = new Request(url.toString());
-  const cachedResp = await cache.match(cacheKey);
-  if (cachedResp) return cachedResp;
+  const cacheKey = url.toString();
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   const object = await env.PHOTOS.get(key);
   if (!object) return new Response("Not Found", { status: 404 });
@@ -2039,15 +2029,11 @@ async function handleImage(request, env, url) {
   headers.set("etag", object.httpEtag);
   headers.set("cache-control", "public, max-age=31536000, immutable");
 
-  const response = new Response(object.body, { headers });
-  // 边缘缓存只是优化，存不进去（比如大视频文件在某些边缘节点上触发了 Cache API 的内部限制）
-  // 不该连累这次响应本身直接 500——之前这里没接住过，视频缩略图悬浮自动播放偶发出现过这个问题
-  try {
-    await cache.put(cacheKey, response.clone());
-  } catch (err) {
-    console.error("cache.put failed for", key, err);
-  }
-  return response;
+  // 写缓存必须交给 waitUntil（cacheStore 里做了）：这里的响应体是 R2 的流，clone() 之后两路共用一个源，
+  // 以前 await cache.put 会等缓存那一路把整个原图读完才返回，用户拿到第一个字节之前
+  // 整个文件都得先回源一遍，没被读的那一路还得整份缓冲在内存里。
+  // 写缓存失败（比如大视频撞上 Cache API 的内部限制）也在 cacheStore 里吞掉，不连累这次响应
+  return cacheStore(ctx, cacheKey, new Response(object.body, { headers }));
 }
 
 // 处理带 Range 头的请求（主要是视频拖动/取封面帧），返回 206 Partial Content。
@@ -2275,15 +2261,15 @@ async function handleThumb(request, env, url, ctx) {
   const publicUrl = `${env.PREVIEWS_PUBLIC_URL}/${thumbKey.split("/").map(encodeURIComponent).join("/")}`;
 
   // 先查边缘缓存（302 本身也可以缓存，省掉每次的 PREVIEWS.head 调用）
-  const cacheKey = new Request(`https://thumb-redirect/${thumbKey}`);
-  const cachedRedirect = await caches.default.match(cacheKey);
+  const cacheKey = `https://thumb-redirect/${thumbKey}`;
+  const cachedRedirect = await caches.default.match(new Request(cacheKey));
   if (cachedRedirect) return cachedRedirect;
 
   // 缩略图已存在 → 直接 302，Worker 不再传图片体
   const existing = await env.PREVIEWS.head(thumbKey);
   if (existing) {
     const resp = thumbRedirect(publicUrl);
-    await caches.default.put(cacheKey, resp.clone());
+    await cachePut(ctx, cacheKey, resp);
     return resp;
   }
 
@@ -2310,8 +2296,10 @@ async function handleThumb(request, env, url, ctx) {
       if (ctx) ctx.waitUntil(record); else await record;
     }
 
+    // cachePut 不会抛错——以前这里是 await caches.default.put，写缓存一旦失败就会掉进下面的
+    // catch，被当成"转换失败"走 HEIC 兜底，可缩略图其实已经生成好、存进 PREVIEWS 了
     const resp = thumbRedirect(publicUrl);
-    await caches.default.put(cacheKey, resp.clone());
+    await cachePut(ctx, cacheKey, resp);
     return resp;
   } catch (err) {
     // 一定要把原因打出来——这里静默过一次，Transformations 免费额度（每月 5000 次独立变换）
@@ -2326,7 +2314,7 @@ async function handleThumb(request, env, url, ctx) {
         return thumbRedirect(`${env.PREVIEWS_PUBLIC_URL}/${previewKey.split("/").map(encodeURIComponent).join("/")}`, "public, max-age=3600");
       }
     }
-    return handleImage(request, env, new URL(url.toString().replace("/thumb/", "/img/")));
+    return handleImage(request, env, new URL(url.toString().replace("/thumb/", "/img/")), ctx);
   }
 }
 
@@ -2901,21 +2889,14 @@ async function handleConvertHeicPhotos(request, env, url) {
 // 着急验证效果的时候用这个端点手动清一下
 // origin 写死成正式域名——这个函数会被 queue() consumer 调用，那边没有 request/url 可以取 origin，
 // 而这个项目本来就只绑定了这一个域名（见 wrangler.toml 的 routes），不会跑在别的域名上
-const SITE_ORIGIN = "https://memories.cuijianzhuang.com";
 
 async function purgeDayCache(month, day) {
   const cache = caches.default;
-  // 前端请求永远显式带 lunar=0 / lunar=1（见 app.js loadMemories），边缘缓存按完整 URL 做 key，
-  // 三个变体都要清——之前漏了 lunar=0，公历模式（最常用）的缓存一直清不掉，
-  // 新照片上传后要干等边缘缓存自然过期（最长 30 分钟）才出现
-  const targets = [
-    `${SITE_ORIGIN}/api/memories?month=${month}&day=${day}`,
-    `${SITE_ORIGIN}/api/memories?month=${month}&day=${day}&lunar=0`,
-    `${SITE_ORIGIN}/api/memories?month=${month}&day=${day}&lunar=1`,
-    `${SITE_ORIGIN}/api/map-photos?month=${month}&day=${day}`,
-  ];
+  // key 跟写入方（handleMemories / handleMapPhotos）来自同一组函数，结构上不可能再漏掉某个变体——
+  // 以前这里是手工列举的 URL，前端加了 lunar 参数后漏了 lunar=0，公历模式（最常用）的缓存
+  // 一直清不掉，新照片上传后要干等边缘缓存自然过期（最长 30 分钟）才出现
   const deleted = [];
-  for (const target of targets) {
+  for (const target of dayCacheKeys(month, day)) {
     const ok = await cache.delete(new Request(target));
     deleted.push({ url: target, deleted: ok });
   }
@@ -3353,7 +3334,7 @@ async function handlePoem(request, env, url) {
 // https://api.wikimedia.org/feed/v1/wikipedia/{lang}/onthisday/selected/{MM}/{DD}
 // 中文维基优先（selected 是人工精选的大事记），条目太少或不可用时回退英文维基。
 // 历史事件内容基本不变，边缘缓存 7 天；上游挂了返回 204，前端整块隐藏不影响主功能
-async function handleOnThisDay(request, env, url) {
+async function handleOnThisDay(request, env, url, ctx) {
   const month = url.searchParams.get("month");
   const day = url.searchParams.get("day");
   if (!/^\d{2}$/.test(month || "") || !/^\d{2}$/.test(day || "")) {
@@ -3363,10 +3344,9 @@ async function handleOnThisDay(request, env, url) {
     });
   }
 
-  const cache = caches.default;
-  const cacheKey = new Request(`${SITE_ORIGIN}/api/onthisday?month=${month}&day=${day}`);
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached;
+  const cacheKey = `${SITE_ORIGIN}/api/onthisday?month=${month}&day=${day}`;
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   const fetchLang = async (lang) => {
     const resp = await fetch(`https://api.wikimedia.org/feed/v1/wikipedia/${lang}/onthisday/selected/${month}/${day}`, {
@@ -3393,8 +3373,9 @@ async function handleOnThisDay(request, env, url) {
     const response = new Response(JSON.stringify({ month, day, events }), {
       headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=604800" },
     });
-    await cache.put(cacheKey, response.clone());
-    return response;
+    // 以前 cache.put 也在这个 try 里：缓存写失败会被下面的 catch 当成接口失败，
+    // 把一份正常拿到的数据扔掉、返回 204。cacheStore 自己吞掉写缓存的错误
+    return cacheStore(ctx, cacheKey, response);
   } catch {
     return new Response(null, { status: 204 });
   }
@@ -3403,7 +3384,7 @@ async function handleOnThisDay(request, env, url) {
 // ---------- 地图页用的数据接口：把所有查到过经纬度的照片列出来，给前端打点 ----------
 // 地图只展示某一天（默认今天）匹配到的照片，不是整个照片库——
 // 跟 /api/memories 共用同一套日期匹配逻辑（matchPhotosForDay），并且同样做边缘缓存
-async function handleMapPhotos(request, env, url) {
+async function handleMapPhotos(request, env, url, ctx) {
   const month = url.searchParams.get("month");
   const day = url.searchParams.get("day");
 
@@ -3419,10 +3400,9 @@ async function handleMapPhotos(request, env, url) {
       });
     }
 
-    const cache = caches.default;
-    const cacheKey = new Request(url.toString());
-    const cachedResp = await cache.match(cacheKey);
-    if (cachedResp) return cachedResp;
+    const cacheKey = mapPhotosAllCacheKey(year);
+    const hit = await cacheLookup(cacheKey);
+    if (hit) return hit;
 
     const { results } = await env.DB.prepare(
       `SELECT pp.key AS key, pp.lat, pp.lon, pp.name, pi.year, pi.month, pi.day, pi.type
@@ -3448,8 +3428,7 @@ async function handleMapPhotos(request, env, url) {
         "cache-control": "public, max-age=1800",
       },
     });
-    await cache.put(cacheKey, response.clone());
-    return response;
+    return cacheStore(ctx, cacheKey, response);
   }
 
   if (!/^\d{2}$/.test(month || "") || !/^\d{2}$/.test(day || "")) {
@@ -3459,10 +3438,9 @@ async function handleMapPhotos(request, env, url) {
     });
   }
 
-  const cache = caches.default;
-  const cacheKey = new Request(url.toString());
-  const cachedResp = await cache.match(cacheKey);
-  if (cachedResp) return cachedResp;
+  const cacheKey = mapPhotosDayCacheKey(month, day);
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   const matchedByYear = await matchPhotosForDay(env, month, day);
   const matchedKeys = matchedByYear.flatMap((y) => y.photos.map((p) => p.key));
@@ -3494,8 +3472,7 @@ async function handleMapPhotos(request, env, url) {
       "cache-control": "public, max-age=1800",
     },
   });
-  await cache.put(cacheKey, response.clone());
-  return response;
+  return cacheStore(ctx, cacheKey, response);
 }
 
 // ── Durable Object：实时共享房间 ─────────────────────────────────────────────────

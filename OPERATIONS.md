@@ -28,6 +28,16 @@ Access 后面，不需要额外 token），系统状态、批量维护、
 `/admin/purge-cache?month=MM&day=DD`、`/admin/backfill-workflows`、`/admin/test-telegram`、
 `/admin/ops-status`、`/admin/photo-info?q=…`。
 
+## 边缘缓存是否生效
+
+走缓存的接口（`/api/memories`、`/api/map-photos`、`/api/stats`、`/img/`、`/og-image` 等）
+响应头都带 `x-edge-cache: HIT` 或 `MISS`。浏览器 DevTools → Network 里点开请求看响应头，
+**同一个请求刷新两次，第二次应该是 HIT**。
+
+一直是 MISS 说明 Cache API 在这个部署下没生效（Cloudflare 文档提到"被 Cloudflare Access
+挡在前面的 Worker 不能用 Cache API"——按文档，自定义域名 + Zero Trust 应用的组合应当不受影响，
+但措辞有歧义，以这个头的实际表现为准）。响应里根本没有这个头，说明请求没走到带缓存的代码路径。
+
 ## 命令行操作（控制台覆盖不到的）
 
 ```bash

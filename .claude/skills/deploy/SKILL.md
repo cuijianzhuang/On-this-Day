@@ -70,7 +70,7 @@ wrangler.toml、或缩略图链路时，顺手开一下线上页面看缩略图�
 |---|---|
 | 部署绿了但线上还是旧代码 | **同时启用了 Cloudflare Build（Git 连接）和 GitHub Actions**。两边都监听 master，慢的一方后完成会用旧版本覆盖新部署。二选一，只留 Actions，去 Cloudflare 控制台断开 Worker 的 Git 连接 |
 | 缩略图全挂 / `env.IMAGES` undefined | wrangler 版本掉回 3.x。3.90 不认识 `[images]` 配置段，只警告不报错，部署出来的 Worker **静默丢掉 IMAGES 绑定**。`wranglerVersion`（workflow）和 `devDependencies.wrangler`（package.json）必须都是 4.x 且一致——preflight 第 3 项查的就是这个 |
-| 页面数据是旧的 | 是边缘缓存，不是部署问题。去 `/admin/ops` 清那一天的缓存（见 OPERATIONS.md） |
+| 页面数据是旧的 | 是边缘缓存，不是部署问题。响应头 `x-edge-cache: HIT` 就是命中了缓存；去 `/admin/ops` 清那一天的缓存（见 OPERATIONS.md） |
 | 新增的 secret 读不到 | secrets 只在 deploy 之后那一步同步，且 `MAPBOX_TOKEN` 根本不在同步列表里（见下） |
 
 ## Secrets

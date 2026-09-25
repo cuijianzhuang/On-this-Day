@@ -42,6 +42,8 @@
 
 ### 成本控制（边缘缓存）
 - `/api/memories`、`/api/map-photos` 结果用 Workers Cache API 缓存；新文件上传/删除时自动清对应日期的缓存
+- 缓存读写统一走 `src/http.js` 的 `cacheLookup` / `cacheStore`：写缓存交给 `ctx.waitUntil`，不阻塞响应（`/img/` 以前要等整个原图写进缓存才返回第一个字节）；写失败只记日志不影响响应；只缓存 200；响应带 `x-edge-cache: HIT|MISS` 便于确认缓存是否生效
+- 缓存 key 由 `src/lib/cache-keys.js` 统一生成，写入方和 `purgeDayCache` 共用同一组函数；key 只含真正影响响应的参数、顺序固定，参数换顺序或多带参数都命中同一份缓存
 - `/img/` 图片字节显式缓存在边缘节点；206 Range 响应（视频拖动）不缓存
 - `/thumb/` 缩略图由 Cloudflare Images binding 转成 WebP 后写入 `PREVIEWS` 桶，302 跳公开预览 URL，后续同尺寸请求不再重复转换；转码失败时 HEIC 回退到预转 JPEG 预览（而不是浏览器显示不了的原图）
 - **前端直连缩略图，跳过 302**：缩略图在 PREVIEWS 里的 key 是完全确定的（`thumbs/{w}/{原key去扩展名}.webp`），所以照片墙和胶片卷直接拼最终地址，不再每张图先请求 `/thumb/` 再跟一次重定向——一屏几十张就是省掉几十次往返和几十个 Worker 请求。地址由 `window.PREVIEWS_BASE`（worker 注入首页）拼出，算法必须和 `handleThumb` 逐字一致；缩略图还没生成时直连是 404，前端 `onerror` 回落到 `/thumb/` 由它现场生成，所以只有"从没被看过的照片"才会退化成原来的两跳

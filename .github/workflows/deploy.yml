@@ -28,7 +28,7 @@ jobs:
       - name: Syntax check
         run: |
           node --check worker.js
-          for f in src/lib/*.js; do node --check "$f"; done
+          for f in $(find src -name "*.js"); do node --check "$f"; done
           node --check public/app.js
           node --check public/map.js
 
