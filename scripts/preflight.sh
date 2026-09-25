@@ -17,12 +17,22 @@ ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; }
 bad()  { printf '  \033[31m✗\033[0m %s\n' "$1"; fail=1; }
 warn() { printf '  \033[33m!\033[0m %s\n' "$1"; }
 
-echo "[1/4] 语法检查"
-for f in worker.js public/app.js public/map.js; do
+echo "[1/5] 语法检查"
+for f in worker.js src/lib/*.js public/app.js public/map.js; do
   if node --check "$f" 2>/dev/null; then ok "$f"; else bad "$f 语法错误：$(node --check "$f" 2>&1 | head -3)"; fi
 done
 
-echo "[2/4] wrangler.toml 占位符"
+echo "[2/5] 单元测试"
+# 农历换算、EXIF 解析、文件名日期这些纯函数决定了"照片落在哪一天"，
+# 错了不会报错，只会让照片悄悄出现在错误的日期上——这类 bug 只有测试拦得住
+if test_out=$(npm test --silent 2>&1); then
+  ok "$(printf '%s\n' "$test_out" | grep -E '^# pass' | sed 's/^# pass /通过 /') 项$(printf '%s\n' "$test_out" | grep -E '^# todo [1-9]' | sed 's/^# todo /（另有 /; s/$/ 项待办）/')"
+else
+  bad "单元测试失败："
+  printf '%s\n' "$test_out" | grep -E '^not ok|^# fail' | grep -v '# TODO' | sed 's/^/      /'
+fi
+
+echo "[3/5] wrangler.toml 占位符"
 # CI 里 KV 占位符会被自动替换，其余占位符没人管——带着占位符部署出去的是个连不上
 # 自己资源的 Worker，页面全 500，比部署失败还难查
 if placeholders=$(grep -n 'REPLACE_WITH_[A-Z_]*' wrangler.toml); then
@@ -37,7 +47,7 @@ else
   ok "无未替换占位符"
 fi
 
-echo "[3/4] wrangler 版本一致性"
+echo "[4/5] wrangler 版本一致性"
 # 两处版本必须一致。wrangler-action 自带的 3.x 不认识 [images] 配置段，只警告不报错，
 # 部署出来的 Worker 会静默丢掉 IMAGES 绑定——缩略图全挂，而且部署是"成功"的
 pkg_ver=$(node -p "require('./package.json').devDependencies.wrangler" 2>/dev/null | tr -d '^~')
@@ -48,7 +58,7 @@ else
   bad "版本不一致：package.json=$pkg_ver workflow=$ci_ver（改一处必须同步改另一处）"
 fi
 
-echo "[4/4] 打包体积门禁（gzip ≤ 1MB）"
+echo "[5/5] 打包体积门禁（gzip ≤ 1MB）"
 # 付费版硬限制是 gzip 10MB，这里卡 1/10 当预警线：真正要防的是误引入一个大 npm 依赖，
 # 等逼近 10MB 才发现就晚了。public/ 走 Static Assets，不计入这个体积
 if ! command -v npx >/dev/null 2>&1; then

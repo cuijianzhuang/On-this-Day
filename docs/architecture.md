@@ -107,6 +107,6 @@ Photos/MobileBackup/iPhone/{年}/{月}/{文件名}
 - `/thumb/` 优先用 Cloudflare Images binding（原生支持 HEIC 输入）转 WebP 写入 `PREVIEWS` 桶；转换失败（如 Transformations 额度用完）时回退到预转的 JPEG 预览，再不行才回原图，且失败原因会打进日志
 - AI 打分前优先复用预览图，没有再现场解码一次
 - 前端 heic2any 做最后兜底（懒加载，只在需要时注入）：解码成功后回传 `/api/upload-heic-preview` 存进 `PREVIEWS` 桶，后续访问者不用再解码
-- 服务端解码用 `libheif-js` wasm 构建，必须用 `new WebAssembly.Instance()`（同步 API）——异步 API 会打断 embind 类注册报 `overloadTable` 错误
+- 服务端解码走 Cloudflare Images binding（`env.IMAGES`，原生支持 HEIC 输入）。早期用过 `libheif-js` wasm，已移除
 - 转码失败按重试次数（R2 自定义元数据）最多自动重试 5 次；浏览器端解码成功不占这个名额
 - 历史 HEIC 批量补：`GET /admin/backfill-workflows?limit=20`

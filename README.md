@@ -23,7 +23,7 @@
 ## 部署
 
 日常部署是全自动的——**push 到 `master` 即触发 GitHub Actions**
-（语法检查 → 打包体积门禁 → `wrangler deploy` → 同步 secrets）。
+（语法检查 → 单元测试 → 打包体积门禁 → `wrangler deploy` → 同步 secrets）。
 
 推之前建议先跑一遍本地预检，它跑的是 CI 里会拦下部署的同一批检查：
 
@@ -43,7 +43,9 @@ bash scripts/preflight.sh
 ## 目录结构
 
 ```
-worker.js               # Worker 全部逻辑（API + 图片代理 + AI 打分 + DO + Workflow，单文件）
+worker.js               # Worker 入口：路由、API、图片代理、AI 打分、DO、Workflow
+src/lib/                # 纯函数模块（农历换算、EXIF 解析、文件名日期、Live Photo 配对），不依赖 Workers 运行时
+test/                   # 单元测试（npm test），覆盖 src/lib
 public/                 # 静态资源（页面 HTML/CSS/JS、PWA manifest、自托管字体与 heic2any）
 schema.sql              # D1 基础表结构（后加的列由 ensureAuxTables() 自动 ALTER 补上）
 wrangler.toml           # Cloudflare 部署配置（Static Assets、R2、AI、Images、D1、KV、Queue、Workflow、DO、Cron）
