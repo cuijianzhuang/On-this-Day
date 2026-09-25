@@ -27,7 +27,7 @@ description: 部署「那年今日」到 Cloudflare Workers——日常部署（
 bash scripts/preflight.sh
 ```
 
-这一步跑的是 CI 里会拦下部署的同一批检查（语法、wrangler.toml 占位符、
+这一步跑的是 CI 里会拦下部署的同一批检查（语法、单元测试、wrangler.toml 占位符、
 wrangler 版本一致性、打包 gzip 体积）。**值得先跑**：部署是 push 触发的，
 等 CI 拦下来时提交已经在 master 上了，只能再推一个修复提交。
 
@@ -57,6 +57,7 @@ wrangler.toml、或缩略图链路时，顺手开一下线上页面看缩略图�
 | 日志里的症状 | 原因 / 处理 |
 |---|---|
 | `node --check` 失败 | 语法错误。本地 `bash scripts/preflight.sh` 复现后修掉 |
+| `Unit tests` 失败 | `npm test` 本地复现。农历表相关的失败别急着改夹具——`test/fixtures/lunar-months.txt` 是外部参照（独立库 + 天文合朔校正），它和代码不一致时，先怀疑代码 |
 | `Worker 打包后 gzip ... 超过 1MB 预警线` | 多半是误引入了大 npm 依赖。查 `package.json` 新增项；确实需要就调整门禁阈值，但先确认不是误引入 |
 | `error 10211` / DO migrations 相关 | 必须走 `wrangler deploy`，不能用 `versions upload`。workflow 里 `command: deploy` 就是为这个锁的，别改 |
 | `error 10215`（拒绝改 secret） | Cloudflare Build 的 Git 连接传了未部署版本。secrets 同步那步是 `continue-on-error`，不影响本次部署正确性。根治办法是断开 Cloudflare Build 的 Git 连接（见下） |
@@ -69,7 +70,7 @@ wrangler.toml、或缩略图链路时，顺手开一下线上页面看缩略图�
 |---|---|
 | 部署绿了但线上还是旧代码 | **同时启用了 Cloudflare Build（Git 连接）和 GitHub Actions**。两边都监听 master，慢的一方后完成会用旧版本覆盖新部署。二选一，只留 Actions，去 Cloudflare 控制台断开 Worker 的 Git 连接 |
 | 缩略图全挂 / `env.IMAGES` undefined | wrangler 版本掉回 3.x。3.90 不认识 `[images]` 配置段，只警告不报错，部署出来的 Worker **静默丢掉 IMAGES 绑定**。`wranglerVersion`（workflow）和 `devDependencies.wrangler`（package.json）必须都是 4.x 且一致——preflight 第 3 项查的就是这个 |
-| 页面数据是旧的 | 是边缘缓存，不是部署问题。去 `/admin/ops` 清那一天的缓存（见 OPERATIONS.md） |
+| 页面数据是旧的 | 是边缘缓存，不是部署问题。响应头 `x-edge-cache: HIT` 就是命中了缓存；去 `/admin/ops` 清那一天的缓存（见 OPERATIONS.md） |
 | 新增的 secret 读不到 | secrets 只在 deploy 之后那一步同步，且 `MAPBOX_TOKEN` 根本不在同步列表里（见下） |
 
 ## Secrets

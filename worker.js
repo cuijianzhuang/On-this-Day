@@ -10,10 +10,14 @@
 
 import { createHash } from "node:crypto";
 import { WorkflowEntrypoint } from "cloudflare:workers";
+import { solarToLunar, lunarToSolar, lunarLabel } from "./src/lib/lunar.js";
+import { findExifItemId, parseExifTiff, parseExifForDisplay } from "./src/lib/exif.js";
+import { IMAGE_EXT, VIDEO_EXT, pairLivePhotos, dateFromFilename } from "./src/lib/media.js";
+import { memoriesCacheKey, mapPhotosDayCacheKey, mapPhotosAllCacheKey, dayCacheKeys } from "./src/lib/cache-keys.js";
+import { cacheLookup, cacheStore, cachePut } from "./src/http.js";
+import { SITE_ORIGIN } from "./src/config.js";
 
 
-const IMAGE_EXT = /\.(jpe?g|png|heic|gif|webp)$/i;
-const VIDEO_EXT = /\.(mov|mp4)$/i;
 const BASE_PREFIX = "Photos/MobileBackup/iPhone/";
 
 // 记录最近一次有人查看的 month/day，给 Cron 任务做优先级参考
@@ -35,7 +39,7 @@ export default {
     }
 
     if (url.pathname.startsWith("/img/")) {
-      return handleImage(request, env, url);
+      return handleImage(request, env, url, ctx);
     }
 
     if (url.pathname.startsWith("/thumb/")) {
@@ -112,15 +116,15 @@ export default {
     }
 
     if (url.pathname === "/api/anniversaries/upcoming") {
-      return handleAnniversariesUpcoming(request, env, url);
+      return handleAnniversariesUpcoming(request, env, url, ctx);
     }
 
     if (url.pathname === "/api/map-photos") {
-      return handleMapPhotos(request, env, url);
+      return handleMapPhotos(request, env, url, ctx);
     }
 
     if (url.pathname === "/api/exif") {
-      return handleExif(request, env, url);
+      return handleExif(request, env, url, ctx);
     }
 
     if (url.pathname === "/api/static-map") {
@@ -128,15 +132,15 @@ export default {
     }
 
     if (url.pathname === "/og-image") {
-      return handleOgImage(request, env, url);
+      return handleOgImage(request, env, url, ctx);
     }
 
     if (url.pathname === "/app-icon") {
-      return handleAppIcon(request, env, url);
+      return handleAppIcon(request, env, url, ctx);
     }
 
     if (url.pathname === "/api/top-loved") {
-      return handleTopLoved(request, env, url);
+      return handleTopLoved(request, env, url, ctx);
     }
 
     if (url.pathname === "/api/search") {
@@ -152,7 +156,7 @@ export default {
     }
 
     if (url.pathname === "/api/recap") {
-      return handleRecap(request, env, url);
+      return handleRecap(request, env, url, ctx);
     }
 
     if (url.pathname === "/recap") {
@@ -160,7 +164,7 @@ export default {
     }
 
     if (url.pathname === "/api/stats") {
-      return handleStats(request, env, url);
+      return handleStats(request, env, url, ctx);
     }
 
     if (url.pathname === "/stats") {
@@ -172,7 +176,7 @@ export default {
     }
 
     if (url.pathname === "/api/onthisday") {
-      return handleOnThisDay(request, env, url);
+      return handleOnThisDay(request, env, url, ctx);
     }
 
     if (url.pathname === "/api/upload-heic-preview" && request.method === "POST") {
@@ -613,13 +617,12 @@ async function handleAnniversaries(request, env, url) {
 
 // 首页用：今天命中的 + 未来 14 天内最近的几个纪念日，边缘缓存一小时（够用又不会显示一整天过时）。
 // 带上 bj 日期（date 字段），前端拿它做"今天已关闭过 banner"的去重 key，不用信浏览器本地时区
-async function handleAnniversariesUpcoming(request, env, url) {
+async function handleAnniversariesUpcoming(request, env, url, ctx) {
   await ensureAuxTables(env);
 
-  const cache = caches.default;
-  const cacheKey = new Request(`${SITE_ORIGIN}/api/anniversaries/upcoming`);
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached;
+  const cacheKey = `${SITE_ORIGIN}/api/anniversaries/upcoming`;
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   const { results } = await env.DB.prepare(
     "SELECT title, month, day, year_start, calendar, is_leap FROM anniversaries"
@@ -653,8 +656,7 @@ async function handleAnniversariesUpcoming(request, env, url) {
   const response = new Response(JSON.stringify({ date: dateKey, today, upcoming: upcoming.slice(0, 3) }), {
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=3600" },
   });
-  await cache.put(cacheKey, response.clone());
-  return response;
+  return cacheStore(ctx, cacheKey, response);
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -756,15 +758,14 @@ function bjToday() {
 // /og-image?month=MM&day=DD：当天最高分照片裁成 1200×630 JPEG（OG 标准尺寸）。
 // 成品按张缓存在 PREVIEWS（og/ 前缀），响应本身走边缘缓存一天——分数更新后
 // 第二天换封面
-async function handleOgImage(request, env, url) {
+async function handleOgImage(request, env, url, ctx) {
   const today = bjToday();
   const month = /^\d{2}$/.test(url.searchParams.get("month") || "") ? url.searchParams.get("month") : today.month;
   const day = /^\d{2}$/.test(url.searchParams.get("day") || "") ? url.searchParams.get("day") : today.day;
 
-  const cache = caches.default;
-  const cacheKey = new Request(`${SITE_ORIGIN}/og-image?month=${month}&day=${day}`);
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached;
+  const cacheKey = `${SITE_ORIGIN}/og-image?month=${month}&day=${day}`;
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   const { results } = await env.DB.prepare(
     `SELECT pi.key AS key FROM photos_index pi
@@ -799,19 +800,17 @@ async function handleOgImage(request, env, url) {
   const resp = new Response(buf, {
     headers: { "content-type": "image/jpeg", "cache-control": "public, max-age=86400" },
   });
-  await cache.put(cacheKey, resp.clone());
-  return resp;
+  return cacheStore(ctx, cacheKey, resp);
 }
 
 // ── 全家最爱 ──────────────────────────────────────────────────────────────────
 // 跨所有日期聚合表态计数（数据来自 MemoryRoom 写入的 photo_reactions 镜像表）。
 // 注意：镜像从部署后开始积累，历史表态要等对应日期的房间再次有人表态才会补进来
-async function handleTopLoved(request, env, url) {
+async function handleTopLoved(request, env, url, ctx) {
   await ensureAuxTables(env);
-  const cache = caches.default;
-  const cacheKey = new Request(`${SITE_ORIGIN}/api/top-loved`);
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached;
+  const cacheKey = `${SITE_ORIGIN}/api/top-loved`;
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   const { results } = await env.DB.prepare(
     `SELECT pr.key AS key, SUM(pr.count) AS total, pi.year, pi.month, pi.day, pi.type
@@ -839,17 +838,18 @@ async function handleTopLoved(request, env, url) {
       "cache-control": "public, max-age=300",
     },
   });
-  await cache.put(cacheKey, response.clone());
-  return response;
+  return cacheStore(ctx, cacheKey, response);
 }
 
 // ── 年度回忆放映 ──────────────────────────────────────────────────────────────
 // 取某一年 AI 评分最高的 40 张，按时间顺序放映。没传 year 就用最近一个有打分照片的年份
-async function handleRecap(request, env, url) {
-  const cache = caches.default;
-  const cacheKey = new Request(url.toString());
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached;
+async function handleRecap(request, env, url, ctx) {
+  // year 缺省或不合法时取最新有打分的年份（见下面），这类请求共用一条缓存；其它参数不进 key
+  const cacheKey = /^\d{4}$/.test(url.searchParams.get("year") || "")
+    ? `${SITE_ORIGIN}/api/recap?year=${url.searchParams.get("year")}`
+    : `${SITE_ORIGIN}/api/recap`;
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   const { results: yearRows } = await env.DB.prepare(
     `SELECT DISTINCT pi.year AS year FROM photos_index pi
@@ -888,19 +888,17 @@ async function handleRecap(request, env, url) {
       "cache-control": "public, max-age=3600",
     },
   });
-  await cache.put(cacheKey, response.clone());
-  return response;
+  return cacheStore(ctx, cacheKey, response);
 }
 
 // ── 数据总览 ──────────────────────────────────────────────────────────────────
 // 全库聚合统计：总量、逐年趋势、常去地点、表态/手记总量、AI 评分统计，
 // 再挑两张"高光时刻"（表态最多 / AI 评分最高）。纯聚合查询，边缘缓存 1 小时足够新鲜
-async function handleStats(request, env, url) {
+async function handleStats(request, env, url, ctx) {
   await ensureAuxTables(env);
-  const cache = caches.default;
-  const cacheKey = new Request(`${SITE_ORIGIN}/api/stats`);
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached;
+  const cacheKey = `${SITE_ORIGIN}/api/stats`;
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   const [
     typeRows, yearRows, monthRows, placeRows, locatedRow, dateRange,
@@ -989,8 +987,7 @@ async function handleStats(request, env, url) {
       "cache-control": "public, max-age=3600",
     },
   });
-  await cache.put(cacheKey, response.clone());
-  return response;
+  return cacheStore(ctx, cacheKey, response);
 }
 
 // ── 照片手记 ──────────────────────────────────────────────────────────────────
@@ -1109,15 +1106,14 @@ async function handleSearch(request, env, url) {
 // ── PWA 应用图标 ──────────────────────────────────────────────────────────────
 // 用全库 AI 评分最高的照片裁成方形做安装图标（PWA manifest + apple-touch-icon），
 // 每个尺寸的成品缓存在 PREVIEWS，边缘缓存一天
-async function handleAppIcon(request, env, url) {
+async function handleAppIcon(request, env, url, ctx) {
   // 64 给浏览器标签页 favicon，180 给 apple-touch-icon，192/512 给 PWA manifest
   const allowed = [64, 180, 192, 512];
   const size = allowed.includes(Number(url.searchParams.get("size"))) ? Number(url.searchParams.get("size")) : 512;
 
-  const cache = caches.default;
-  const cacheKey = new Request(`${SITE_ORIGIN}/app-icon?size=${size}`);
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached;
+  const cacheKey = `${SITE_ORIGIN}/app-icon?size=${size}`;
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   const row = await env.DB.prepare(
     `SELECT pi.key AS key FROM photos_index pi
@@ -1151,8 +1147,7 @@ async function handleAppIcon(request, env, url) {
   const resp = new Response(buf, {
     headers: { "content-type": "image/jpeg", "cache-control": "public, max-age=86400" },
   });
-  await cache.put(cacheKey, resp.clone());
-  return resp;
+  return cacheStore(ctx, cacheKey, resp);
 }
 
 // 首页 HTML 注入 og meta。month/day 都是校验过的两位数字，title 只含数字和汉字，
@@ -1429,55 +1424,6 @@ async function runBackgroundMaintenance(env) {
   }
 }
 
-// Live Photo 配对：iPhone 的 Live Photo 在 R2 里是两个独立文件——同目录、文件名（去掉
-// 扩展名）完全相同的一张 HEIC/JPEG + 一段 MOV，例如 IMG_1234.HEIC 配 IMG_1234.MOV。
-// 把同一批文件（已经按 IMAGE_EXT/VIDEO_EXT 过滤过）按"完整 key 去扩展名"分组，
-// 配对成功的合并成一条 type: 'live' 记录（带 url 静态图 + videoUrl 配对视频），
-// 没配对到的图片/视频各自按原来的 image/video 类型展示，不受影响
-function pairLivePhotos(objs, year) {
-  const byBase = new Map();
-  for (const obj of objs) {
-    // 分组键必须带目录（完整 key 去扩展名）：iPhone 的 IMG_XXXX 序号是循环重用的，
-    // 只按文件名分组时，同一天命中的两个不同目录的同名文件会互相顶掉（两张图只剩一张）
-    // 或把 A 目录的照片错配上 B 目录的视频当成假 Live Photo
-    const base = obj.key.replace(/\.[^.]+$/, "");
-    const slot = byBase.get(base) || {};
-    if (VIDEO_EXT.test(obj.key)) slot.video = obj;
-    else slot.image = obj;
-    byBase.set(base, slot);
-  }
-
-  const entries = [];
-  for (const { image, video } of byBase.values()) {
-    if (image && video) {
-      entries.push({
-        key: image.key,
-        url: `/img/${encodeURIComponent(image.key)}`,
-        videoUrl: `/img/${encodeURIComponent(video.key)}`,
-        type: "live",
-        size: image.size,
-        uploaded: image.uploaded,
-        // 宽高可能还没量到（这张图的等比缩略图从没生成过），那就不发——
-        // 前端拿不到就退回原来的 1:1 占位，不是错误状态
-        ...(image.width && image.height ? { width: image.width, height: image.height } : {}),
-        year,
-      });
-    } else if (image || video) {
-      const obj = image || video;
-      entries.push({
-        key: obj.key,
-        url: `/img/${encodeURIComponent(obj.key)}`,
-        type: video ? "video" : "image",
-        size: obj.size,
-        uploaded: obj.uploaded,
-        ...(obj.width && obj.height ? { width: obj.width, height: obj.height } : {}),
-        year,
-      });
-    }
-  }
-  return entries;
-}
-
 // 限制并发数跑一批异步任务——不限制的话，一个月份下几百张没带日期文件名的照片会同时发出几百个
 // EXIF 范围读请求，每个都在内存里挂着一份响应 buffer，年头一多很容易把 Worker 的内存配额跑爆
 // （Cron 那次 exceededMemory 就是栽在这上面）
@@ -1492,103 +1438,6 @@ async function mapWithConcurrency(items, limit, fn) {
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   return results;
-}
-
-// ── 农历转换（1900–2049）─────────────────────────────────────────────────────
-// 经典压缩表：每年一个整数，低 4 位 = 闰月月份（0 为无闰），bit4~bit15 = 十二个月大小月
-// （1 大月 30 天 / 0 小月 29 天），bit16 = 闰月大小。基准：1900-01-31 为庚子年正月初一
-const LUNAR_INFO = [
-  0x04bd8,0x04ae0,0x0a570,0x054d5,0x0d260,0x0d950,0x16554,0x056a0,0x09ad0,0x055d2,//1900-1909
-  0x04ae0,0x0a5b6,0x0a4d0,0x0d250,0x1d255,0x0b540,0x0d6a0,0x0ada2,0x095b0,0x14977,//1910-1919
-  0x04970,0x0a4b0,0x0b4b5,0x06a50,0x06d40,0x1ab54,0x02b60,0x09570,0x052f2,0x04970,//1920-1929
-  0x06566,0x0d4a0,0x0ea50,0x06e95,0x05ad0,0x02b60,0x186e3,0x092e0,0x1c8d7,0x0c950,//1930-1939
-  0x0d4a0,0x1d8a6,0x0b550,0x056a0,0x1a5b4,0x025d0,0x092d0,0x0d2b2,0x0a950,0x0b557,//1940-1949
-  0x06ca0,0x0b550,0x15355,0x04da0,0x0a5b0,0x14573,0x052b0,0x0a9a8,0x0e950,0x06aa0,//1950-1959
-  0x0aea6,0x0ab50,0x04b60,0x0aae4,0x0a570,0x05260,0x0f263,0x0d950,0x05b57,0x056a0,//1960-1969
-  0x096d0,0x04dd5,0x04ad0,0x0a4d0,0x0d4d4,0x0d250,0x0d558,0x0b540,0x0b5a0,0x195a6,//1970-1979
-  0x095b0,0x049b0,0x0a974,0x0a4b0,0x0b27a,0x06a50,0x06d40,0x0af46,0x0ab60,0x09570,//1980-1989
-  0x04af5,0x04970,0x064b0,0x074a3,0x0ea50,0x06b58,0x05ac0,0x0ab60,0x096d5,0x092e0,//1990-1999
-  0x0c960,0x0d954,0x0d4a0,0x0da50,0x07552,0x056a0,0x0abb7,0x025d0,0x092d0,0x0cab5,//2000-2009
-  0x0a950,0x0b4a0,0x0baa4,0x0ad50,0x055d9,0x04ba0,0x0a5b0,0x15176,0x052b0,0x0a930,//2010-2019
-  0x07954,0x06aa0,0x0ad50,0x05b52,0x04b60,0x0a6e6,0x0a4e0,0x0d260,0x0ea65,0x0d530,//2020-2029
-  0x05aa0,0x076a3,0x096d0,0x04afb,0x04ad0,0x0a4d0,0x1d0b6,0x0d250,0x0d520,0x0dd45,//2030-2039
-  0x0b5a0,0x056d0,0x055b2,0x049b0,0x0a577,0x0a4b0,0x0aa50,0x1b255,0x06d20,0x0ada0,//2040-2049
-];
-const LUNAR_EPOCH_UTC = Date.UTC(1900, 0, 31);
-function _leapMonth(y) { return LUNAR_INFO[y - 1900] & 0xf; }
-function _leapDays(y) { return _leapMonth(y) ? ((LUNAR_INFO[y - 1900] & 0x10000) ? 30 : 29) : 0; }
-function _monthDays(y, m) { return (LUNAR_INFO[y - 1900] & (0x10000 >> m)) ? 30 : 29; }
-function _lunarYearDays(y) {
-  let sum = 348; // 12 × 29
-  for (let i = 0x8000; i > 0x8; i >>= 1) sum += (LUNAR_INFO[y - 1900] & i) ? 1 : 0;
-  return sum + _leapDays(y);
-}
-
-// 公历 → 农历，超出表范围返回 null
-function solarToLunar(sy, sm, sd) {
-  let offset = Math.floor((Date.UTC(sy, sm - 1, sd) - LUNAR_EPOCH_UTC) / 86400000);
-  if (offset < 0) return null;
-  let ly = 1900;
-  for (; ly < 2050; ly++) {
-    const yd = _lunarYearDays(ly);
-    if (offset < yd) break;
-    offset -= yd;
-  }
-  if (ly >= 2050) return null;
-  const leap = _leapMonth(ly);
-  let isLeap = false;
-  let lm = 1;
-  while (lm <= 12) {
-    let days;
-    if (leap > 0 && lm === leap + 1 && !isLeap) {
-      // 闰月排在第 leap 个月之后，月份号不前进
-      isLeap = true;
-      days = _leapDays(ly);
-      lm--;
-    } else {
-      days = _monthDays(ly, lm);
-      isLeap = false;
-    }
-    if (offset < days) break;
-    offset -= days;
-    lm++;
-  }
-  return { year: ly, month: lm, day: offset + 1, isLeap };
-}
-
-// 农历 → 公历；该年没有这个闰月/这一天（如某年腊月没有三十）时返回 null
-function lunarToSolar(ly, lm, ld, isLeapMonth) {
-  if (ly < 1900 || ly >= 2050) return null;
-  const leap = _leapMonth(ly);
-  // 请求的闰月这年根本不存在（比如闰四月，但这年真正的闰月是闰五月或者压根没有闰月）时必须
-  // 直接判定失败——退化成"当年普通月份"会让调用方把这年当成一次真实的闰月纪念日/照片匹配，
-  // 于是闰月纪念日每年都提前庆祝、"农历同日"匹配也会混进不该出现的普通月同日照片
-  if (isLeapMonth && leap !== lm) return null;
-  const dm = isLeapMonth ? _leapDays(ly) : _monthDays(ly, lm);
-  if (ld > dm) return null;
-  let offset = 0;
-  for (let y = 1900; y < ly; y++) offset += _lunarYearDays(y);
-  for (let m = 1; m < lm; m++) {
-    offset += _monthDays(ly, m);
-    if (leap === m) offset += _leapDays(ly);
-  }
-  if (isLeapMonth) offset += _monthDays(ly, lm);
-  offset += ld - 1;
-  const date = new Date(LUNAR_EPOCH_UTC + offset * 86400000);
-  return { year: date.getUTCFullYear(), month: date.getUTCMonth() + 1, day: date.getUTCDate() };
-}
-
-const LUNAR_MONTH_NAMES = ['正','二','三','四','五','六','七','八','九','十','冬','腊'];
-function lunarDayName(d) {
-  if (d === 10) return '初十';
-  if (d === 20) return '二十';
-  if (d === 30) return '三十';
-  const tens = ['初','十','廿','三'];
-  const ones = ['十','一','二','三','四','五','六','七','八','九'];
-  return tens[Math.floor(d / 10)] + ones[d % 10];
-}
-function lunarLabel(l) {
-  return `${l.isLeap ? '闰' : ''}${LUNAR_MONTH_NAMES[l.month - 1]}月${lunarDayName(l.day)}`;
 }
 
 // 农历同日匹配：算出"当前北京年份的这个公历日"对应的农历日，再把库里每个年份的
@@ -1688,10 +1537,9 @@ async function handleMemories(request, env, url, ctx) {
   }
 
   // 同一天会被反复访问，用边缘缓存挡住重复请求，避免每次访问都重新查一遍 D1
-  const cache = caches.default;
-  const cacheKey = new Request(url.toString());
-  const cachedResp = await cache.match(cacheKey);
-  if (cachedResp) return cachedResp;
+  const cacheKey = memoriesCacheKey(month, day, url.searchParams.get("lunar") === "1");
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   const includeLunar = url.searchParams.get("lunar") === "1";
 
@@ -1733,7 +1581,7 @@ async function handleMemories(request, env, url, ctx) {
       "cache-control": "public, max-age=1800",
     },
   });
-  await cache.put(cacheKey, response.clone());
+  const out = await cacheStore(ctx, cacheKey, response);
 
   // AI 打分和查地点不在这里自动触发了——这个接口本来就要为没有日期文件名的照片逐个读 EXIF，
   // 子请求数（R2 读取 + Mapbox 调用）叠加起来很容易超过 Workers 单次调用的子请求上限导致整页挂掉。
@@ -1751,7 +1599,7 @@ async function handleMemories(request, env, url, ctx) {
     }
   }
 
-  return response;
+  return out;
 }
 
 // 列出某 prefix 下所有对象（自动翻页）
@@ -1795,13 +1643,10 @@ async function computePhotoMeta(env, key, knownObj) {
   // 年/月/日必须整体来自同一个拍摄日期源，不能路径出月、文件名出日地拼——
   // iPhone 备份是按"备份时间"落目录的（.../{备份年}/{备份月}/），6/14 拍的照片 7 月才备份
   // 就会躺在 07/ 目录里，之前用路径月 + 文件名日拼出 7月14日 这种不存在的拍摄日
-  const basename = key.split("/").pop();
   let year = null, month = null, day = null;
-  const dateMatch = basename.match(/((?:19|20)\d{2})(\d{2})(\d{2})/); // YYYYMMDD
-  if (dateMatch && Number(dateMatch[2]) >= 1 && Number(dateMatch[2]) <= 12 && Number(dateMatch[3]) >= 1 && Number(dateMatch[3]) <= 31) {
-    year = dateMatch[1];
-    month = dateMatch[2];
-    day = dateMatch[3];
+  const fromName = dateFromFilename(key.split("/").pop());
+  if (fromName) {
+    ({ year, month, day } = fromName);
   } else {
     // 文件名没带日期（IMG_1017.JPG 这类纯序号）：EXIF 优先，没有就用 R2 上传时间
     const md = await getCapturedMonthDay(env.PHOTOS, key);
@@ -1995,42 +1840,6 @@ function findIsoBox(buf, start, end, type) {
   return null;
 }
 
-// 解析 iinf box 内容，找类型为 "Exif" 的 item，返回它的 item_ID
-function findExifItemId(buf, start, end) {
-  if (start + 4 > end) return null;
-  const version = buf[start];
-  let cursor = start + 4; // 跳过 version(1)+flags(3)
-  let entryCount;
-  if (version === 0) {
-    entryCount = (buf[cursor] << 8) | buf[cursor + 1];
-    cursor += 2;
-  } else {
-    entryCount = ((buf[cursor] << 24) | (buf[cursor + 1] << 16) | (buf[cursor + 2] << 8) | buf[cursor + 3]) >>> 0;
-    cursor += 4;
-  }
-
-  for (let i = 0; i < entryCount && cursor + 8 <= end; i++) {
-    const size = ((buf[cursor] << 24) | (buf[cursor + 1] << 16) | (buf[cursor + 2] << 8) | buf[cursor + 3]) >>> 0;
-    if (size < 8) break;
-    const infeVersion = buf[cursor + 8]; // box 头(8) 之后是 version(1)+flags(3)
-    let p = cursor + 8 + 4;
-    let itemId = null;
-    let itemType = null;
-    if (infeVersion === 2) {
-      itemId = (buf[p] << 8) | buf[p + 1];
-      p += 4; // item_ID(2) + item_protection_index(2)
-      itemType = String.fromCharCode(buf[p], buf[p + 1], buf[p + 2], buf[p + 3]);
-    } else if (infeVersion === 3) {
-      itemId = ((buf[p] << 24) | (buf[p + 1] << 16) | (buf[p + 2] << 8) | buf[p + 3]) >>> 0;
-      p += 6; // item_ID(4) + item_protection_index(2)
-      itemType = String.fromCharCode(buf[p], buf[p + 1], buf[p + 2], buf[p + 3]);
-    }
-    if (itemType === "Exif") return itemId;
-    cursor += size;
-  }
-  return null;
-}
-
 // 解析 iloc box 内容，按 item_ID 查出对应数据在文件里的（偏移量, 长度）
 function findIlocExtent(buf, start, end, itemId) {
   const version = buf[start];
@@ -2079,302 +1888,6 @@ function findIlocExtent(buf, start, end, itemId) {
   return null;
 }
 
-function parseExifTiff(buf, tiffStart) {
-  const little = buf[tiffStart] === 0x49 && buf[tiffStart + 1] === 0x49; // "II"
-  const u16 = (o) => (little ? buf[o] | (buf[o + 1] << 8) : (buf[o] << 8) | buf[o + 1]);
-  const u32 = (o) =>
-    little
-      ? (buf[o] | (buf[o + 1] << 8) | (buf[o + 2] << 16) | (buf[o + 3] << 24)) >>> 0
-      : ((buf[o] << 24) | (buf[o + 1] << 16) | (buf[o + 2] << 8) | buf[o + 3]) >>> 0;
-
-  function findTagValueOffset(ifdOffset, tagId) {
-    const count = u16(ifdOffset);
-    for (let i = 0; i < count; i++) {
-      const entry = ifdOffset + 2 + i * 12;
-      if (u16(entry) === tagId) return entry + 8;
-    }
-    return null;
-  }
-
-  function readAsciiAt(entryValueOffset) {
-    const valueOffset = tiffStart + u32(entryValueOffset);
-    const bytes = buf.slice(valueOffset, valueOffset + 19);
-    return new TextDecoder().decode(bytes);
-  }
-
-  // GPSLatitude/GPSLongitude 各是 3 个 RATIONAL（度、分、秒），存在 value 字段指向的一段 24 字节里
-  function readRationalTriplet(entryValueOffset) {
-    const arrOffset = tiffStart + u32(entryValueOffset);
-    let degrees = 0;
-    for (let i = 0; i < 3; i++) {
-      const num = u32(arrOffset + i * 8);
-      const den = u32(arrOffset + i * 8 + 4);
-      const val = den ? num / den : 0;
-      degrees += i === 0 ? val : val / Math.pow(60, i);
-    }
-    return degrees;
-  }
-
-  function readGps(ifd0Offset) {
-    const gpsPtrEntry = findTagValueOffset(ifd0Offset, 0x8825); // GPSInfoIFDPointer
-    if (!gpsPtrEntry) return null;
-    const gpsIfdOffset = tiffStart + u32(gpsPtrEntry);
-    const latEntry = findTagValueOffset(gpsIfdOffset, 0x0002); // GPSLatitude
-    const lonEntry = findTagValueOffset(gpsIfdOffset, 0x0004); // GPSLongitude
-    const latRefEntry = findTagValueOffset(gpsIfdOffset, 0x0001); // GPSLatitudeRef ("N"/"S")
-    const lonRefEntry = findTagValueOffset(gpsIfdOffset, 0x0003); // GPSLongitudeRef ("E"/"W")
-    if (!latEntry || !lonEntry) return null;
-    let lat = readRationalTriplet(latEntry);
-    let lon = readRationalTriplet(lonEntry);
-    // GPS*Ref 是 2 字节 ASCII（如 "N\0"），4 字节够装下，直接存在 value 字段里，不走 offset 间接寻址
-    if (latRefEntry && buf[latRefEntry] === 0x53) lat = -lat; // "S"
-    if (lonRefEntry && buf[lonRefEntry] === 0x57) lon = -lon; // "W"
-    if (!isFinite(lat) || !isFinite(lon) || (lat === 0 && lon === 0)) return null;
-    return { lat, lon };
-  }
-
-  try {
-    const ifd0Offset = tiffStart + u32(tiffStart + 4);
-    const exifIfdEntry = findTagValueOffset(ifd0Offset, 0x8769); // ExifIFDPointer
-    let dateStr = null;
-    if (exifIfdEntry) {
-      const exifIfdOffset = tiffStart + u32(exifIfdEntry);
-      const dtEntry = findTagValueOffset(exifIfdOffset, 0x9003); // DateTimeOriginal
-      if (dtEntry) dateStr = readAsciiAt(dtEntry);
-    }
-    if (!dateStr) {
-      const dtEntry = findTagValueOffset(ifd0Offset, 0x0132); // DateTime
-      if (dtEntry) dateStr = readAsciiAt(dtEntry);
-    }
-    const gps = readGps(ifd0Offset);
-    if (!dateStr) return gps ? { lat: gps.lat, lon: gps.lon } : null;
-    const m = dateStr.match(/^(\d{4}):(\d{2}):(\d{2})/);
-    if (!m) return gps ? { lat: gps.lat, lon: gps.lon } : null;
-    return { year: m[1], month: m[2], day: m[3], lat: gps ? gps.lat : null, lon: gps ? gps.lon : null };
-  } catch {
-    return null;
-  }
-}
-
-// 扩展 EXIF 解析：Make / Model / ExposureTime / FNumber / ISO / FocalLength / Lens / 分辨率
-function parseExifForDisplay(buf) {
-  // 找 JPEG EXIF 段（也支持直接 TIFF 文件头）
-  let tiffStart = -1;
-  if (buf[0] === 0xff && buf[1] === 0xd8) {
-    // JPEG
-    let pos = 2;
-    while (pos + 3 < buf.length) {
-      if (buf[pos] !== 0xff) break;
-      const marker = buf[pos + 1];
-      const segLen = (buf[pos + 2] << 8) | buf[pos + 3];
-      if (marker === 0xe1 && pos + 9 < buf.length &&
-        buf[pos + 4] === 0x45 && buf[pos + 5] === 0x78 &&
-        buf[pos + 6] === 0x69 && buf[pos + 7] === 0x66) {
-        tiffStart = pos + 10; // skip APP1 marker(2) + length(2) + "Exif\0\0"(6)
-        break;
-      }
-      if (marker === 0xda) break;
-      pos += 2 + segLen;
-    }
-  } else if ((buf[0] === 0x49 && buf[1] === 0x49) || (buf[0] === 0x4d && buf[1] === 0x4d)) {
-    tiffStart = 0; // raw TIFF / HEIF exif block
-  }
-  if (tiffStart < 0 || tiffStart + 8 > buf.length) return null;
-
-  const little = buf[tiffStart] === 0x49;
-  const u16 = (o) => little ? buf[o] | (buf[o+1]<<8) : (buf[o]<<8)|buf[o+1];
-  const u32 = (o) => (little
-    ? (buf[o]|(buf[o+1]<<8)|(buf[o+2]<<16)|(buf[o+3]<<24))
-    : ((buf[o]<<24)|(buf[o+1]<<16)|(buf[o+2]<<8)|buf[o+3])) >>> 0;
-
-  function ifdEntry(ifdOff, tag) {
-    const cnt = u16(ifdOff);
-    for (let i = 0; i < cnt; i++) {
-      const e = ifdOff + 2 + i * 12;
-      if (e + 11 >= buf.length) break;
-      if (u16(e) === tag) return e;
-    }
-    return -1;
-  }
-
-  function readAscii(e) {
-    const len = u32(e + 4);
-    const off = len <= 4 ? e + 8 : tiffStart + u32(e + 8);
-    if (off >= buf.length) return '';
-    let s = '';
-    for (let i = 0; i < len && off + i < buf.length; i++) {
-      const c = buf[off + i];
-      if (c === 0) break;
-      s += String.fromCharCode(c);
-    }
-    return s.trim();
-  }
-
-  function readRational(e) {
-    const off = tiffStart + u32(e + 8);
-    if (off + 7 >= buf.length) return null;
-    const n = u32(off), d = u32(off + 4);
-    return d ? n / d : null;
-  }
-
-  function readSRational(e) {
-    const off = tiffStart + u32(e + 8);
-    if (off + 7 >= buf.length) return null;
-    // signed 32-bit via two's complement
-    const toS = v => (v >= 0x80000000 ? v - 0x100000000 : v);
-    const n = toS(u32(off)), d = toS(u32(off + 4));
-    return d ? n / d : null;
-  }
-
-  function readShort(e) {
-    // SHORT (type=3): value fits in 4 bytes at offset+8
-    return u16(e + 8);
-  }
-
-  try {
-    const ifd0 = tiffStart + u32(tiffStart + 4);
-    const result = {};
-
-    const makeE = ifdEntry(ifd0, 0x010F);
-    if (makeE >= 0) result.make = readAscii(makeE);
-
-    const modelE = ifdEntry(ifd0, 0x0110);
-    if (modelE >= 0) result.model = readAscii(modelE);
-
-    const swE = ifdEntry(ifd0, 0x0131); // Software
-    if (swE >= 0) result.software = readAscii(swE);
-
-    // 图像尺寸（IFD0 中）
-    const wE = ifdEntry(ifd0, 0xA002);
-    const hE = ifdEntry(ifd0, 0xA003);
-    // ExifIFD pointer
-    const exifPtrE = ifdEntry(ifd0, 0x8769);
-    if (exifPtrE >= 0) {
-      const exifIfd = tiffStart + u32(exifPtrE + 8);
-
-      const etE = ifdEntry(exifIfd, 0x829A); // ExposureTime
-      if (etE >= 0) result.shutterSpeed = readRational(etE);
-
-      const fnE = ifdEntry(exifIfd, 0x829D); // FNumber
-      if (fnE >= 0) result.aperture = readRational(fnE);
-
-      const isoE = ifdEntry(exifIfd, 0x8827); // ISOSpeedRatings
-      if (isoE >= 0) result.iso = readShort(isoE);
-
-      const flE = ifdEntry(exifIfd, 0x920A); // FocalLength
-      if (flE >= 0) result.focalLength = readRational(flE);
-
-      const fl35E = ifdEntry(exifIfd, 0xA405); // FocalLengthIn35mmFilm
-      if (fl35E >= 0) result.focalLength35 = readShort(fl35E);
-
-      const lensE = ifdEntry(exifIfd, 0xA434); // LensModel
-      if (lensE >= 0) result.lens = readAscii(lensE);
-
-      const pw = ifdEntry(exifIfd, 0xA002); // PixelXDimension
-      const ph = ifdEntry(exifIfd, 0xA003); // PixelYDimension
-      if (pw >= 0) result.width = u32(pw + 8);
-      if (ph >= 0) result.height = u32(ph + 8);
-
-      // Extended EXIF tags
-      const dtE = ifdEntry(exifIfd, 0x9003); // DateTimeOriginal
-      if (dtE >= 0) result.dateTime = readAscii(dtE);
-
-      const csE = ifdEntry(exifIfd, 0xA001); // ColorSpace (1=sRGB)
-      if (csE >= 0) result.colorSpace = readShort(csE) === 1 ? 'sRGB' : 'uncalibrated';
-
-      const wbE = ifdEntry(exifIfd, 0xA403); // WhiteBalance (0=auto, 1=manual)
-      if (wbE >= 0) result.whiteBalance = readShort(wbE);
-
-      const epE = ifdEntry(exifIfd, 0x8822); // ExposureProgram
-      if (epE >= 0) result.exposureProgram = readShort(epE);
-
-      const mmE = ifdEntry(exifIfd, 0x9207); // MeteringMode
-      if (mmE >= 0) result.meteringMode = readShort(mmE);
-
-      const flashE = ifdEntry(exifIfd, 0x9209); // Flash
-      if (flashE >= 0) result.flash = readShort(flashE);
-
-      const maxAptE = ifdEntry(exifIfd, 0x9205); // MaxApertureValue (APEX rational)
-      if (maxAptE >= 0) {
-        const apex = readRational(maxAptE);
-        if (apex !== null) result.maxAperture = +(Math.pow(2, apex / 2).toFixed(2));
-      }
-
-      const sctE = ifdEntry(exifIfd, 0xA406); // SceneCaptureType
-      if (sctE >= 0) result.sceneCaptureType = readShort(sctE);
-
-      const otE = ifdEntry(exifIfd, 0x9011); // OffsetTimeOriginal (timezone, e.g. "+08:00")
-      if (otE >= 0) result.offsetTime = readAscii(otE);
-
-      const emE = ifdEntry(exifIfd, 0xA402); // ExposureMode (0=auto, 1=manual, 2=auto-bracket)
-      if (emE >= 0) result.exposureMode = readShort(emE);
-
-      const bvE = ifdEntry(exifIfd, 0x9203); // BrightnessValue (SRATIONAL, EV)
-      if (bvE >= 0) result.brightnessValue = readSRational(bvE);
-
-      const smE = ifdEntry(exifIfd, 0xA217); // SensingMethod
-      if (smE >= 0) result.sensingMethod = readShort(smE);
-    }
-    // Fallback dims from IFD0
-    if (!result.width && wE >= 0) result.width = u32(wE + 8);
-    if (!result.height && hE >= 0) result.height = u32(hE + 8);
-
-    // GPS IFD
-    const gpsPtrE = ifdEntry(ifd0, 0x8825);
-    if (gpsPtrE >= 0) {
-      const gpsOff = tiffStart + u32(gpsPtrE + 8);
-      if (gpsOff + 2 < buf.length) {
-        function readRationalArr(e, count) {
-          const off = tiffStart + u32(e + 8);
-          const out = [];
-          for (let k = 0; k < count; k++) {
-            const base = off + k * 8;
-            if (base + 7 >= buf.length) break;
-            const n = u32(base), d = u32(base + 4);
-            out.push(d ? n / d : 0);
-          }
-          return out;
-        }
-        const latRefE = ifdEntry(gpsOff, 0x0001);
-        const latGE  = ifdEntry(gpsOff, 0x0002);
-        const lngRefE = ifdEntry(gpsOff, 0x0003);
-        const lngGE  = ifdEntry(gpsOff, 0x0004);
-        if (latGE >= 0 && lngGE >= 0) {
-          const la = readRationalArr(latGE, 3);
-          const ln = readRationalArr(lngGE, 3);
-          if (la.length === 3 && ln.length === 3) {
-            const latDeg = la[0] + la[1] / 60 + la[2] / 3600;
-            const lngDeg = ln[0] + ln[1] / 60 + ln[2] / 3600;
-            const latRef = latRefE >= 0 ? readAscii(latRefE) : 'N';
-            const lngRef = lngRefE >= 0 ? readAscii(lngRefE) : 'E';
-            result.lat = latRef.startsWith('S') ? -latDeg : latDeg;
-            result.lng = lngRef.startsWith('W') ? -lngDeg : lngDeg;
-            function toDMS(v, posC, negC) {
-              const a = Math.abs(v), d = Math.floor(a);
-              const mt = (a - d) * 60, m = Math.floor(mt);
-              const s = ((mt - m) * 60).toFixed(2);
-              return `${d}°${m}'${s}"${v >= 0 ? posC : negC}`;
-            }
-            result.latDMS = toDMS(result.lat, 'N', 'S');
-            result.lngDMS = toDMS(result.lng, 'E', 'W');
-          }
-        }
-        const altRefE = ifdEntry(gpsOff, 0x0005);
-        const altGE  = ifdEntry(gpsOff, 0x0006);
-        if (altGE >= 0) {
-          const alt = readRational(altGE);
-          const sign = (altRefE >= 0 && buf[altRefE + 8] === 1) ? -1 : 1;
-          if (alt !== null) result.altitude = Math.round(alt * sign);
-        }
-      }
-    }
-
-    return Object.keys(result).length ? result : null;
-  } catch {
-    return null;
-  }
-}
-
 async function readHeicExifForDisplay(bucket, key) {
   const headObj = await bucket.get(key, { range: { offset: 0, length: 262144 } });
   if (!headObj) return null;
@@ -2405,16 +1918,15 @@ async function readHeicExifForDisplay(bucket, key) {
   return parseExifForDisplay(exifBuf.slice(tiffStart));
 }
 
-async function handleExif(request, env, url) {
+async function handleExif(request, env, url, ctx) {
   const key = url.searchParams.get("key");
   if (!key || key.length > 500) return new Response("Bad Request", { status: 400 });
 
   // EXIF 是照片自带的不变元数据，解析一次全网复用——尤其 HEIC 要走一整套
   // ISOBMFF box 查找 + TIFF 解析，之前只有浏览器缓存头，每个访问者都重复解析一遍
-  const cache = caches.default;
-  const cacheKey = new Request(url.toString());
-  const cachedResp = await cache.match(cacheKey);
-  if (cachedResp) return cachedResp;
+  const cacheKey = url.toString();
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   let obj = null;
   let exif = {};
@@ -2438,8 +1950,7 @@ async function handleExif(request, env, url) {
       "access-control-allow-origin": "*",
     },
   });
-  await cache.put(cacheKey, response.clone());
-  return response;
+  return cacheStore(ctx, cacheKey, response);
 }
 
 async function handleStaticMap(request, env, url) {
@@ -2477,7 +1988,7 @@ const MIME_TYPES = {
 };
 
 // ---------- 图片代理 ----------
-async function handleImage(request, env, url) {
+async function handleImage(request, env, url, ctx) {
   // 畸形百分号序列（如 /img/%E0%A4%A）会让 decodeURIComponent 抛 URIError，
   // 不接住就是 1101 内部错误而不是 400
   let key;
@@ -2494,10 +2005,9 @@ async function handleImage(request, env, url) {
 
   // 照片内容不会变（key 不变就是同一份文件），显式用边缘缓存挡住重复的 R2 get，
   // 同一张照片被很多人/很多节点反复请求时，B 类操作能省下不少
-  const cache = caches.default;
-  const cacheKey = new Request(url.toString());
-  const cachedResp = await cache.match(cacheKey);
-  if (cachedResp) return cachedResp;
+  const cacheKey = url.toString();
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   const object = await env.PHOTOS.get(key);
   if (!object) return new Response("Not Found", { status: 404 });
@@ -2519,15 +2029,11 @@ async function handleImage(request, env, url) {
   headers.set("etag", object.httpEtag);
   headers.set("cache-control", "public, max-age=31536000, immutable");
 
-  const response = new Response(object.body, { headers });
-  // 边缘缓存只是优化，存不进去（比如大视频文件在某些边缘节点上触发了 Cache API 的内部限制）
-  // 不该连累这次响应本身直接 500——之前这里没接住过，视频缩略图悬浮自动播放偶发出现过这个问题
-  try {
-    await cache.put(cacheKey, response.clone());
-  } catch (err) {
-    console.error("cache.put failed for", key, err);
-  }
-  return response;
+  // 写缓存必须交给 waitUntil（cacheStore 里做了）：这里的响应体是 R2 的流，clone() 之后两路共用一个源，
+  // 以前 await cache.put 会等缓存那一路把整个原图读完才返回，用户拿到第一个字节之前
+  // 整个文件都得先回源一遍，没被读的那一路还得整份缓冲在内存里。
+  // 写缓存失败（比如大视频撞上 Cache API 的内部限制）也在 cacheStore 里吞掉，不连累这次响应
+  return cacheStore(ctx, cacheKey, new Response(object.body, { headers }));
 }
 
 // 处理带 Range 头的请求（主要是视频拖动/取封面帧），返回 206 Partial Content。
@@ -2755,15 +2261,15 @@ async function handleThumb(request, env, url, ctx) {
   const publicUrl = `${env.PREVIEWS_PUBLIC_URL}/${thumbKey.split("/").map(encodeURIComponent).join("/")}`;
 
   // 先查边缘缓存（302 本身也可以缓存，省掉每次的 PREVIEWS.head 调用）
-  const cacheKey = new Request(`https://thumb-redirect/${thumbKey}`);
-  const cachedRedirect = await caches.default.match(cacheKey);
+  const cacheKey = `https://thumb-redirect/${thumbKey}`;
+  const cachedRedirect = await caches.default.match(new Request(cacheKey));
   if (cachedRedirect) return cachedRedirect;
 
   // 缩略图已存在 → 直接 302，Worker 不再传图片体
   const existing = await env.PREVIEWS.head(thumbKey);
   if (existing) {
     const resp = thumbRedirect(publicUrl);
-    await caches.default.put(cacheKey, resp.clone());
+    await cachePut(ctx, cacheKey, resp);
     return resp;
   }
 
@@ -2790,8 +2296,10 @@ async function handleThumb(request, env, url, ctx) {
       if (ctx) ctx.waitUntil(record); else await record;
     }
 
+    // cachePut 不会抛错——以前这里是 await caches.default.put，写缓存一旦失败就会掉进下面的
+    // catch，被当成"转换失败"走 HEIC 兜底，可缩略图其实已经生成好、存进 PREVIEWS 了
     const resp = thumbRedirect(publicUrl);
-    await caches.default.put(cacheKey, resp.clone());
+    await cachePut(ctx, cacheKey, resp);
     return resp;
   } catch (err) {
     // 一定要把原因打出来——这里静默过一次，Transformations 免费额度（每月 5000 次独立变换）
@@ -2806,7 +2314,7 @@ async function handleThumb(request, env, url, ctx) {
         return thumbRedirect(`${env.PREVIEWS_PUBLIC_URL}/${previewKey.split("/").map(encodeURIComponent).join("/")}`, "public, max-age=3600");
       }
     }
-    return handleImage(request, env, new URL(url.toString().replace("/thumb/", "/img/")));
+    return handleImage(request, env, new URL(url.toString().replace("/thumb/", "/img/")), ctx);
   }
 }
 
@@ -3381,21 +2889,14 @@ async function handleConvertHeicPhotos(request, env, url) {
 // 着急验证效果的时候用这个端点手动清一下
 // origin 写死成正式域名——这个函数会被 queue() consumer 调用，那边没有 request/url 可以取 origin，
 // 而这个项目本来就只绑定了这一个域名（见 wrangler.toml 的 routes），不会跑在别的域名上
-const SITE_ORIGIN = "https://memories.cuijianzhuang.com";
 
 async function purgeDayCache(month, day) {
   const cache = caches.default;
-  // 前端请求永远显式带 lunar=0 / lunar=1（见 app.js loadMemories），边缘缓存按完整 URL 做 key，
-  // 三个变体都要清——之前漏了 lunar=0，公历模式（最常用）的缓存一直清不掉，
-  // 新照片上传后要干等边缘缓存自然过期（最长 30 分钟）才出现
-  const targets = [
-    `${SITE_ORIGIN}/api/memories?month=${month}&day=${day}`,
-    `${SITE_ORIGIN}/api/memories?month=${month}&day=${day}&lunar=0`,
-    `${SITE_ORIGIN}/api/memories?month=${month}&day=${day}&lunar=1`,
-    `${SITE_ORIGIN}/api/map-photos?month=${month}&day=${day}`,
-  ];
+  // key 跟写入方（handleMemories / handleMapPhotos）来自同一组函数，结构上不可能再漏掉某个变体——
+  // 以前这里是手工列举的 URL，前端加了 lunar 参数后漏了 lunar=0，公历模式（最常用）的缓存
+  // 一直清不掉，新照片上传后要干等边缘缓存自然过期（最长 30 分钟）才出现
   const deleted = [];
-  for (const target of targets) {
+  for (const target of dayCacheKeys(month, day)) {
     const ok = await cache.delete(new Request(target));
     deleted.push({ url: target, deleted: ok });
   }
@@ -3833,7 +3334,7 @@ async function handlePoem(request, env, url) {
 // https://api.wikimedia.org/feed/v1/wikipedia/{lang}/onthisday/selected/{MM}/{DD}
 // 中文维基优先（selected 是人工精选的大事记），条目太少或不可用时回退英文维基。
 // 历史事件内容基本不变，边缘缓存 7 天；上游挂了返回 204，前端整块隐藏不影响主功能
-async function handleOnThisDay(request, env, url) {
+async function handleOnThisDay(request, env, url, ctx) {
   const month = url.searchParams.get("month");
   const day = url.searchParams.get("day");
   if (!/^\d{2}$/.test(month || "") || !/^\d{2}$/.test(day || "")) {
@@ -3843,10 +3344,9 @@ async function handleOnThisDay(request, env, url) {
     });
   }
 
-  const cache = caches.default;
-  const cacheKey = new Request(`${SITE_ORIGIN}/api/onthisday?month=${month}&day=${day}`);
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached;
+  const cacheKey = `${SITE_ORIGIN}/api/onthisday?month=${month}&day=${day}`;
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   const fetchLang = async (lang) => {
     const resp = await fetch(`https://api.wikimedia.org/feed/v1/wikipedia/${lang}/onthisday/selected/${month}/${day}`, {
@@ -3873,8 +3373,9 @@ async function handleOnThisDay(request, env, url) {
     const response = new Response(JSON.stringify({ month, day, events }), {
       headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=604800" },
     });
-    await cache.put(cacheKey, response.clone());
-    return response;
+    // 以前 cache.put 也在这个 try 里：缓存写失败会被下面的 catch 当成接口失败，
+    // 把一份正常拿到的数据扔掉、返回 204。cacheStore 自己吞掉写缓存的错误
+    return cacheStore(ctx, cacheKey, response);
   } catch {
     return new Response(null, { status: 204 });
   }
@@ -3883,7 +3384,7 @@ async function handleOnThisDay(request, env, url) {
 // ---------- 地图页用的数据接口：把所有查到过经纬度的照片列出来，给前端打点 ----------
 // 地图只展示某一天（默认今天）匹配到的照片，不是整个照片库——
 // 跟 /api/memories 共用同一套日期匹配逻辑（matchPhotosForDay），并且同样做边缘缓存
-async function handleMapPhotos(request, env, url) {
+async function handleMapPhotos(request, env, url, ctx) {
   const month = url.searchParams.get("month");
   const day = url.searchParams.get("day");
 
@@ -3899,10 +3400,9 @@ async function handleMapPhotos(request, env, url) {
       });
     }
 
-    const cache = caches.default;
-    const cacheKey = new Request(url.toString());
-    const cachedResp = await cache.match(cacheKey);
-    if (cachedResp) return cachedResp;
+    const cacheKey = mapPhotosAllCacheKey(year);
+    const hit = await cacheLookup(cacheKey);
+    if (hit) return hit;
 
     const { results } = await env.DB.prepare(
       `SELECT pp.key AS key, pp.lat, pp.lon, pp.name, pi.year, pi.month, pi.day, pi.type
@@ -3928,8 +3428,7 @@ async function handleMapPhotos(request, env, url) {
         "cache-control": "public, max-age=1800",
       },
     });
-    await cache.put(cacheKey, response.clone());
-    return response;
+    return cacheStore(ctx, cacheKey, response);
   }
 
   if (!/^\d{2}$/.test(month || "") || !/^\d{2}$/.test(day || "")) {
@@ -3939,10 +3438,9 @@ async function handleMapPhotos(request, env, url) {
     });
   }
 
-  const cache = caches.default;
-  const cacheKey = new Request(url.toString());
-  const cachedResp = await cache.match(cacheKey);
-  if (cachedResp) return cachedResp;
+  const cacheKey = mapPhotosDayCacheKey(month, day);
+  const hit = await cacheLookup(cacheKey);
+  if (hit) return hit;
 
   const matchedByYear = await matchPhotosForDay(env, month, day);
   const matchedKeys = matchedByYear.flatMap((y) => y.photos.map((p) => p.key));
@@ -3974,8 +3472,7 @@ async function handleMapPhotos(request, env, url) {
       "cache-control": "public, max-age=1800",
     },
   });
-  await cache.put(cacheKey, response.clone());
-  return response;
+  return cacheStore(ctx, cacheKey, response);
 }
 
 // ── Durable Object：实时共享房间 ─────────────────────────────────────────────────

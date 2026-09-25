@@ -28,8 +28,14 @@ jobs:
       - name: Syntax check
         run: |
           node --check worker.js
+          for f in $(find src -name "*.js"); do node --check "$f"; done
           node --check public/app.js
           node --check public/map.js
+
+      # 纯函数单元测试（农历换算 / EXIF 解析 / 文件名日期 / Live Photo 配对）。这些函数出错不会报错，
+      # 只会让照片悄悄落到错误的日期上，线上几乎发现不了，所以放在部署前拦
+      - name: Unit tests
+        run: npm test
 
       # KV namespace 自动供给：只在 wrangler.toml 里还是占位符时触发（全新账号/fork 首次部署），
       # 先按标题查已有 namespace，没有才创建，拿到 id 后 sed 进本次构建的 wrangler.toml
