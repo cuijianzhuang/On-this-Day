@@ -1852,77 +1852,11 @@
     if (dx < 0) nextSlide(); else prevSlide();
   }, { passive: true });
 
-  // "指尖滑过"照片墙：不只是单张图响应鼠标，而是按距离衰减让指尖经过的几张照片联动倾斜，
-  // 像一只手指划过墙面逐张拂过去的感觉；同时一个发光的指尖光点跟随鼠标，带一点缓冲延迟。
-  const RIPPLE_RADIUS = 230;
-  let pointerX = -9999, pointerY = -9999, pointerActive = false;
-  let fingerX = -9999, fingerY = -9999;
-  const fingertip = document.getElementById('fingertip');
-  const cursorDot = document.getElementById('cursorDot');
-  const CURSOR_HOVER_SELECTOR = 'a, button, .cell, input, label, [onclick]';
-
-  document.addEventListener('mousemove', (e) => {
-    if (_isTouchDevice) return; // 触屏合成的 mousemove 直接丢弃
-    pointerX = e.clientX; pointerY = e.clientY; pointerActive = true;
-    document.body.classList.add('custom-cursor-active');
-    if (cursorDot) {
-      cursorDot.style.opacity = '1';
-      cursorDot.style.translate = pointerX + 'px ' + pointerY + 'px';
-      cursorDot.classList.toggle('hover', !!e.target.closest(CURSOR_HOVER_SELECTOR));
-    }
-  });
-  document.addEventListener('mouseleave', () => {
-    pointerActive = false;
-    if (cursorDot) cursorDot.style.opacity = '0';
-    // 鼠标离开页面时一次性清掉所有"指尖联动"的倾斜状态，不用等 wallTick 下一帧再清
-    for (const cell of visibleCells) {
-      cell.classList.remove('touching');
-      cell.style.transform = '';
-    }
-  });
-
-  // 只对视口附近（含一点缓冲）的照片做指尖联动计算，照片墙很长时也不用每帧遍历全部 cell
-  const visibleCells = new Set();
-  const frameInnerCache = new WeakMap(); // 缓存 .frame-inner 引用，不用每次重新 querySelector
-
-  // 缓存每张可见照片的中心点坐标——这才是"鼠标一动就卡"的真正原因：
-  // 原来 wallTick 每帧（鼠标在动的时候）都对所有可见照片强制触发一次布局重排去算位置，
-  // 现在只在滚动/缩放窗口时才重新算一遍，鼠标移动本身不再触发任何布局读取
-  const cellCenters = new Map();
-  function refreshCellCenters() {
-    for (const cell of visibleCells) {
-      const inner = frameInnerCache.get(cell) || cell;
-      const rect = inner.getBoundingClientRect();
-      cellCenters.set(cell, { cx: rect.left + rect.width / 2, cy: rect.top + rect.height / 2, w: rect.width, h: rect.height });
-    }
-  }
-  let refreshQueued = false;
-  function queueRefreshCellCenters() {
-    if (refreshQueued) return;
-    refreshQueued = true;
-    requestAnimationFrame(() => { refreshCellCenters(); refreshQueued = false; });
-  }
-  window.addEventListener('scroll', queueRefreshCellCenters, { passive: true });
-  window.addEventListener('resize', queueRefreshCellCenters, { passive: true });
-
+  // 照片墙以前有"指尖滑过联动 3D 倾斜"和自定义取景框光标，改成方格网格之后都去掉了——
+  // 方格整齐排着，一片格子跟着鼠标歪来歪去只会显得乱。这里只保留两件实事：
+  // 滚出视野的格子暂停占位动画；视频格子进视口附近才开始加载
   const cellObserver = new IntersectionObserver((entries) => {
-    for (const entry of entries) {
-      if (entry.isIntersecting) {
-        visibleCells.add(entry.target);
-        entry.target.classList.remove('offscreen');
-        // IntersectionObserver 自己就算好了 boundingClientRect，直接拿来用，不用再查一次
-        const r = entry.boundingClientRect;
-        frameInnerCache.set(entry.target, entry.target.querySelector('.frame-inner') || entry.target);
-        cellCenters.set(entry.target, { cx: r.left + r.width / 2, cy: r.top + r.height / 2, w: r.width, h: r.height });
-      } else {
-        visibleCells.delete(entry.target);
-        cellCenters.delete(entry.target);
-        entry.target.classList.remove('touching');
-        entry.target.style.transform = '';
-        // 滚出视野的照片把晃动/加载圈动画暂停掉，照片多的时候一堆元素同时跑动画会让页面变卡
-        entry.target.classList.add('offscreen');
-      }
-    }
+    for (const entry of entries) entry.target.classList.toggle('offscreen', !entry.isIntersecting);
   }, { rootMargin: '200px' });
 
   // 独立视频 cell 用 data-src 占位，进视口附近才真正赋值触发加载——<video> 标签本身不支持
@@ -1937,53 +1871,10 @@
     }
   }, { rootMargin: '300px' });
 
-  // 触屏设备：tap 会合成 mousemove，若让 rAF 对卡片施加 scale/rotateX，
-  // 会与 grid 布局和 transform-origin:top center 叠加，滚动时产生比例错乱；
-  // 触屏完全不需要 3D 倾斜效果，直接跳过整个 tilt 循环。
-  const _isTouchDevice = window.matchMedia('(pointer: coarse)').matches;
-
-  function wallTick() {
-    requestAnimationFrame(wallTick);
-
-    // 指尖光点用 lerp 缓冲跟随，制造轻微的"跟手"延迟感
-    fingerX += (pointerX - fingerX) * 0.18;
-    fingerY += (pointerY - fingerY) * 0.18;
-    if (fingertip) {
-      fingertip.style.opacity = pointerActive ? '1' : '0';
-      fingertip.style.transform = 'translate(' + fingerX + 'px,' + fingerY + 'px) translate(-50%,-50%)';
-    }
-
-    // 触屏设备跳过鼠标 3D 倾斜（tap 会合成 mousemove 导致 scale 被写入）
-    if (_isTouchDevice) return;
-
-    // 鼠标没在页面上动的时候，没必要每帧都去算每张照片的距离；
-    // 鼠标离开时已经在 mouseleave 里把 touching 状态一次性清过了
-    if (!pointerActive) return;
-
-    for (const cell of visibleCells) {
-      const center = cellCenters.get(cell);
-      if (!center) continue; // 用缓存的坐标，不在这里触发任何布局读取
-      const dx = pointerX - center.cx, dy = pointerY - center.cy;
-      const dist = Math.hypot(dx, dy);
-
-      if (dist < RIPPLE_RADIUS) {
-        const factor = 1 - dist / RIPPLE_RADIUS; // 0~1，越近越强
-        const px = dx / center.w, py = dy / center.h;
-        cell.classList.add('touching');
-        // 只写 3D 倾斜：挂角那点旋转由 CSS 的 rotate 属性单独承担，两者会自动合成
-        // （以前这里带 rotate() 一起写进 transform，但 hangSway 动画也在动 transform，
-        //  动画优先级高于行内 style，整个倾斜效果其实一帧都没显示出来过）
-        cell.style.transform =
-          'perspective(700px) ' +
-          'rotateX(' + (-py * 18 * factor).toFixed(2) + 'deg) rotateY(' + (px * 18 * factor).toFixed(2) + 'deg) ' +
-          'scale(' + (1 + 0.08 * factor).toFixed(3) + ')';
-      } else if (cell.classList.contains('touching')) {
-        cell.classList.remove('touching');
-        cell.style.transform = '';
-      }
-    }
-  }
-  requestAnimationFrame(wallTick);
+  // 往下滚之后顶栏才铺一层毛玻璃底（.topbar-bg），在最顶上时保持通透、不压标题
+  const syncScrolled = () => document.body.classList.toggle('scrolled', window.scrollY > 40);
+  window.addEventListener('scroll', syncScrolled, { passive: true });
+  syncScrolled();
 
   // 每次调用递增，旧请求返回时 seq 已变则丢弃，防止快速切换日期时旧数据覆盖新内容
   let _memSeq = 0;
@@ -2004,18 +1895,11 @@
     // 历史上的今天跟着这次要看的日期一起换，独立请求互不阻塞
     loadOnThisDay(month, day);
 
-    // 骨架屏的卡片直接复用真实照片用的 .cell/.frame-inner——尺寸/倾斜角/摇摆节奏的算法
-    // 也跟下面渲染真实照片时的 pickSize/pickTilt 保持一致（seed 就用数组下标），
-    // 这样骨架屏看起来就是同一套"墙上挂照片"，而不是另一套临时拼凑的占位符
-    const SKELETON_SIZES = [150, 190, 230, 170, 210];
-    const SKELETON_TILTS = [-3, -1.5, 0, 1.5, 3];
-    const SKELETON_HTML = '<div class="skeleton-grid">' + SKELETON_SIZES.map((w, i) => {
-      const swayDur = (4 + (i % 4) * 0.7).toFixed(1);
-      const swayDelay = ((i % 5) * 0.5).toFixed(1);
-      const enterDelay = (i * 0.05).toFixed(2);
-      const style = 'width:' + w + 'px;--tilt-deg:' + SKELETON_TILTS[i] + ';--sway-dur:' + swayDur + 's;--sway-delay:' + swayDelay + 's;--enter-delay:' + enterDelay + 's;';
-      return '<div class="cell" style="' + style + '"><div class="frame-inner"></div></div>';
-    }).join('') + '</div>';
+    // 骨架屏直接复用真实照片的 .cell/.frame-inner 方格（带同一道加载微光），第一格同样占 2×2，
+    // 数据到了之后版式不会整体跳一下
+    const SKELETON_HTML = '<div class="skeleton-grid">' + Array.from({ length: 9 }, (_, i) =>
+      '<div class="cell' + (i === 0 ? ' hero' : '') + '" style="--enter-delay:' + (i * 0.04).toFixed(2) + 's"><div class="frame-inner"></div></div>'
+    ).join('') + '</div>';
 
     function fadeOut() {
       content.style.opacity = '0';
@@ -2038,8 +1922,7 @@
     if (!isFirst) {
       subtitle.textContent = '正在唤醒回忆…';
       yearToggle.disabled = true;
-      visibleCells.clear();
-      cellCenters.clear();
+      cellObserver.disconnect();
       allPhotos = [];
       skeletonReady = fadeOut().then(() => {
         if (seq !== _memSeq) return;
@@ -2066,7 +1949,7 @@
         // 接口给的是两位数字符串（"06"），标题里按中文习惯写成"6月14日"——跟分享卡片的 og:title 一致
         // 两个短语各自是不可拆分的块：窄屏折行时只会在逗号后面断开（"6月14日，/ 那些年的此刻"），
         // 不会把"那些年"拆到两行，逗号也不会跑到行首
-        document.getElementById('title').innerHTML = '<span class="h1-seg"><span class="date">' + Number(data.month) + '月' + Number(data.day) + '日</span>，</span><span class="h1-seg">那些年的此刻</span>';
+        document.getElementById('title').innerHTML = '<span class="date">' + Number(data.month) + '月' + Number(data.day) + '日</span><span class="h1-sub">那些年的此刻</span>';
         _joinRoom(data.month + '-' + data.day);
 
         // 农历同日段落（后端算好：同一农历日在往年对应的公历日期的照片，公历同日重复的已排除）
@@ -2084,24 +1967,18 @@
         subtitle.textContent = (includeLunarForRequest ? '农历同日' : '公历同日')
           + '横跨 ' + visibleYears.length + ' 个年头，' + totalPhotos + ' 个瞬间';
 
-        // 切日期会把整面墙的照片换掉，旧的 cell 元素马上就从 DOM 里消失了——
-        // 不清的话 visibleCells/cellCenters 里攒着的是已经被扔掉的旧元素引用，越点几次日期切换越积越多
+        // 切日期会把整面墙的照片换掉，旧的 cell 元素马上就从 DOM 里消失了，先停掉对它们的观察
         if (isFirst) {
-          visibleCells.clear();
-          cellCenters.clear();
+          cellObserver.disconnect();
           allPhotos = [];
         }
         // allPhotos 必须只包含当前模式正在展示的照片，灯箱下标才不会串到另一套历法。
         visibleYears.forEach(y => y.photos.forEach(p => allPhotos.push({ ...p, year: y.year })));
 
-        // 给每张图随机一个尺寸档位、轻微倾斜角度，再配一个随机的晃动周期和延迟，做出挂在墙上被风吹的参差感
-        const SIZES = [150, 190, 230, 170, 210];
-        function pickSize(seed) { return SIZES[seed % SIZES.length]; }
-        function pickTilt(seed) { const angles = [-3, -1.5, 0, 1.5, 3]; return angles[seed % angles.length]; }
-
         // 一年的照片太多时，先精选一部分摆出来：视频/Live Photo 优先收录，然后是 AI 打过分的高分照片，
         // 剩下名额（包括还没被 AI 打分的）按时间均匀抽样，保证不是"挤在某一段"，而是有代表性的几个瞬间
-        const FEATURED_LIMIT = 10;
+        // 9 = 1 张 2×2 大图 + 8 张小图：桌面 4 列、手机 3 列都正好铺满整行，最后一行不会只剩一两张
+        const FEATURED_LIMIT = 9;
         function pickFeatured(photos, limit) {
           if (photos.length <= limit) return null; // null 表示不需要折叠，全部都是精选
           const featured = new Set();
@@ -2147,70 +2024,81 @@
           btn.textContent = expanded ? '收起' : '展开查看全部 ' + total + ' 张 ›';
         };
 
-        // 移动端用 CSS Grid repeat(2,1fr)：实际渲染宽 = (viewport - year-block水平padding - gap) / 2
-        // year-block padding 1rem*2≈32px，gap 14px，所以 1fr ≈ (innerWidth-46)/2
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
-        const isMobileLayout = window.innerWidth <= 640;
-        const mobileRenderSize = Math.round((window.innerWidth - 46) / 2);
+        // 格子都是正方形（CSS object-fit:cover 铺满），缩略图直接让服务端按正方形裁好（fit=cover）：
+        // 只按宽度缩放的话横图高度不够，铺满方格时要放大 1.5～2 倍，糊。
+        // 所有设备都只用两种固定尺寸——普通格 480²、大格 960²——这样同一张照片在手机、电脑上
+        // 请求的是同一个缩略图 key，生成一次全家共用（缩略图按尺寸存 R2，尺寸越多要生成的越多）。
+        // 480 = 桌面 4 列时一格约 220px × 2 倍屏
+        const TILE_PX = 480, HERO_PX = 960;
+        const thisYear = new Date().getFullYear();
+        const agoText = (year) => {
+          const n = thisYear - Number(year);
+          return n <= 0 ? '今年' : n === 1 ? '去年' : n + ' 年前';
+        };
+        // 每年挑一张当 2×2 大图：可见照片里 AI 分数最高的静态图，没打过分就用第一张。
+        // 只在 1 张或 ≥5 张时放：2～4 张的年份交给 .grid.n2/n3/n4 等分排版（见 app.css），
+        // 否则一张大图旁边只剩一两张小图，大图下方会空出一整块
+        function pickHero(photos, featured) {
+          const visible = photos.map((p, i) => i).filter((i) => !featured || featured.has(i));
+          if (visible.length >= 2 && visible.length <= 4) return -1;
+          let best = visible[0], bestScore = -Infinity;
+          for (const i of visible) {
+            const p = photos[i];
+            if (p.type === 'video') continue;
+            const sc = typeof p.score === 'number' ? p.score : -1;
+            if (sc > bestScore) { best = i; bestScore = sc; }
+          }
+          return best;
+        }
 
         // 照片不是一次性全部弹出来，按页面上的出场顺序错开一点时间依次淡入；
-        // 延迟封顶（0.9s），照片特别多的时候后面那些不用傻等，很快就一起跟上
+        // 延迟封顶（0.6s），照片特别多的时候后面那些不用傻等，很快就一起跟上
         let globalCellIndex = 0;
         const renderYearBlock = (y, idPrefix) => {
           const featured = pickFeatured(y.photos, FEATURED_LIMIT);
           const extraCount = featured ? y.photos.length - featured.size : 0;
+          const heroIdx = pickHero(y.photos, featured);
+          const visibleCount = featured ? featured.size : y.photos.length;
           const cells = y.photos.map((p, pi) => {
             // allPhotos 是按完全相同的 年->照片 嵌套顺序铺出来的，flatIndex 直接用这个递增计数器就是它在
-            // allPhotos 里的下标，不用每张照片都 findIndex 整个数组查一遍——照片一多，那是 O(n²) 的隐藏开销，
-            // 切日期时一大批照片同时算就是页面卡顿的一部分
+            // allPhotos 里的下标，不用每张照片都 findIndex 整个数组查一遍
             const flatIndex = globalCellIndex;
-            const size = pickSize(pi + y.year.charCodeAt(0));
-            const tilt = pickTilt(pi);
-            const swayDur = (4 + (pi % 4) * 0.7).toFixed(1);
-            const swayDelay = ((pi % 5) * 0.5).toFixed(1);
-            const enterDelay = Math.min(globalCellIndex * 0.05, 0.9).toFixed(2);
+            const enterDelay = Math.min(globalCellIndex * 0.03, 0.6).toFixed(2);
             globalCellIndex++;
-            // 不再固定 height——照片按原图比例显示，宽度定了，高度交给 frame-inner 的 aspect-ratio 撑出来
-            const style = `width:${size}px;--tilt-deg:${tilt};--sway-dur:${swayDur}s;--sway-delay:${swayDelay}s;--enter-delay:${enterDelay}s;`;
-            const extraClass = featured && !featured.has(pi) ? ' extra' : '';
-            // 墙上的缩略图按实际显示尺寸 * 设备像素比要图（普通屏 1x 就不用多要 2x 的流量/解码开销，
-            // 高分屏封顶在 2x，不然 3x 机型一次性吃满带宽）；转换失败（HEIC 等）就在 onerror 里走浏览器端解码兜底
-            const thumbW = Math.round((isMobileLayout ? mobileRenderSize : size) * dpr);
-            // 不再传 h= + fit=cover 强制裁成正方形——只限宽，fit=scale-down 按原图比例缩放，不裁内容
-            const t = thumbUrls(p.url, { w: thumbW, q: 75, fit: 'scale-down' });
-            // 后端量到过这张图的真实长宽比就直接用它撑占位框（--ar），图片加载完不会再有任何位移；
-            // 量不到（视频、或者缩略图还没生成过）就留空，退回原来的 1:1 占位 + 加载完切真实比例。
-            // 这两个值是直接落进 HTML 属性的、不走 escAttr，先强制转成正整数，
-            // 万一接口给了别的类型不至于把属性拼断
-            const arW = Math.round(Number(p.width)) || 0;
-            const arH = Math.round(Number(p.height)) || 0;
-            const hasRatio = arW > 0 && arH > 0;
-            const ratioCls = hasRatio ? ' ratio-known' : '';
-            const ratioStyle = hasRatio ? ` style="--ar:${arW}/${arH}"` : '';
-            // _roomReactions 的值是 {emoji: count} 对象，直接 > 0 比较恒为 false（之前初次渲染
-            // 计数永远空白，全靠 WS init 后 _syncAllCounts 补），要先用 _totalReactions 聚合成数字
+            const isHero = pi === heroIdx;
+            const cls = 'cell' + (isHero ? ' hero' : '') + (featured && !featured.has(pi) ? ' extra' : '');
+            const style = `--enter-delay:${enterDelay}s`;
+            const px = isHero ? HERO_PX : TILE_PX;
+            const t = thumbUrls(p.url, { w: px, h: px, q: 75, fit: 'cover' });
+            // _roomReactions 的值是 {emoji: count} 对象，要先用 _totalReactions 聚合成数字
             const reactCnt = _totalReactions(p.key);
-            const reactCntText = reactCnt > 0 ? reactCnt : '';
+            const reactBtn = `<button class="react-btn" data-key="${escAttr(p.key)}" onclick="event.stopPropagation();doReact(this)" aria-label="点赞">❤️<span class="react-cnt">${reactCnt > 0 ? reactCnt : ''}</span></button>`;
+            const open = `onclick="openLightbox(${flatIndex}, false)"`;
             if (p.type === 'video') {
-              return `<div class="cell${extraClass}" style="${style}" onclick="openLightbox(${flatIndex}, false)"><div class="frame-inner"><video data-src="${escAttr(p.url)}#t=0.5" muted loop playsinline preload="metadata" onloadeddata="this.classList.add('loaded')" onmouseenter="this.play().catch(()=>{})" onmouseleave="this.pause();this.currentTime=0.5"></video></div><span class="play-badge">▶ 视频</span><span class="frame-year">${y.year}</span><button class="react-btn" data-key="${escAttr(p.key)}" onclick="event.stopPropagation();doReact(this)">❤️<span class="react-cnt">${reactCntText}</span></button></div>`;
+              return `<div class="${cls}" style="${style}" ${open}><div class="frame-inner"><video data-src="${escAttr(p.url)}#t=0.5" muted loop playsinline preload="metadata" onloadeddata="this.classList.add('loaded')" onmouseenter="this.play().catch(()=>{})" onmouseleave="this.pause();this.currentTime=0.5"></video></div><span class="play-badge">▶ 视频</span>${reactBtn}</div>`;
             }
+            const img = `<img src="${escAttr(t.direct)}" data-thumb="${escAttr(t.fallback)}" data-src="${escAttr(p.url)}" alt="" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="onThumbError(this)" />`;
             if (p.type === 'live') {
-              // Live Photo 缩略图：默认显示静态图，悬浮（桌面）/长按（移动端）才播放配对的短视频
-              // 网格缩略图上不展示 Live Photo 图标——放大（点开灯箱）才提示，网格里看起来就是张普通照片，
-              // 悬浮照样会播放配对视频，算是个不张扬的小彩蛋
-              return `<div class="cell${extraClass}" style="${style}" onclick="openLightbox(${flatIndex}, false)"><div class="frame-inner live-photo-cell${ratioCls}"${ratioStyle} onmouseenter="this.classList.add('playing');const v=this.querySelector('video');v.loop=true;v.currentTime=0;v.play().catch(()=>{})" onmouseleave="this.classList.remove('playing');this.querySelector('video').pause()" ontouchstart="livePhotoTouchStart(this,event)" ontouchend="livePhotoTouchEnd(this,event)" ontouchcancel="livePhotoTouchEnd(this,event)"><img src="${escAttr(t.direct)}" data-thumb="${escAttr(t.fallback)}" data-src="${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="onThumbError(this)" /><video src="${p.videoUrl}" loop muted playsinline preload="none" class="cell-live-video"></video></div><span class="frame-year">${y.year}</span><button class="react-btn" data-key="${escAttr(p.key)}" onclick="event.stopPropagation();doReact(this)">❤️<span class="react-cnt">${reactCntText}</span></button></div>`;
+              // Live Photo：默认显示静态图，悬浮（桌面）/长按（移动端）才播放配对的短视频；
+              // 网格里不标"实况"，点开灯箱才提示，算是个不张扬的小彩蛋
+              return `<div class="${cls}" style="${style}" ${open}><div class="frame-inner live-photo-cell" onmouseenter="this.classList.add('playing');const v=this.querySelector('video');v.loop=true;v.currentTime=0;v.play().catch(()=>{})" onmouseleave="this.classList.remove('playing');this.querySelector('video').pause()" ontouchstart="livePhotoTouchStart(this,event)" ontouchend="livePhotoTouchEnd(this,event)" ontouchcancel="livePhotoTouchEnd(this,event)">${img}<video src="${p.videoUrl}" loop muted playsinline preload="none" class="cell-live-video"></video></div>${reactBtn}</div>`;
             }
-            return `<div class="cell${extraClass}" style="${style}" onclick="openLightbox(${flatIndex}, false)"><div class="frame-inner${ratioCls}"${ratioStyle}><img src="${escAttr(t.direct)}" data-thumb="${escAttr(t.fallback)}" data-src="${escAttr(p.url)}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="onThumbError(this)" /></div><span class="frame-year">${y.year}</span><button class="react-btn" data-key="${escAttr(p.key)}" onclick="event.stopPropagation();doReact(this)">❤️<span class="react-cnt">${reactCntText}</span></button></div>`;
+            return `<div class="${cls}" style="${style}" ${open}><div class="frame-inner">${img}</div>${reactBtn}</div>`;
           }).join('');
           const showMoreBtn = extraCount > 0
             ? `<button class="show-more-btn" data-total="${y.photos.length}" onclick="toggleShowMore(this)">展开查看全部 ${y.photos.length} 张 ›</button>`
             : '';
           return `
-      <div class="year-block${idPrefix === 'lunar-year-' ? ' lunar-year-block' : ''}" id="${idPrefix}${y.year}">
-        <div class="year-title">${y.year} 年 <span class="count">（${y.photos.length} 份）</span></div>
-        <div class="grid">${cells}</div>
-        ${showMoreBtn}
-      </div>
+      <section class="year-block${idPrefix === 'lunar-year-' ? ' lunar-year-block' : ''}" id="${idPrefix}${y.year}">
+        <div class="year-head">
+          <div class="year-num">${y.year}</div>
+          <div class="year-meta"><span class="ago">${agoText(y.year)}</span><span class="n">${y.photos.length} 张</span></div>
+        </div>
+        <div class="year-body">
+          <div class="grid${visibleCount <= 4 ? ' n' + visibleCount : ''}">${cells}</div>
+          ${showMoreBtn}
+        </div>
+      </section>
     `;
         };
         const yearPrefix = includeLunarForRequest ? 'lunar-year-' : 'year-';
@@ -2229,7 +2117,8 @@
         ).join('');
         window.jumpToYear = function (year) {
           const el = document.getElementById(yearPrefix + year);
-          if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 24, behavior: scrollBehavior() });
+          // 减掉固定顶栏的高度，不然年份标题正好被顶栏压住
+          if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 76, behavior: scrollBehavior() });
           yearMenu.classList.remove('open');
         };
 

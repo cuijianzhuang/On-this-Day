@@ -8,7 +8,21 @@
     src: url('/vendor/space-grotesk-latin.woff2') format('woff2');
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
   }
-  :root { color-scheme: dark; }
+  :root {
+    color-scheme: dark;
+    /* 暖调深色：纯黑配米白相纸那套换掉之后，底色带一点暖棕，照片本身才是画面里最亮的东西 */
+    --bg: #0e0d0b;
+    --surface: #1a1814;
+    --surface-2: #24211c;
+    --text: #f2ede4;
+    --text-2: #b3ab9d;
+    --muted: #7d766b;
+    --line: rgba(242,237,228,0.09);
+    --accent: #e3b56a;
+    --serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", serif;
+    --mono: 'Space Grotesk', "SF Pro Display", -apple-system, sans-serif;
+    --page-w: 1120px;
+  }
   * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
   /* 键盘可达性：:focus-visible 只在键盘导航（Tab）时出现，鼠标点击不会触发，
      所以补上它不会改变任何鼠标操作下的观感，但键盘用户终于能看见自己走到哪儿了 */
@@ -27,9 +41,12 @@
   body { overflow-x: hidden; touch-action: pan-y; }
   html::-webkit-scrollbar, body::-webkit-scrollbar { display: none; }
   body {
-    font-family: "SF Pro Display", -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
-    background: #000;
-    color: #f5f5f7;
+    font-family: "SF Pro Text", -apple-system, "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif;
+    background:
+      radial-gradient(ellipse 80% 420px at 50% -80px, rgba(227,181,106,0.10), transparent 70%),
+      var(--bg);
+    background-repeat: no-repeat;
+    color: var(--text);
     margin: 0;
     padding: 0 0 6rem;
     min-height: 100vh;
@@ -95,18 +112,28 @@
   header {
     position: relative;
     text-align: center;
-    padding: 5.5rem 1.5rem 3.5rem;
+    padding: 7rem 1.5rem 3.2rem;
   }
+  /* 顶栏底：往下滚之后才出现的一条毛玻璃，让固定在右上角的按钮压在照片上也看得清（app.js 切 .scrolled） */
+  .topbar-bg {
+    position: fixed; top: 0; left: 0; right: 0; height: 58px; z-index: 19;
+    background: rgba(14,13,11,0.72); backdrop-filter: blur(18px) saturate(1.2);
+    -webkit-backdrop-filter: blur(18px) saturate(1.2);
+    border-bottom: 1px solid var(--line);
+    opacity: 0; transition: opacity 0.25s ease; pointer-events: none;
+  }
+  body.scrolled .topbar-bg { opacity: 1; }
+  body.sun-on .topbar-bg { background: rgba(255,250,240,0.55); border-bottom-color: rgba(0,0,0,0.08); }
   /* 唤醒林间后背景变浅，文字、按钮自动换成深色，并加一点投影撑出对比度，免得糊在背景里看不清 */
   body.sun-on { color: #1c1c1e; }
   body.sun-on .eyebrow,
   body.sun-on .subtitle,
   body.sun-on h1,
   body.sun-on h1 .date,
-  body.sun-on .year-title,
-  body.sun-on .year-title .count,
+  body.sun-on h1 .h1-sub,
+  body.sun-on .year-num,
+  body.sun-on .year-meta,
   body.sun-on .sunlight-switch,
-  body.sun-on .cell .frame-year,
   body.sun-on .empty,
   body.sun-on .daily-poem,
   body.sun-on .lightbox-caption { color: #1c1c1e; text-shadow: 0 1px 8px rgba(255,255,255,0.5); }
@@ -117,17 +144,18 @@
   body.sun-on .date-toggle:hover { background: rgba(255,255,255,0.85); }
   body.sun-on .switch .track { background: rgba(0,0,0,0.22); box-shadow: 0 1px 4px rgba(0,0,0,0.15); }
   body.sun-on .switch .track::before { background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+  /* 右上角这排按钮固定在视口上，滚到哪都能切日期/搜索——以前跟着标题一起滚走，看到一半想换天得先滚回顶部 */
   .header-controls {
-    position: absolute; top: 1.3rem; right: 1.4rem;
-    display: flex; align-items: center; gap: 0.85rem;
+    position: fixed; top: 13px; right: max(1.2rem, env(safe-area-inset-right));
+    display: flex; align-items: center; gap: 0.5rem;
   }
   .date-toggle {
     width: 32px; height: 32px; border-radius: 50%; border: none;
-    background: rgba(255,255,255,0.08); backdrop-filter: blur(10px);
-    color: #98989d; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,0.07); backdrop-filter: blur(10px);
+    color: var(--text-2); cursor: pointer; display: flex; align-items: center; justify-content: center;
     transition: background 0.15s ease, color 0.15s ease; flex-shrink: 0;
   }
-  .date-toggle:hover { background: rgba(255,255,255,0.16); color: #f5f5f7; }
+  .date-toggle:hover { background: rgba(255,255,255,0.14); color: var(--text); }
   .date-toggle:disabled { opacity: 0.35; cursor: default; }
   .date-toggle:disabled:hover { background: rgba(255,255,255,0.08); }
   .date-toggle svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -174,7 +202,7 @@
   body.sun-on .calendar-mode-toggle.active .solar { color: rgba(255,255,255,0.85); }
   body.sun-on .calendar-mode-toggle.active .lunar { color: #4a3808; }
   .date-picker {
-    position: absolute; top: 3.9rem; right: 1.4rem; width: 268px;
+    position: fixed; top: 56px; right: max(1.2rem, env(safe-area-inset-right)); width: 268px;
     display: flex; flex-direction: column; gap: 0.7rem;
     background: rgba(24,24,26,0.98);
     padding: 1rem 1.1rem 1.1rem; border-radius: 16px;
@@ -195,7 +223,7 @@
     visibility: visible; pointer-events: auto;
   }
   .year-menu {
-    position: absolute; top: 3.9rem; right: 1.4rem; min-width: 180px;
+    position: fixed; top: 56px; right: max(1.2rem, env(safe-area-inset-right)); min-width: 180px;
     background: rgba(24,24,26,0.98); border-radius: 16px; padding: 0.4rem;
     box-shadow: 0 16px 36px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06);
     z-index: 10; isolation: isolate; transform-origin: top right;
@@ -222,7 +250,7 @@
   /* "更多功能"下拉：年度回忆/全家最爱/足迹地图/数据总览/运维控制台入口，跟 .year-menu 同一套弹出风格，
      行元素换成 <a> 因为这些是真实跳转链接（保留右键"新标签页打开"这类原生行为） */
   .nav-menu {
-    position: absolute; top: 3.9rem; right: 1.4rem; min-width: 172px;
+    position: fixed; top: 56px; right: max(1.2rem, env(safe-area-inset-right)); min-width: 172px;
     background: rgba(24,24,26,0.98); border-radius: 16px; padding: 0.4rem;
     box-shadow: 0 16px 36px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06);
     z-index: 10; isolation: isolate; transform-origin: top right;
@@ -244,7 +272,7 @@
 
   /* 照片搜索面板：跟 .date-picker 同一套弹出风格 */
   .search-panel {
-    position: absolute; top: 3.9rem; right: 1.4rem; width: 320px;
+    position: fixed; top: 56px; right: max(1.2rem, env(safe-area-inset-right)); width: 320px;
     display: flex; flex-direction: column; gap: 0.6rem;
     background: rgba(24,24,26,0.98);
     padding: 0.9rem; border-radius: 16px;
@@ -287,7 +315,7 @@
   }
   .sr-meta { color: #8a8a8f; font-size: 0.68rem; font-family: 'Space Grotesk', sans-serif; }
   @media (max-width: 640px) {
-    .search-panel { top: 3.4rem; right: 0.8rem; left: 0.8rem; width: auto; }
+    .search-panel { top: 56px; right: 0.75rem; left: 0.75rem; width: auto; }
   }
 
   .cal-header { display: flex; align-items: center; justify-content: space-between; }
@@ -344,28 +372,35 @@
   .date-picker #datePickerToday { width: 100%; background: rgba(255,255,255,0.08); color: #c7c7cc; }
   .date-picker #datePickerToday:hover { background: rgba(255,255,255,0.16); }
   .eyebrow {
-    font-family: 'Space Grotesk', sans-serif; font-size: 0.75rem; letter-spacing: 0.34em;
-    text-transform: uppercase; color: #86868b; margin-bottom: 0.6rem; font-weight: 500;
+    font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.32em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 1.1rem; font-weight: 500;
+    opacity: 0.85;
   }
+  /* 标题两层：日期用衬线大字当主角，"那些年的此刻"退成一行小字副标——
+     原来两段挤在同一行同一字号，逗号前后分量一样，读不出重点 */
   h1 {
-    font-size: clamp(2.2rem, 5vw, 3.4rem); font-weight: 700; margin: 0;
-    letter-spacing: -0.015em; line-height: 1.1;
-    /* 窄屏折行时两行尽量等长，不会把最后一个字单独甩到第二行（"那些年的此 / 刻"） */
-    text-wrap: balance;
+    font-family: var(--serif); font-weight: 600; margin: 0;
+    letter-spacing: 0.01em; line-height: 1.05;
+  }
+  h1 .date { display: block; font-size: clamp(2.8rem, 8vw, 4.8rem); }
+  h1 .h1-sub {
+    display: block; margin-top: 0.7rem;
+    font-size: clamp(1rem, 2.4vw, 1.25rem); font-weight: 500; letter-spacing: 0.3em;
+    color: var(--text-2);
   }
   /* 阳光模式要等叶影视频第一帧出来才切成深色字（见 app.js syncSunMode），切换时渐变过去 */
-  h1, h1 .date, .eyebrow, .subtitle, .daily-poem, .year-title, .year-title .count,
-  .sunlight-switch, .empty, .cell .frame-year {
+  h1, h1 .date, h1 .h1-sub, .eyebrow, .subtitle, .daily-poem, .year-num, .year-meta,
+  .sunlight-switch, .empty {
     transition: color 0.8s ease, text-shadow 0.8s ease;
   }
-  h1 .date { color: #f5f5f7; font-weight: 700; }
-  h1 .h1-seg { display: inline-block; }
+  h1 .date { color: var(--text); }
   .subtitle {
-    color: #98989d; font-size: 1.05rem; margin-top: 0.9rem; font-weight: 400;
-    letter-spacing: -0.005em;
+    color: var(--muted); font-size: 0.9rem; margin-top: 1.3rem; font-weight: 400;
+    letter-spacing: 0.04em;
   }
   .daily-poem {
-    color: #7d7d82; font-size: 0.85rem; margin-top: 0.6rem; font-style: italic;
+    color: var(--text-2); font-family: var(--serif); font-size: 0.92rem; margin-top: 1rem;
+    letter-spacing: 0.06em;
     letter-spacing: 0.01em; opacity: 0; transition: opacity 0.4s ease;
   }
   .daily-poem.show { opacity: 1; }
@@ -427,131 +462,108 @@
   body.sun-on .otd-list { background: rgba(255,255,255,0.45); }
   body.sun-on .otd-item { color: #3a3a3c; }
   body.sun-on .otd-year { color: #8a6a1f; }
-  .year-block { max-width: 1100px; margin: 0 auto 3.4rem; padding: 0 1.6rem; }
-  .year-title {
-    font-size: 1.3rem; font-weight: 600; color: #f5f5f7; margin-bottom: 1.1rem;
-    display: flex; align-items: baseline; gap: 0.55rem; letter-spacing: -0.01em;
+  /* ── 年份区块：左边一列年份当时间轴，右边是照片网格 ─────────────────────────
+     原来是米白拍立得 + 红图钉 + 每张各自摇摆、宽度随机的"照片墙"：宽度参差导致每行右边
+     留一大块黑，整页偏左；每张相纸底部还重复印一遍年份。现在改成等宽方格网格，照片本身当主角 */
+  .year-block {
+    max-width: var(--page-w); margin: 0 auto 4.2rem; padding: 0 1.6rem;
+    display: grid; grid-template-columns: 148px minmax(0, 1fr); column-gap: 2rem;
   }
-  .year-title .count { color: #6e6e73; font-size: 0.78rem; font-weight: 400; font-family: 'Space Grotesk', sans-serif; }
-  /* 首次加载/缓存没命中时 /api/memories 可能要等几秒（库跨年头多，R2 扫描+读 EXIF 需要时间），
-     这段时间页面之前是纯空白，看起来像卡死了——之前摆的是跟正文毫不相干的灰色骨架块，
-     现在直接复用 .cell/.frame-inner 这套"墙上挂照片"的视觉语言（图钉+米白卡纸+悬挂摇摆+
-     未加载时的暖色转圈），骨架屏就是一排还没冲洗出来的照片，跟正文是同一套语言，不再是临时拼凑的占位符 */
-  .skeleton-grid { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 22px 18px; padding: 1.5rem 1.6rem; max-width: 1100px; margin: 0 auto; }
-  .skeleton-grid .cell { cursor: default; }
-  @media (max-width: 640px) {
-    .skeleton-grid { gap: 14px 10px; padding: 0.5rem 0.5rem 1.5rem; }
+  .year-head {
+    position: sticky; top: 76px; align-self: start;
+    display: flex; flex-direction: column; gap: 0.45rem; padding-top: 0.2rem;
   }
+  .year-num {
+    font-family: var(--serif); font-size: 2.6rem; font-weight: 600; line-height: 1;
+    color: var(--text); letter-spacing: 0.02em; font-variant-numeric: lining-nums;
+  }
+  .year-meta {
+    display: flex; flex-direction: column; gap: 0.2rem;
+    font-size: 0.8rem; color: var(--muted); letter-spacing: 0.04em;
+  }
+  .year-meta .ago { color: var(--accent); }
+  body.sun-on .year-meta .ago { color: #7a4f0a; }
+  .year-meta .n { font-family: var(--mono); }
+  .year-body { min-width: 0; }
+
   #content { transition: opacity 0.22s ease; }
-  .grid {
-    display: flex; flex-wrap: wrap; align-items: flex-start;
-    gap: 22px 18px; padding: 0.5rem 0.5rem 1.5rem;
-    perspective: 900px;
+  .grid, .skeleton-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    grid-auto-flow: dense; gap: 6px;
   }
+  /* 照片少的年份按张数等分，不留空洞：2 张各占一半、3 张三等分、4 张一行四张（手机上 2×2） */
+  .grid.n2 { grid-template-columns: repeat(2, 1fr); }
+  .grid.n3 { grid-template-columns: repeat(3, 1fr); }
+  /* 首张（当年分数最高的那张）占 2×2，给每一年一个视觉重心，不至于一片均匀的小方块 */
+  .cell.hero { grid-column: span 2; grid-row: span 2; }
   .cell {
-    --tilt-deg: 0;
-    position: relative; display: block; opacity: 0;
-    cursor: pointer; background: #f5f5f0; border-radius: 3px;
-    padding: 16px 10px 26px; box-shadow: 0 8px 20px rgba(0,0,0,0.5);
-    transform-origin: top center;
-    /* 挂角用独立变换属性 rotate 写，不占用 transform——transform 要留给 JS 的指尖 3D 倾斜。
-       独立属性的合成顺序固定是 translate → rotate → scale → transform，两边互不覆盖 */
-    rotate: calc(var(--tilt-deg) * 1deg);
-    /* 两个动画分别管不同属性：cellFadeIn 只管淡入（带各自的入场延迟），hangSway 管晃动，互不打架 */
-    animation: cellFadeIn 0.55s ease var(--enter-delay, 0s) forwards,
-               hangSway var(--sway-dur, 5s) ease-in-out var(--sway-delay, 0s) infinite;
-    transition: box-shadow 0.22s ease, z-index 0s;
+    position: relative; display: block; opacity: 0; cursor: pointer;
+    border-radius: 8px; overflow: hidden; background: var(--surface);
+    animation: cellFadeIn 0.5s ease var(--enter-delay, 0s) forwards;
+    -webkit-tap-highlight-color: transparent;
   }
   @keyframes cellFadeIn { to { opacity: 1; } }
-  /* will-change/preserve-3d 只在指尖联动 3D 倾斜真的在跑的时候才加（.touching 这个状态）——
-     之前是每张照片永久挂着这两个属性，等于给每个格子都开一个独立 GPU 合成层常驻不撒手，
-     一页几十到上百张照片，层一多整页滚动/交互都会变卡，这才是"都卡"的真正原因 */
-  .cell.touching { transform-style: preserve-3d; will-change: transform; }
-  /* 图钉：用渐变 + 高光 + 投影模拟一颗小圆钉，把照片"钉"在墙上的感觉 */
-  .cell::before {
-    content: ''; position: absolute; top: 1px; left: 50%; z-index: 2;
-    width: 12px; height: 12px; margin-left: -6px; border-radius: 50%;
-    background: radial-gradient(circle at 35% 30%, #ff8f7e 0%, #e84a3a 50%, #a8281c 100%);
-    box-shadow: 0 2px 3px rgba(0,0,0,0.5), inset 0 1px 1px rgba(255,255,255,0.45);
-  }
-  .cell:hover { box-shadow: 0 16px 30px rgba(0,0,0,0.65); z-index: 5; }
-  .cell.touching { animation-play-state: paused; transition: transform 0.08s linear, box-shadow 0.22s ease; }
-  .cell:not(.touching) { transition: transform 0.5s ease, box-shadow 0.22s ease; }
-  /* 滚出视野的照片把晃动 + 加载圈动画都暂停掉，照片一多，几十个元素同时跑动画会让整页变卡 */
-  .cell.offscreen { animation-play-state: paused; }
-  .cell.offscreen .frame-inner::after { animation-play-state: paused; }
-  /* 摇摆只动 rotate/translate 这两个独立变换属性，绝对不要写回 transform——
-     动画声明在层叠里压过行内 style，一旦 hangSway 动了 transform，
-     wallTick 写进 cell.style.transform 的指尖 3D 倾斜就永远显示不出来（曾经的真实 bug） */
-  @keyframes hangSway {
-    0%   { rotate: calc(var(--tilt-deg) * 1deg - 4deg); translate: -3px 0; }
-    50%  { rotate: calc(var(--tilt-deg) * 1deg + 4deg); translate: 3px 0; }
-    100% { rotate: calc(var(--tilt-deg) * 1deg - 4deg); translate: -3px 0; }
-  }
-  /* 占位比例。不裁成正方形，横图就该宽矮、竖图就该高窄，分两种情况：
-     一、后端量到过真实长宽比（.ratio-known + 行内 --ar）：占位框从第一帧起就是正确比例，
-         图片加载完什么都不用变——这是消掉"每张图加载完跳一下"那次布局位移的关键。
-     二、量不到（视频、或缩略图还没生成过）：保持老行为，先 1:1 占位（跟加载圈对齐），
-         加载完切 aspect-ratio:auto，交给 img/video 的 height:auto 撑出真实比例 */
-  .cell .frame-inner { position: relative; width: 100%; aspect-ratio: var(--ar, 1); overflow: hidden; border-radius: 1px; background: #1c1c1e; }
-  .cell .frame-inner:not(.ratio-known):has(.loaded) { aspect-ratio: auto; }
-  /* 彻底解不出来、放弃兜底的（give-up，见 heicFallback）没有真图片可以撑比例——
-     退回占位比例（量到过就用真实比例，没量到就 1:1），不然一张没有任何尺寸的裂图
-     会让整个格子塌成一条薄片。
-     选择器必须写满 :not(.ratio-known) 这一段把特指度顶到跟上面那条 auto 规则同级（0,3,0）：
-     give-up 的元素同时也带着 .loaded（见 heicFallback 最后那行），少写一段就会被 auto 那条压过去 */
-  .cell .frame-inner:not(.ratio-known):has(.give-up) { aspect-ratio: var(--ar, 1); }
+  .cell .frame-inner { position: relative; width: 100%; aspect-ratio: 1; overflow: hidden; background: var(--surface); }
   .cell img, .cell video {
-    display: block; width: 100%; height: auto;
-    opacity: 0; transition: opacity 0.4s ease;
+    position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: cover;
+    opacity: 0; transition: opacity 0.45s ease, transform 0.6s cubic-bezier(0.2, 0.7, 0.2, 1);
   }
   .cell img.loaded, .cell video.loaded { opacity: 1; }
-  /* 图片还没加载出来时转一个小圈，加载完（img/video 拿到 loaded class）就淡出消失；
-     用跟图钉同色的暖色，在深色背景下才看得清楚 */
-  .cell .frame-inner::after {
-    content: ''; position: absolute; top: 50%; left: 50%; width: 26px; height: 26px;
-    margin: -13px 0 0 -13px; border-radius: 50%;
-    border: 3px solid rgba(255,143,126,0.25); border-top-color: #ff8f7e;
-    animation: spin 0.8s linear infinite;
-    opacity: 1; transition: opacity 0.25s ease;
+  @media (hover: hover) {
+    .cell:hover img.loaded, .cell:hover video.loaded { transform: scale(1.04); }
   }
-  .cell .frame-inner:has(.loaded)::after { opacity: 0; }
+  /* 底部一层渐变，给右下角的点赞数垫一点对比度；只在悬停/有赞时出现 */
+  .cell::after {
+    content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 40%;
+    background: linear-gradient(to top, rgba(0,0,0,0.45), transparent);
+    opacity: 0; transition: opacity 0.2s ease; pointer-events: none;
+  }
+  .cell:hover::after, .cell:has(.react-cnt:not(:empty))::after { opacity: 1; }
+  /* 未加载时的占位：一道缓慢扫过的微光，比转圈安静得多 */
+  .cell .frame-inner::before {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(100deg, transparent 30%, rgba(255,255,255,0.05) 50%, transparent 70%);
+    background-size: 200% 100%; animation: shimmer 1.6s linear infinite;
+    transition: opacity 0.3s ease;
+  }
+  .cell .frame-inner:has(.loaded)::before { opacity: 0; animation: none; }
+  .cell.offscreen .frame-inner::before { animation-play-state: paused; }
+  @keyframes shimmer { from { background-position: 150% 0; } to { background-position: -50% 0; } }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .cell .frame-year {
-    position: absolute; left: 0; right: 0; bottom: 6px; text-align: center;
-    /* 相纸永远是白的，年份字跟明暗模式无关——用深一点的灰，保证在米白相纸上看得清 */
-    color: #66665f; font-size: 0.62rem; letter-spacing: 0.12em; font-family: 'Space Grotesk', sans-serif;
-  }
   .play-badge {
-    position: absolute; right: 16px; bottom: 28px; color: #fff;
-    font-size: 0.78rem; text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+    position: absolute; left: 8px; top: 8px; z-index: 2;
+    display: flex; align-items: center; gap: 0.3rem;
+    padding: 0.18rem 0.5rem; border-radius: 999px;
+    background: rgba(0,0,0,0.45); backdrop-filter: blur(6px);
+    color: #fff; font-size: 0.66rem; letter-spacing: 0.04em;
     transition: opacity 0.2s ease; pointer-events: none;
   }
-  /* 鼠标移上去自动播放预览时，"▶ 视频"提示先淡出，别挡着画面 */
   .cell:hover .play-badge { opacity: 0; }
   .live-photo-cell { position: relative; }
-  .cell-live-video {
-    position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
-    opacity: 0; transition: opacity 0.2s ease;
-  }
-  .live-photo-cell.playing .cell-live-video { opacity: 1; }
+  .cell-live-video { opacity: 0 !important; transition: opacity 0.2s ease; }
+  .live-photo-cell.playing .cell-live-video { opacity: 1 !important; }
   .live-photo-cell.playing img { opacity: 0; }
   /* 某年照片太多时，先只摆出精选的几张，剩下的折进"展开"按钮 */
   .cell.extra { display: none; }
+  .grid.expanded .cell.extra { display: block; }
+
+  /* ── 骨架屏：跟正文同一套方格，只是还没有照片 ── */
+  .skeleton-grid { max-width: var(--page-w); margin: 0 auto; padding: 0 1.6rem 0 calc(1.6rem + 148px + 2rem); }
+  .skeleton-grid .cell { cursor: default; }
 
   /* ── 实时房间：点赞按钮 + 在线人数徽章 ── */
   .react-btn {
-    position: absolute; right: 8px; bottom: 26px;
-    background: none; border: none; cursor: pointer; padding: 3px 5px;
-    font-size: 1rem; line-height: 1; display: flex; align-items: center; gap: 3px;
-    opacity: 0; transition: opacity 0.18s ease; z-index: 3;
-    color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+    position: absolute; right: 6px; bottom: 6px; z-index: 3;
+    background: none; border: none; cursor: pointer; padding: 4px 6px;
+    font-size: 0.9rem; line-height: 1; display: flex; align-items: center; gap: 3px;
+    opacity: 0; transition: opacity 0.18s ease, transform 0.15s ease;
+    color: #fff;
   }
-  .cell:hover .react-btn { opacity: 1; }
-  @media (max-width: 640px) { .react-btn { opacity: 0.75; font-size: 0.9rem; } }
+  .react-btn:active { transform: scale(0.88); }
+  .cell:hover .react-btn, .react-btn:has(.react-cnt:not(:empty)) { opacity: 1; }
   .react-cnt {
-    font-size: 0.65rem; font-family: 'Space Grotesk', sans-serif;
-    color: rgba(255,255,255,0.9); min-width: 10px;
+    font-size: 0.68rem; font-family: var(--mono);
+    color: rgba(255,255,255,0.92); min-width: 8px;
   }
   /* 浮起来的心形动画 */
   @keyframes floatUp {
@@ -563,10 +575,10 @@
     font-size: 1.1rem; pointer-events: none;
     animation: floatUp 0.75s ease-out forwards;
   }
-  /* ── 在线头像（固定在左上角） ──────────────────────────────── */
+  /* ── 在线头像（固定在左上角，跟右上角按钮同一条水平线） ── */
   .online-badge {
     position: fixed; z-index: 100;
-    top: 1.3rem; left: 1.4rem;
+    top: 13px; left: max(1.2rem, env(safe-area-inset-left));
     display: flex; align-items: center;
     animation: badgeFadeIn 0.4s ease;
   }
@@ -575,21 +587,20 @@
   .online-avatars { display: flex; align-items: center; }
   .online-avatar {
     width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0; overflow: hidden;
-    border: 2px solid rgba(255,255,255,0.18);
+    border: 2px solid var(--bg);
     margin-left: -8px; cursor: default; user-select: none;
-    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+    transition: transform 0.2s ease;
     position: relative;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.45);
   }
   .online-avatars .online-avatar:first-child { margin-left: 0; }
-  .online-avatar:hover { transform: scale(1.15) translateY(-2px); z-index: 2; box-shadow: 0 4px 14px rgba(0,0,0,0.6); }
-  .online-avatar.me { border-color: rgba(255,255,255,0.7); }
+  .online-avatar:hover { transform: translateY(-2px); z-index: 2; }
+  .online-avatar.me { border-color: rgba(227,181,106,0.8); }
   /* 字母圆圈兜底 */
   .av-letter {
     position: absolute; inset: 0; border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
     font-size: 0.65rem; font-weight: 700; color: #fff;
-    font-family: 'Space Grotesk', sans-serif; letter-spacing: 0;
+    font-family: var(--mono); letter-spacing: 0;
   }
   /* Gravatar 图片叠在字母圈上 */
   .online-avatar img {
@@ -598,23 +609,25 @@
     opacity: 0; transition: opacity 0.3s ease;
   }
   .online-avatar img.loaded { opacity: 1; }
-  .grid.expanded .cell.extra { display: block; }
   .show-more-btn {
-    display: block; margin: -0.6rem auto 0; background: rgba(255,255,255,0.07);
-    border: none; color: #9a9a9e; padding: 0.5rem 1.1rem; border-radius: 980px;
-    font-size: 0.8rem; cursor: pointer; transition: background 0.15s ease, color 0.15s ease;
+    display: flex; align-items: center; gap: 0.35rem; margin: 1rem 0 0;
+    background: transparent; border: 1px solid var(--line);
+    color: var(--text-2); padding: 0.5rem 1.1rem; border-radius: 999px;
+    font-size: 0.8rem; font-family: inherit; cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
   }
-  .show-more-btn:hover { background: rgba(255,255,255,0.14); color: #f5f5f7; }
-  body.sun-on .show-more-btn { color: #5a5a5e; background: rgba(0,0,0,0.06); }
-  body.sun-on .show-more-btn:hover { background: rgba(0,0,0,0.12); color: #1c1c1e; }
+  .show-more-btn:hover { background: rgba(255,255,255,0.05); color: var(--text); border-color: rgba(242,237,228,0.2); }
+  body.sun-on .show-more-btn { color: #3a3a3c; border-color: rgba(0,0,0,0.15); background: rgba(255,255,255,0.35); }
+  body.sun-on .show-more-btn:hover { background: rgba(255,255,255,0.6); color: #1c1c1e; }
   .empty {
-    color: #6e6e73; padding: 5rem 0; text-align: center; font-size: 1rem;
-    max-width: 1100px; margin: 0 auto;
+    color: var(--muted); padding: 5rem 1.5rem; text-align: center; font-size: 0.95rem;
+    font-family: var(--serif); letter-spacing: 0.06em;
+    max-width: var(--page-w); margin: 0 auto;
   }
 
   /* 农历同日分隔标题：两侧渐隐横线 + 月亮，暖月色跟整体深色调协调 */
   .lunar-divider {
-    max-width: 1100px; margin: 3.6rem auto 1.8rem; padding: 0 1.6rem;
+    max-width: var(--page-w); margin: 3.6rem auto 2.2rem; padding: 0 1.6rem;
     display: flex; align-items: center; gap: 0.85rem;
     font-size: 1.02rem; font-weight: 600; color: #c9b98a;
     letter-spacing: 0.02em;
@@ -830,7 +843,6 @@
 
   /* 灯箱开启时：隐藏自定义光标环，恢复系统指针（保留放大抓手状态） */
   @media (pointer: fine) {
-    body.lb-open #cursorDot { opacity: 0 !important; pointer-events: none; }
     body.lb-open.custom-cursor-active .lightbox,
     body.lb-open.custom-cursor-active .lightbox * { cursor: default !important; }
     body.lb-open.custom-cursor-active #lightboxBody.zoomed,
@@ -1058,79 +1070,25 @@
   }
   .lightbox-btn.active { color: #fff; background: rgba(255,255,255,0.24); }
 
-  #fingertip {
-    position: fixed; top: 0; left: 0; width: 70px; height: 70px;
-    border-radius: 50%; pointer-events: none; z-index: 3;
-    background: radial-gradient(circle, rgba(255,255,255,0.35) 0%, rgba(255,221,150,0.15) 45%, transparent 75%);
-    filter: blur(2px); opacity: 0; transition: opacity 0.3s ease;
-  }
-  /* 自定义鼠标指针：一个相机对焦取景框的样子，呼应"照片回忆"的主题——
-     四个角括号 + 中心一个暖色光点，悬停在可点击元素上时角括号收紧、中心点变亮，
-     像相机锁定焦点的反馈，比普通箭头更有意思 */
-  #cursorDot, #cursorDot * {
-    pointer-events: none !important;
-  }
-  #cursorDot {
-    position: fixed; top: 0; left: 0; width: 30px; height: 30px; margin: -15px 0 0 -15px;
-    z-index: 70; opacity: 0;
-    transition: opacity 0.25s ease, transform 0.2s cubic-bezier(0.2, 0.8, 0.3, 1.3);
-  }
-  #cursorDot .br {
-    position: absolute; width: 9px; height: 9px;
-    border: 1.5px solid rgba(255, 200, 140, 0.85);
-    filter: drop-shadow(0 0 3px rgba(255, 180, 90, 0.5));
-    transition: width 0.2s ease, height 0.2s ease, border-color 0.2s ease;
-  }
-  #cursorDot .br.tl { top: 0; left: 0; border-right: none; border-bottom: none; }
-  #cursorDot .br.tr { top: 0; right: 0; border-left: none; border-bottom: none; }
-  #cursorDot .br.bl { bottom: 0; left: 0; border-right: none; border-top: none; }
-  #cursorDot .br.brc { bottom: 0; right: 0; border-left: none; border-top: none; }
-  #cursorDot .center-dot {
-    position: absolute; top: 50%; left: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px;
-    border-radius: 50%; background: #ffd9a0; box-shadow: 0 0 6px rgba(255, 200, 120, 0.85);
-    transition: width 0.2s ease, height 0.2s ease, margin 0.2s ease;
-  }
-  #cursorDot.hover { transform: scale(0.72); }
-  #cursorDot.hover .br { border-color: #ffd9a0; filter: drop-shadow(0 0 5px rgba(255, 200, 120, 0.8)); }
-  #cursorDot.hover .center-dot { width: 6px; height: 6px; margin: -3px 0 0 -3px; }
-  @media (pointer: fine) {
-    body.custom-cursor-active, body.custom-cursor-active * { cursor: none !important; }
-  }
-
-  @media (pointer: coarse) {
-    /* 触屏设备禁用摇摆动画，只保留淡入；用户滚动时卡片不乱晃 */
-    .cell { animation: cellFadeIn 0.55s ease var(--enter-delay, 0s) forwards !important; }
-  }
   @media (max-width: 640px) {
-    #fingertip, #cursorDot { display: none !important; }
     body { padding: 0 0 3rem; }
-    header { padding: 3.2rem 1rem 2.2rem; }
-    .subtitle { font-size: 0.85rem; }
-    .year-block { padding: 0 1rem; }
-    /* 移动端完全交给 CSS Grid 算列宽：repeat(2,1fr) 不依赖任何 vw/calc/padding 计算，
-       浏览器自动等分，任何屏宽都正确；.grid padding 清零，由父元素 .year-block 统一留白 */
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 14px;
-      padding: 0;
-      perspective: none;
-      align-items: start;
-      justify-content: unset;
+    header { padding: 5.2rem 1rem 2.4rem; }
+    .subtitle { font-size: 0.82rem; }
+    /* 窄屏：年份放到网格上方，一行排开（大号年份 + 右侧"几年前 · 几张"） */
+    .year-block { display: block; padding: 0 0.75rem; margin-bottom: 2.8rem; }
+    .year-head {
+      position: static; flex-direction: row; align-items: baseline; justify-content: space-between;
+      padding: 0 0.25rem; margin-bottom: 0.8rem;
     }
-    /* 骨架屏容器同理，它不在 .year-block 里，自己保留水平 padding */
-    .skeleton-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 14px;
-      padding: 1rem 1rem 1.5rem;
-    }
-    /* 卡片宽度交给 grid track，去掉行内 width；倾斜在窄屏会让视觉宽度失衡，一并去掉 */
-    .cell {
-      width: 100% !important; height: auto !important;
-      /* 挂角/摇摆现在走独立变换属性，transform:none 已经盖不住它们，要分别清零 */
-      transform: none !important; rotate: 0deg !important; translate: none !important;
-    }
+    .year-num { font-size: 1.9rem; }
+    .year-meta { flex-direction: row; gap: 0.6rem; font-size: 0.76rem; }
+    /* 手机上三列小方格（跟系统相册一样的密度），缝隙收窄 */
+    .grid, .skeleton-grid { grid-template-columns: repeat(3, 1fr); gap: 3px; }
+    .grid.n2, .grid.n4 { grid-template-columns: repeat(2, 1fr); }
+    .skeleton-grid { padding: 0 0.75rem; }
+    .cell { border-radius: 4px; }
+    .react-btn { opacity: 1; }
+    .react-btn:not(:has(.react-cnt:not(:empty))) { opacity: 0; pointer-events: none; }
     /* ── 移动端灯箱：全屏图片 + 顶部导航栏 + 底部毛玻璃条 ── */
     /* 详细信息默认不占布局；点顶栏 ⓘ 时变成顶栏之下的全屏浮层 */
     .lightbox-panel { display: none; }
@@ -1206,46 +1164,40 @@
     /* 胶片卷 */
     .lightbox-filmstrip { height: 64px; }
     .lfs-item { height: 46px; width: 46px; }
-    .header-controls { top: max(0.9rem, env(safe-area-inset-top)); right: max(0.8rem, env(safe-area-inset-right)); gap: 0.6rem; }
+    .header-controls { top: max(12px, env(safe-area-inset-top)); right: max(0.75rem, env(safe-area-inset-right)); gap: 0.4rem; }
     .date-toggle, .sunlight-switch .switch { transform: scale(1.05); }
     .sunlight-switch span { display: none; }
-    .date-picker { top: 3.4rem; right: 0.8rem; left: 0.8rem; width: auto; }
+    .date-picker { top: 56px; right: 0.75rem; left: 0.75rem; width: auto; }
     .back-to-top { bottom: max(1.2rem, env(safe-area-inset-bottom)); right: max(1rem, env(safe-area-inset-right)); }
-    .online-badge { top: max(0.9rem, env(safe-area-inset-top)); left: max(0.8rem, env(safe-area-inset-left)); }
+    .online-badge { top: max(12px, env(safe-area-inset-top)); left: max(0.75rem, env(safe-area-inset-left)); }
     .cell, .date-toggle, .lightbox-btn, .lightbox-nav, .sunlight-switch .track {
       -webkit-tap-highlight-color: transparent;
     }
     /* 移动端没有 hover，「▶ 视频」角标和 ❤️ 表态按钮不会像桌面那样一进一出错开，
        两个都常驻右下角就直接叠成一团——把角标挪到左下角，各占一边 */
-    .play-badge { right: auto; left: 14px; }
     /* 顶部这几个下拉原来只给 .date-picker/.search-panel 调过位置，
        .year-menu/.nav-menu 还停在桌面的 right:1.4rem，而触发它们的按钮已经跟着
        .header-controls 移到了 right:0.8rem——弹出来跟按钮差着大半厘米，对不齐 */
     .year-menu, .nav-menu {
-      top: 3.4rem;
-      right: max(0.8rem, env(safe-area-inset-right));
+      top: 56px;
+      right: max(0.75rem, env(safe-area-inset-right));
     }
   }
   /* ── 无障碍：尊重系统的"减弱动态效果" ─────────────────────────────────────
-     这个页面常驻的无限循环动画很多——每张照片各自的 hangSway 摇摆、光斑的
+     这个页面常驻的无限循环动画很多——照片墙的加载微光、光斑的
      driftGlow/flicker、每个未加载格子的转圈、放映页的 Ken Burns。对前庭敏感
      （晕动症）的用户是实打实的不适来源，而系统开关早就表达过态度了。
      只关掉位移/旋转/缩放这类会"动起来"的效果，opacity 淡入淡出保留——
      那既不引起眩晕，又是页面区分"加载中/已就绪"的主要语言，一并砍掉反而更难用 */
   @media (prefers-reduced-motion: reduce) {
     /* 照片墙：保留淡入（去掉入场延迟，直接就位），去掉摇摆和挂角倾斜 */
-    .cell {
-      animation: cellFadeIn 0.3s ease forwards !important;
-      rotate: 0deg !important;
-      translate: none !important;
-    }
-    .cell.touching { transform: none !important; }
+    .cell { animation: cellFadeIn 0.3s ease forwards !important; }
+    .cell:hover img.loaded, .cell:hover video.loaded { transform: none !important; }
     /* 光斑漂移 / 开灯扫光 / 指尖光点：纯装饰，直接静止 */
     .sunlight .glow { animation: none !important; }
     .sun-sweep.play { animation: none !important; }
-    #fingertip { display: none !important; }
     /* 加载转圈是必要的状态反馈，不能删，但放慢到不刺激的程度 */
-    .cell .frame-inner::after,
+    .cell .frame-inner::before { animation: none !important; }
     .lightbox-stage::after,
     .lb-prog-spin { animation-duration: 2.4s !important; }
     /* 灯箱切图的位移/缩放特效退化成纯淡入 */

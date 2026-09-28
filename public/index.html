@@ -7,7 +7,7 @@
 <link rel="icon" type="image/x-icon" href="/favicon.ico" />
 <!-- use-credentials：manifest 请求默认不带 Cookie，站点在 Cloudflare Access 后面时会被打回登录页（CORS 报错），带上凭证才能过 -->
 <link rel="manifest" href="/manifest.json" crossorigin="use-credentials" />
-<meta name="theme-color" content="#000000" />
+<meta name="theme-color" content="#0e0d0b" />
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -30,8 +30,9 @@
     </div>
   </div>
   <div class="sun-sweep" id="sunSweep"></div>
+  <div class="topbar-bg" aria-hidden="true"></div>
   <header>
-    <div class="eyebrow">回忆 · Memories</div>
+    <div class="eyebrow">On This Day · 那年今日</div>
     <h1 id="title">那年今日</h1>
     <div class="subtitle" id="subtitle">正在唤醒回忆</div>
     <div class="daily-poem" id="dailyPoem"></div>
@@ -98,24 +99,19 @@
       </div>
     </div>
   </header>
-  <div id="fingertip"></div>
-  <div id="cursorDot">
-    <span class="br tl"></span>
-    <span class="br tr"></span>
-    <span class="br bl"></span>
-    <span class="br brc"></span>
-    <span class="center-dot"></span>
-  </div>
   <div id="content">
     <div class="skeleton-grid">
-      <div class="cell" style="width:150px;--tilt-deg:-3;--sway-dur:4.0s;--sway-delay:0.0s;--enter-delay:0.00s;"><div class="frame-inner"></div></div>
-      <div class="cell" style="width:190px;--tilt-deg:-1.5;--sway-dur:4.7s;--sway-delay:0.5s;--enter-delay:0.05s;"><div class="frame-inner"></div></div>
-      <div class="cell" style="width:230px;--tilt-deg:0;--sway-dur:5.4s;--sway-delay:1.0s;--enter-delay:0.10s;"><div class="frame-inner"></div></div>
-      <div class="cell" style="width:170px;--tilt-deg:1.5;--sway-dur:6.1s;--sway-delay:1.5s;--enter-delay:0.15s;"><div class="frame-inner"></div></div>
-      <div class="cell" style="width:210px;--tilt-deg:3;--sway-dur:4.0s;--sway-delay:2.0s;--enter-delay:0.20s;"><div class="frame-inner"></div></div>
+      <div class="cell hero"><div class="frame-inner"></div></div>
+      <div class="cell"><div class="frame-inner"></div></div>
+      <div class="cell"><div class="frame-inner"></div></div>
+      <div class="cell"><div class="frame-inner"></div></div>
+      <div class="cell"><div class="frame-inner"></div></div>
+      <div class="cell"><div class="frame-inner"></div></div>
+      <div class="cell"><div class="frame-inner"></div></div>
+      <div class="cell"><div class="frame-inner"></div></div>
+      <div class="cell"><div class="frame-inner"></div></div>
     </div>
   </div>
-
   <div class="lightbox" id="lightbox">
     <div class="lightbox-inner">
       <span class="lightbox-nav prev" id="navPrev">‹</span>
