@@ -34,14 +34,9 @@
   #caption .c { font-size: 0.8rem; color: rgba(255,255,255,0.75); line-height: 1.5; }
   #bar { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 4; background: rgba(255,255,255,0.14); }
   #bar i { display: block; height: 100%; width: 0; background: #ffd996; transition: width 0.2s linear; }
-  .btn {
-    position: fixed; z-index: 6; width: 38px; height: 38px; border-radius: 50%;
-    border: none; display: flex; align-items: center; justify-content: center;
-    background: rgba(255,255,255,0.12); backdrop-filter: blur(12px); color: #fff;
-    cursor: pointer; text-decoration: none; font-size: 0.9rem;
-  }
+  /* 右上角按钮长相走 /ui.css 的 .icon-btn.glass，这里只定位 */
+  .btn { position: fixed; z-index: 6; --ctl: 38px; }
   .btn[hidden] { display: none; }
-  #back { top: max(1rem, env(safe-area-inset-top)); left: max(1rem, env(safe-area-inset-left)); }
   #music { top: max(1rem, env(safe-area-inset-top)); right: max(1rem, env(safe-area-inset-right)); }
   #trailLink { top: max(1rem, env(safe-area-inset-top)); right: calc(max(1rem, env(safe-area-inset-right)) + 3rem); }
   #yearNav {
