@@ -14,7 +14,7 @@ import { solarToLunar, lunarToSolar, lunarLabel } from "./src/lib/lunar.js";
 import { findExifItemId, parseExifTiff, parseExifForDisplay } from "./src/lib/exif.js";
 import { IMAGE_EXT, VIDEO_EXT, pairLivePhotos, dateFromFilename } from "./src/lib/media.js";
 import { memoriesCacheKey, mapPhotosDayCacheKey, mapPhotosAllCacheKey, dayCacheKeys } from "./src/lib/cache-keys.js";
-import { cacheLookup, cacheStore, cachePut } from "./src/http.js";
+import { cacheLookup, cacheStore, cachePut, json } from "./src/http.js";
 import { SITE_ORIGIN } from "./src/config.js";
 
 
@@ -30,192 +30,126 @@ async function setLastViewedDay(env, month, day) {
   await env.KV.put("last_viewed_day", JSON.stringify({ month, day }));
 }
 
+// ── 路由表 ──────────────────────────────────────────────────────────────────
+// 以前是 fetch() 里一条 180 行的 if 链，新增路由要在链里找位置插，还有一半 handler 拿不到 ctx
+// （想用 waitUntil 只能 await）。现在所有 handler 签名一致：(request, env, url, ctx)。
+//
+// 值是函数：任何方法都进；值是 { POST: fn } 这样的对象：只有列出的方法进，其它方法不命中，
+// 继续往下落到静态资产——跟原来 `pathname === X && method === "POST"` 的行为一致
+const ROUTES = {
+  "/":                              handleHomePage,
+  "/map":                           handleMapPage,
+  "/loved":                         servePage("/loved.html"),
+  "/recap":                         servePage("/recap.html"),
+  "/stats":                         servePage("/stats.html"),
+
+  "/api/memories":                  handleMemories,
+  "/api/anniversaries/upcoming":    handleAnniversariesUpcoming,
+  "/api/map-photos":                handleMapPhotos,
+  "/api/exif":                      handleExif,
+  "/api/static-map":                handleStaticMap,
+  "/api/top-loved":                 handleTopLoved,
+  "/api/search":                    handleSearch,
+  "/api/note":                      handleNote,
+  "/api/recap":                     handleRecap,
+  "/api/stats":                     handleStats,
+  "/api/poem":                      handlePoem,
+  "/api/onthisday":                 handleOnThisDay,
+  "/api/upload-heic-preview":       { POST: handleUploadHeicPreview },
+  "/og-image":                      handleOgImage,
+  "/app-icon":                      handleAppIcon,
+
+  // 运维：整站在 Cloudflare Access 后面，页面和接口都不再单独校验 token
+  // /admin/ops 必须 fetch 原始 request（不拼 .html 后缀）：静态资产服务会把带 .html 的请求
+  // 307 回不带后缀的规范路径，又落回这里，死循环"重定向次数过多"。文件在 public/admin/ops.html
+  "/admin/ops":                     (request, env) => env.ASSETS.fetch(request),
+  "/admin/ops-status":              handleOpsStatus,
+  "/admin/photo-info":              handlePhotoInfo,
+  "/admin/photo-fix":               { POST: handlePhotoFix },
+  "/admin/reset-flag":              { POST: handleResetFlag },
+  "/admin/anniversaries":           handleAnniversaries,
+  "/admin/score-photos":            handleScorePhotos,
+  "/admin/locate-photos":           handleLocatePhotos,
+  "/admin/convert-heic-photos":     handleConvertHeicPhotos,
+  "/admin/purge-cache":             handlePurgeCache,
+  "/admin/backfill-photos-index":   handleBackfillPhotosIndex,
+  "/admin/backfill-photo-dims":     handleBackfillPhotoDims,
+  "/admin/reindex-photo-dates":     handleReindexPhotoDates,
+  "/admin/backfill-workflows":      handleBackfillWorkflows,
+  "/admin/test-telegram":           handleTestTelegram,
+};
+
+// 前缀路由按顺序匹配。handler 返回 null 表示"不归我管"，继续落到静态资产
+const PREFIX_ROUTES = [
+  ["/img/",      handleImage],
+  ["/thumb/",    handleThumb],
+  ["/api/room/", handleRoom],
+];
+
+function matchRoute(method, pathname) {
+  const route = ROUTES[pathname];
+  if (typeof route === "function") return route;
+  if (route && route[method]) return route[method];
+  for (const [prefix, handler] of PREFIX_ROUTES) {
+    if (pathname.startsWith(prefix)) return handler;
+  }
+  return null;
+}
+
+// /loved、/recap、/stats 这类页面文件名跟路径不一致，要显式指到 .html。
+// 这几条不在 run_worker_first 里，不会出现 /admin/ops、/map 那种 307 死循环
+function servePage(file) {
+  return (request, env) => env.ASSETS.fetch(new Request(new URL(file, request.url), request));
+}
+
+// 首页：静态 HTML 出来后动态注入 og meta——分享到微信/Telegram/Twitter 时
+// 预览卡片能带上"当天最高分照片 + 日期标题"，链接不再是光秃秃一行字
+async function handleHomePage(request, env, url) {
+  const assetResp = await env.ASSETS.fetch(request);
+  return injectOgTags(assetResp, url, env);
+}
+
+async function handleMapPage(request, env) {
+  // 注意：这里必须 fetch 原始 request（路径就是 /map，不带后缀）——
+  // 之前显式拼过 /map.html 再 fetch，Cloudflare 静态资产服务对"带 .html 后缀的请求"
+  // 会自动 307 重定向到不带后缀的规范路径（也就是 /map 自己）；而 /map 又在
+  // run_worker_first 里强制走 Worker，Worker 再次请求 /map.html，再次被重定向，
+  // 死循环，浏览器报"重定向次数过多"，地图页完全进不去
+  const mapHtmlResp = await env.ASSETS.fetch(request);
+  const mapToken = JSON.stringify(env.MAPBOX_PUBLIC_TOKEN || "").replace(/<\//g, "<\\/");
+  return new HTMLRewriter()
+    .on("head", {
+      element(el) {
+        el.prepend(`<script>window.MAPBOX_TOKEN=${mapToken};</script>`, { html: true });
+      },
+    })
+    .transform(mapHtmlResp);
+}
+
+// 实时共享房间：每个日期一个 Durable Object，家人同时在线时看到彼此人数 + 实时点赞
+function handleRoom(request, env, url) {
+  const dateKey = url.pathname.slice("/api/room/".length);
+  if (!/^\d{2}-\d{2}$/.test(dateKey)) return null;
+  return env.MEMORY_ROOM.get(env.MEMORY_ROOM.idFromName(dateKey)).fetch(request);
+}
+
+async function handleTestTelegram(request, env) {
+  try {
+    await sendDailyMemories(env);
+    return new Response("OK", { status: 200 });
+  } catch (err) {
+    return new Response("Error: " + err.message, { status: 500 });
+  }
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-
-    if (url.pathname === "/api/memories") {
-      return handleMemories(request, env, url, ctx);
+    const handler = matchRoute(request.method, url.pathname);
+    if (handler) {
+      const response = await handler(request, env, url, ctx);
+      if (response) return response;
     }
-
-    if (url.pathname.startsWith("/img/")) {
-      return handleImage(request, env, url, ctx);
-    }
-
-    if (url.pathname.startsWith("/thumb/")) {
-      return handleThumb(request, env, url, ctx);
-    }
-
-    if (url.pathname === "/admin/score-photos") {
-      return handleScorePhotos(request, env, url);
-    }
-
-    if (url.pathname === "/admin/locate-photos") {
-      return handleLocatePhotos(request, env, url);
-    }
-
-    if (url.pathname === "/admin/convert-heic-photos") {
-      return handleConvertHeicPhotos(request, env, url);
-    }
-
-    if (url.pathname === "/admin/purge-cache") {
-      return handlePurgeCache(request, env, url);
-    }
-
-    if (url.pathname === "/admin/backfill-photos-index") {
-      return handleBackfillPhotosIndex(request, env, url);
-    }
-
-    if (url.pathname === "/admin/backfill-photo-dims") {
-      return handleBackfillPhotoDims(request, env, url);
-    }
-
-    if (url.pathname === "/admin/reindex-photo-dates") {
-      return handleReindexPhotoDates(request, env, url);
-    }
-
-    if (url.pathname === "/admin/backfill-workflows") {
-      return handleBackfillWorkflows(request, env, url);
-    }
-
-    if (url.pathname === "/admin/test-telegram") {
-      try {
-        await sendDailyMemories(env);
-        return new Response("OK", { status: 200 });
-      } catch (err) {
-        return new Response("Error: " + err.message, { status: 500 });
-      }
-    }
-
-    // ── 运维控制台：整站在 Cloudflare Access 后面，页面和接口都不再单独校验 token ──
-    if (url.pathname === "/admin/ops") {
-      // 之前文件叫 admin-ops.html，跟 URL 路径 /admin/ops 的目录结构对不上，静态资产
-      // 服务找不到匹配项才落到这里；这里又显式拼了 /admin-ops.html 再 fetch——带 .html
-      // 后缀的请求会被 Cloudflare 静态资产服务 307 重定向回不带后缀的规范路径，
-      // 由于这条路由没在 run_worker_first 里、每次都会再落回这个 Worker handler，
-      // 死循环，浏览器报"重定向次数过多"，运维控制台完全进不去。
-      // 现在文件已经挪到 public/admin/ops.html（跟 URL 结构对齐），直接 fetch 原始
-      // request（不拼后缀）就能走清爽 URL 解析命中，不再需要显式拼路径
-      return env.ASSETS.fetch(request);
-    }
-    if (url.pathname === "/admin/ops-status") {
-      return handleOpsStatus(request, env, url);
-    }
-    if (url.pathname === "/admin/photo-info") {
-      return handlePhotoInfo(request, env, url);
-    }
-    if (url.pathname === "/admin/photo-fix" && request.method === "POST") {
-      return handlePhotoFix(request, env, url);
-    }
-    if (url.pathname === "/admin/reset-flag" && request.method === "POST") {
-      return handleResetFlag(request, env, url);
-    }
-
-    if (url.pathname === "/admin/anniversaries") {
-      return handleAnniversaries(request, env, url);
-    }
-
-    if (url.pathname === "/api/anniversaries/upcoming") {
-      return handleAnniversariesUpcoming(request, env, url, ctx);
-    }
-
-    if (url.pathname === "/api/map-photos") {
-      return handleMapPhotos(request, env, url, ctx);
-    }
-
-    if (url.pathname === "/api/exif") {
-      return handleExif(request, env, url, ctx);
-    }
-
-    if (url.pathname === "/api/static-map") {
-      return handleStaticMap(request, env, url);
-    }
-
-    if (url.pathname === "/og-image") {
-      return handleOgImage(request, env, url, ctx);
-    }
-
-    if (url.pathname === "/app-icon") {
-      return handleAppIcon(request, env, url, ctx);
-    }
-
-    if (url.pathname === "/api/top-loved") {
-      return handleTopLoved(request, env, url, ctx);
-    }
-
-    if (url.pathname === "/api/search") {
-      return handleSearch(request, env, url);
-    }
-
-    if (url.pathname === "/api/note") {
-      return handleNote(request, env, url);
-    }
-
-    if (url.pathname === "/loved") {
-      return env.ASSETS.fetch(new Request(new URL("/loved.html", request.url), request));
-    }
-
-    if (url.pathname === "/api/recap") {
-      return handleRecap(request, env, url, ctx);
-    }
-
-    if (url.pathname === "/recap") {
-      return env.ASSETS.fetch(new Request(new URL("/recap.html", request.url), request));
-    }
-
-    if (url.pathname === "/api/stats") {
-      return handleStats(request, env, url, ctx);
-    }
-
-    if (url.pathname === "/stats") {
-      return env.ASSETS.fetch(new Request(new URL("/stats.html", request.url), request));
-    }
-
-    if (url.pathname === "/api/poem") {
-      return handlePoem(request, env, url);
-    }
-
-    if (url.pathname === "/api/onthisday") {
-      return handleOnThisDay(request, env, url, ctx);
-    }
-
-    if (url.pathname === "/api/upload-heic-preview" && request.method === "POST") {
-      return handleUploadHeicPreview(request, env, url);
-    }
-
-    if (url.pathname === "/map") {
-      // 注意：这里必须 fetch 原始 request（路径就是 /map，不带后缀）——
-      // 之前显式拼过 /map.html 再 fetch，Cloudflare 静态资产服务对"带 .html 后缀的请求"
-      // 会自动 307 重定向到不带后缀的规范路径（也就是 /map 自己）；而 /map 又在
-      // run_worker_first 里强制走 Worker，Worker 再次请求 /map.html，再次被重定向，
-      // 死循环，浏览器报"重定向次数过多"，地图页完全进不去
-      const mapHtmlResp = await env.ASSETS.fetch(request);
-      const mapToken = JSON.stringify(env.MAPBOX_PUBLIC_TOKEN || "").replace(/<\//g, "<\\/");
-      return new HTMLRewriter()
-        .on("head", {
-          element(el) {
-            el.prepend(`<script>window.MAPBOX_TOKEN=${mapToken};</script>`, { html: true });
-          },
-        })
-        .transform(mapHtmlResp);
-    }
-
-    // 实时共享房间：每个日期一个 Durable Object，家人同时在线时看到彼此人数 + 实时点赞
-    if (url.pathname.startsWith("/api/room/")) {
-      const dateKey = url.pathname.slice("/api/room/".length);
-      if (/^\d{2}-\d{2}$/.test(dateKey)) {
-        const id = env.MEMORY_ROOM.idFromName(dateKey);
-        return env.MEMORY_ROOM.get(id).fetch(request);
-      }
-    }
-
-    // 首页：静态 HTML 出来后动态注入 og meta——分享到微信/Telegram/Twitter 时
-    // 预览卡片能带上"当天最高分照片 + 日期标题"，链接不再是光秃秃一行字
-    if (url.pathname === "/") {
-      const assetResp = await env.ASSETS.fetch(request);
-      return injectOgTags(assetResp, url, env);
-    }
-
     // 其余请求（/favicon.svg、/app.css、/app.js 等）交给 Static Assets CDN
     return env.ASSETS.fetch(request);
   },
@@ -569,47 +503,47 @@ async function handleAnniversaries(request, env, url) {
     ).all();
     const bjYear = new Date(Date.now() + 8 * 60 * 60 * 1000).getUTCFullYear();
     const anniversaries = results.map((a) => ({ ...a, solar_display: lunarDisplayDate(a, bjYear) }));
-    return Response.json({ anniversaries });
+    return json({ anniversaries });
   }
 
   if (request.method === "POST") {
     let body;
-    try { body = await request.json(); } catch { return Response.json({ error: "bad json" }, { status: 400 }); }
+    try { body = await request.json(); } catch { return json({ error: "bad json" }, { status: 400 }); }
     const v = validateAnniversaryBody(body);
-    if (v.error) return Response.json({ error: v.error }, { status: 400 });
+    if (v.error) return json({ error: v.error }, { status: 400 });
 
     const result = await env.DB.prepare(
       "INSERT INTO anniversaries (title, month, day, year_start, remind_days_before, calendar, is_leap, created_at) " +
       "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     ).bind(v.title, v.month, v.day, v.yearStart, v.remindDaysBefore, v.calendar, v.isLeap ? 1 : 0, new Date().toISOString()).run();
-    return Response.json({ ok: true, id: result.meta.last_row_id });
+    return json({ ok: true, id: result.meta.last_row_id });
   }
 
   if (request.method === "PATCH") {
     let body;
-    try { body = await request.json(); } catch { return Response.json({ error: "bad json" }, { status: 400 }); }
+    try { body = await request.json(); } catch { return json({ error: "bad json" }, { status: 400 }); }
     const id = Number(body.id);
-    if (!id) return Response.json({ error: "id required" }, { status: 400 });
+    if (!id) return json({ error: "id required" }, { status: 400 });
     const v = validateAnniversaryBody(body);
-    if (v.error) return Response.json({ error: v.error }, { status: 400 });
+    if (v.error) return json({ error: v.error }, { status: 400 });
 
     const existing = await env.DB.prepare("SELECT id FROM anniversaries WHERE id = ?").bind(id).first();
-    if (!existing) return Response.json({ error: "not found" }, { status: 404 });
+    if (!existing) return json({ error: "not found" }, { status: 404 });
 
     await env.DB.prepare(
       "UPDATE anniversaries SET title = ?, month = ?, day = ?, year_start = ?, remind_days_before = ?, " +
       "calendar = ?, is_leap = ? WHERE id = ?"
     ).bind(v.title, v.month, v.day, v.yearStart, v.remindDaysBefore, v.calendar, v.isLeap ? 1 : 0, id).run();
-    return Response.json({ ok: true });
+    return json({ ok: true });
   }
 
   if (request.method === "DELETE") {
     let body;
-    try { body = await request.json(); } catch { return Response.json({ error: "bad json" }, { status: 400 }); }
+    try { body = await request.json(); } catch { return json({ error: "bad json" }, { status: 400 }); }
     const id = Number(body.id);
-    if (!id) return Response.json({ error: "id required" }, { status: 400 });
+    if (!id) return json({ error: "id required" }, { status: 400 });
     await env.DB.prepare("DELETE FROM anniversaries WHERE id = ?").bind(id).run();
-    return Response.json({ ok: true });
+    return json({ ok: true });
   }
 
   return new Response("Method Not Allowed", { status: 405 });
@@ -653,9 +587,7 @@ async function handleAnniversariesUpcoming(request, env, url, ctx) {
   }
   upcoming.sort((x, y) => x.daysLeft - y.daysLeft);
 
-  const response = new Response(JSON.stringify({ date: dateKey, today, upcoming: upcoming.slice(0, 3) }), {
-    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=3600" },
-  });
+  const response = json({ date: dateKey, today, upcoming: upcoming.slice(0, 3) }, { headers: { "cache-control": "public, max-age=3600" } });
   return cacheStore(ctx, cacheKey, response);
 }
 // ─────────────────────────────────────────────────────────────────────────────
@@ -832,12 +764,7 @@ async function handleTopLoved(request, env, url, ctx) {
     day: r.day,
   }));
 
-  const response = new Response(JSON.stringify({ photos }), {
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "public, max-age=300",
-    },
-  });
+  const response = json({ photos }, { headers: { "cache-control": "public, max-age=300" } });
   return cacheStore(ctx, cacheKey, response);
 }
 
@@ -882,12 +809,7 @@ async function handleRecap(request, env, url, ctx) {
     place: r.place || "",
   }));
 
-  const response = new Response(JSON.stringify({ year, years, photos }), {
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "public, max-age=3600",
-    },
-  });
+  const response = json({ year, years, photos }, { headers: { "cache-control": "public, max-age=3600" } });
   return cacheStore(ctx, cacheKey, response);
 }
 
@@ -981,12 +903,7 @@ async function handleStats(request, env, url, ctx) {
       : null,
   };
 
-  const response = new Response(JSON.stringify(payload), {
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "public, max-age=3600",
-    },
-  });
+  const response = json(payload, { headers: { "cache-control": "public, max-age=3600" } });
   return cacheStore(ctx, cacheKey, response);
 }
 
@@ -1012,9 +929,7 @@ async function handleNote(request, env, url) {
       // 只有邮箱非空且匹配才算"我的"——匿名评论（author_email 为空）谁都不认领
       mine: !!email && r.author_email === email,
     }));
-    return new Response(JSON.stringify({ comments }), {
-      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
-    });
+    return json({ comments }, { headers: { "cache-control": "no-store" } });
   }
 
   if (request.method === "POST") {
@@ -1033,10 +948,7 @@ async function handleNote(request, env, url) {
       "INSERT INTO photo_comments (key, author_email, author_name, note, created_at) VALUES (?, ?, ?, ?, ?)"
     ).bind(key, email, name, note, createdAt).run();
 
-    return new Response(
-      JSON.stringify({ ok: true, comment: { id: result.meta.last_row_id, author: name, note, createdAt, mine: true } }),
-      { headers: { "content-type": "application/json; charset=utf-8" } }
-    );
+    return json({ ok: true, comment: { id: result.meta.last_row_id, author: name, note, createdAt, mine: true } });
   }
 
   if (request.method === "DELETE") {
@@ -1050,9 +962,7 @@ async function handleNote(request, env, url) {
     // 只能删自己发的：邮箱必须非空且匹配，匿名评论没人能通过这个接口删掉
     if (!email || row.author_email !== email) return new Response("Forbidden", { status: 403 });
     await env.DB.prepare("DELETE FROM photo_comments WHERE id = ?").bind(id).run();
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { "content-type": "application/json; charset=utf-8" },
-    });
+    return json({ ok: true });
   }
 
   return new Response("Method Not Allowed", { status: 405 });
@@ -1066,10 +976,7 @@ async function handleNote(request, env, url) {
 async function handleSearch(request, env, url) {
   const q = (url.searchParams.get("q") || "").trim();
   if (q.length < 1 || q.length > 40) {
-    return new Response(JSON.stringify({ error: "q required, 1-40 chars" }), {
-      status: 400,
-      headers: { "content-type": "application/json; charset=utf-8" },
-    });
+    return json({ error: "q required, 1-40 chars" }, { status: 400 });
   }
   // 查询里有 ps.tags 列，老库要先补列（同 loadScoresForKeys 的注释）
   await ensureAuxTables(env);
@@ -1095,12 +1002,7 @@ async function handleSearch(request, env, url) {
     tags: tagsArrayOf(r.tags),
     place: r.place || "",
   }));
-  return new Response(JSON.stringify({ q, photos }), {
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "public, max-age=300",
-    },
-  });
+  return json({ q, photos }, { headers: { "cache-control": "public, max-age=300" } });
 }
 
 // ── PWA 应用图标 ──────────────────────────────────────────────────────────────
@@ -1530,10 +1432,7 @@ async function handleMemories(request, env, url, ctx) {
   const month = url.searchParams.get("month");
   const day = url.searchParams.get("day");
   if (!/^\d{2}$/.test(month || "") || !/^\d{2}$/.test(day || "")) {
-    return new Response(JSON.stringify({ error: "month/day required, format MM/DD" }), {
-      status: 400,
-      headers: { "content-type": "application/json; charset=utf-8" },
-    });
+    return json({ error: "month/day required, format MM/DD" }, { status: 400 });
   }
 
   // 同一天会被反复访问，用边缘缓存挡住重复请求，避免每次访问都重新查一遍 D1
@@ -1575,12 +1474,7 @@ async function handleMemories(request, env, url, ctx) {
   const results = matchedByYear.map(enrich);
   if (lunar) lunar = { ...lunar, years: lunar.years.map(enrich) };
 
-  const response = new Response(JSON.stringify({ month, day, years: results, lunar }), {
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "public, max-age=1800",
-    },
-  });
+  const response = json({ month, day, years: results, lunar }, { headers: { "cache-control": "public, max-age=1800" } });
   const out = await cacheStore(ctx, cacheKey, response);
 
   // AI 打分和查地点不在这里自动触发了——这个接口本来就要为没有日期文件名的照片逐个读 EXIF，
@@ -1751,9 +1645,7 @@ async function getCapturedMonthDay(bucket, key) {
   if (result) {
     await cache.put(
       cacheKey,
-      new Response(JSON.stringify(result), {
-        headers: { "content-type": "application/json", "cache-control": "max-age=31536000, immutable" },
-      })
+      json(result, { headers: { "cache-control": "max-age=31536000, immutable" } })
     );
   }
   return result;
@@ -1943,13 +1835,7 @@ async function handleExif(request, env, url, ctx) {
   }
   if (!obj) return new Response("Not Found", { status: 404 });
   if (obj.size) exif.fileSize = obj.size;
-  const response = new Response(JSON.stringify(exif), {
-    headers: {
-      "content-type": "application/json",
-      "cache-control": "public, max-age=86400, stale-while-revalidate=604800",
-      "access-control-allow-origin": "*",
-    },
-  });
+  const response = json(exif, { headers: { "cache-control": "public, max-age=86400, stale-while-revalidate=604800", "access-control-allow-origin": "*" } });
   return cacheStore(ctx, cacheKey, response);
 }
 
@@ -2196,9 +2082,7 @@ async function handleUploadHeicPreview(request, env, url) {
   // （不管服务端重试次数有没有用完），浏览器这边解出来了正好顶上——用 hasRealHeicPreview 而不是
   // needsHeicConversion，不然服务端 5 次重试用完之后浏览器端的解码结果也会被这里拒绝接收
   if (await hasRealHeicPreview(env, key)) {
-    return new Response(JSON.stringify({ uploaded: false, reason: "already exists" }), {
-      headers: { "content-type": "application/json; charset=utf-8" },
-    });
+    return json({ uploaded: false, reason: "already exists" });
   }
 
   const head = await env.PHOTOS.head(key);
@@ -2207,9 +2091,7 @@ async function handleUploadHeicPreview(request, env, url) {
   const previewKey = await heicPreviewKeyFor(env, key);
   await env.PREVIEWS.put(previewKey, buffer, { httpMetadata: { contentType: "image/jpeg" } });
 
-  return new Response(JSON.stringify({ uploaded: true }), {
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
+  return json({ uploaded: true });
 }
 
 // 给一张 HEIC 照片生成预览版，存进单独的 PREVIEWS 桶（跟原图分开，方便单独清理/计费）。
@@ -2758,14 +2640,11 @@ async function handleScorePhotos(request, env, url) {
     `SELECT COUNT(*) AS n FROM photos_index i LEFT JOIN photo_scores s ON s.key = i.key WHERE i.type = 'image' AND ${NEEDS_SCORE_SQL}`
   ).first();
 
-  return new Response(
-    JSON.stringify({
+  return json({
       scoredThisBatch: scoredCount,
       remaining: remainRow.n,
       totalPhotos: totalRow.n,
-    }),
-    { headers: { "content-type": "application/json; charset=utf-8" } }
-  );
+    });
 }
 
 // 历史积压图片批量触发 Workflow，解决两个 backlog 场景：
@@ -2812,7 +2691,7 @@ async function handleBackfillWorkflows(request, env, url) {
   ).first();
 
   // attempted: 本页实际取到的行数（=0 则全部触发完毕）；lastKey: 下一批的 after 游标
-  return Response.json({
+  return json({
     triggered,
     attempted: results.length,
     lastKey: results.length ? results[results.length - 1].key : null,
@@ -2834,14 +2713,11 @@ async function handleLocatePhotos(request, env, url) {
     "SELECT COUNT(*) AS n FROM photos_index i LEFT JOIN photo_places p ON p.key = i.key WHERE i.type = 'image' AND p.key IS NULL"
   ).first();
 
-  return new Response(
-    JSON.stringify({
+  return json({
       triggered: processedCount,
       remaining: remainRow.n,
       totalPhotos: totalRow.n,
-    }),
-    { headers: { "content-type": "application/json; charset=utf-8" } }
-  );
+    });
 }
 
 // 在给定的 HEIC key 列表里找出还没生成预览版的（包括之前失败过、重试次数没到上限的），
@@ -2877,10 +2753,7 @@ async function handleConvertHeicPhotos(request, env, url) {
 
   const { converted, errors } = await convertHeicBatch(env, heicKeys, limit);
 
-  return new Response(
-    JSON.stringify({ convertedThisBatch: converted, totalHeic: heicKeys.length, errors }),
-    { headers: { "content-type": "application/json; charset=utf-8" } }
-  );
+  return json({ convertedThisBatch: converted, totalHeic: heicKeys.length, errors });
 }
 
 // 管理端点：清掉某个 month/day 的 /api/memories、/api/map-photos 边缘缓存。
@@ -2907,17 +2780,12 @@ async function handlePurgeCache(request, env, url) {
   const month = url.searchParams.get("month");
   const day = url.searchParams.get("day");
   if (!/^\d{2}$/.test(month || "") || !/^\d{2}$/.test(day || "")) {
-    return new Response(JSON.stringify({ error: "month/day required, format MM/DD" }), {
-      status: 400,
-      headers: { "content-type": "application/json; charset=utf-8" },
-    });
+    return json({ error: "month/day required, format MM/DD" }, { status: 400 });
   }
 
   const deleted = await purgeDayCache(month, day);
 
-  return new Response(JSON.stringify({ month, day, deleted }), {
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
+  return json({ month, day, deleted });
 }
 
 // 一次性回填：把上线 R2 Event Notification 之前已经存在的旧文件补进 photos_index。
@@ -2999,9 +2867,7 @@ async function handleReindexPhotoDates(request, env, url) {
   const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
   const result = await reindexPhotoDatesBatch(env, limit, offset);
 
-  return new Response(JSON.stringify(result), {
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
+  return json(result);
 }
 
 // 存量照片的宽高回填。新照片走 handleThumb 生成缩略图时顺手量（见 measureAndRecordDims），
@@ -3067,18 +2933,14 @@ async function backfillPhotoDimsBatch(env, limit, afterKey = "") {
 async function handleBackfillPhotoDims(request, env, url) {
   const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 200);
   const result = await backfillPhotoDimsBatch(env, limit, url.searchParams.get("after") || "");
-  return new Response(JSON.stringify(result), {
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
+  return json(result);
 }
 
 async function handleBackfillPhotosIndex(request, env, url) {
   const limit = Math.min(Number(url.searchParams.get("limit")) || 100, 300);
   const result = await backfillPhotosIndexBatch(env, limit);
 
-  return new Response(JSON.stringify(result), {
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
+  return json(result);
 }
 
 // ---------- 运维控制台 API：状态总览 / 照片查询 / 数据修复 ----------
@@ -3116,7 +2978,7 @@ async function handleOpsStatus(request, env, url) {
   const byType = {};
   for (const r of typeRows.results) byType[r.type] = r.c;
 
-  return Response.json({
+  return json({
     now: new Date().toISOString(),
     bjToday: bjToday(),
     index: { total: Object.values(byType).reduce((a, b) => a + b, 0), byType },
@@ -3145,12 +3007,12 @@ async function handlePhotoInfo(request, env, url) {
   const key = url.searchParams.get("key");
 
   if (!key) {
-    if (!q) return Response.json({ error: "q or key required" }, { status: 400 });
+    if (!q) return json({ error: "q or key required" }, { status: 400 });
     const like = "%" + q.replace(/[\\%_]/g, (m) => "\\" + m) + "%";
     const { results } = await env.DB.prepare(
       "SELECT key, type, year, month, day FROM photos_index WHERE key LIKE ?1 ESCAPE '\\' ORDER BY year DESC, month DESC, day DESC LIMIT 20"
     ).bind(like).all();
-    return Response.json({ matches: results });
+    return json({ matches: results });
   }
 
   const [index, score, place, commentStats, reactions] = await Promise.all([
@@ -3161,7 +3023,7 @@ async function handlePhotoInfo(request, env, url) {
     env.DB.prepare("SELECT emoji, count FROM photo_reactions WHERE key = ? AND count > 0").bind(key).all(),
   ]);
   const inR2 = !!(await env.PHOTOS.head(key));
-  return Response.json({ key, inR2, index, score, place, commentCount: commentStats?.c ?? 0, reactions: reactions.results });
+  return json({ key, inR2, index, score, place, commentCount: commentStats?.c ?? 0, reactions: reactions.results });
 }
 
 // POST body: { key, action, ... }。动作：
@@ -3175,24 +3037,24 @@ async function handlePhotoFix(request, env, url) {
   await ensureAuxTables(env);
 
   let body;
-  try { body = await request.json(); } catch { return Response.json({ error: "bad json" }, { status: 400 }); }
+  try { body = await request.json(); } catch { return json({ error: "bad json" }, { status: 400 }); }
   const key = typeof body.key === "string" ? body.key : "";
-  if (!key) return Response.json({ error: "key required" }, { status: 400 });
+  if (!key) return json({ error: "key required" }, { status: 400 });
 
   const row = await env.DB.prepare("SELECT year, month, day FROM photos_index WHERE key = ?").bind(key).first();
 
   if (body.action === "set-date") {
-    if (!row) return Response.json({ error: "key not in index" }, { status: 404 });
+    if (!row) return json({ error: "key not in index" }, { status: 404 });
     const { year, month, day } = body;
     if (!/^\d{4}$/.test(year || "") || !/^\d{2}$/.test(month || "") || !/^\d{2}$/.test(day || "")) {
-      return Response.json({ error: "year/month/day required, format YYYY/MM/DD" }, { status: 400 });
+      return json({ error: "year/month/day required, format YYYY/MM/DD" }, { status: 400 });
     }
     await env.DB.prepare("UPDATE photos_index SET year = ?, month = ?, day = ?, updated_at = ? WHERE key = ?")
       .bind(year, month, day, new Date().toISOString(), key).run();
     await purgeDayCache(row.month, row.day);
     await purgeDayCache(month, day);
     // 注意：文件名/EXIF 本身带日期的照片，之后若重跑"日期重扫"会按解析结果覆盖这次手动修改
-    return Response.json({ ok: true, from: `${row.year}/${row.month}/${row.day}`, to: `${year}/${month}/${day}` });
+    return json({ ok: true, from: `${row.year}/${row.month}/${row.day}`, to: `${year}/${month}/${day}` });
   }
 
   if (body.action === "rescore") {
@@ -3202,7 +3064,7 @@ async function handlePhotoFix(request, env, url) {
     const score = await env.DB.prepare("SELECT score, caption, tags FROM photo_scores WHERE key = ?").bind(key).first();
     if (row) await purgeDayCache(row.month, row.day);
     // score 为空 + error 为空 = AI 没跑成但没抛错（比如 HEIC 还没有预览图），留给 Cron 兜底重试
-    return Response.json({ ok: true, score, error });
+    return json({ ok: true, score, error });
   }
 
   if (body.action === "relocate") {
@@ -3210,7 +3072,7 @@ async function handlePhotoFix(request, env, url) {
     await enrichLocations(env, [key]);
     const place = await env.DB.prepare("SELECT lat, lon, name FROM photo_places WHERE key = ?").bind(key).first();
     if (row) await purgeDayCache(row.month, row.day);
-    return Response.json({ ok: true, place });
+    return json({ ok: true, place });
   }
 
   if (body.action === "set-place") {
@@ -3219,7 +3081,7 @@ async function handlePhotoFix(request, env, url) {
       "INSERT INTO photo_places (key, lat, lon, name) VALUES (?, NULL, NULL, ?) ON CONFLICT(key) DO UPDATE SET name = excluded.name"
     ).bind(key, name).run();
     if (row) await purgeDayCache(row.month, row.day);
-    return Response.json({ ok: true, name });
+    return json({ ok: true, name });
   }
 
   if (body.action === "clear-note") {
@@ -3227,33 +3089,33 @@ async function handlePhotoFix(request, env, url) {
     // 旧表的这一行也要删掉——否则下次冷启动，ensureAuxTables 里那条"迁移旧手记"的
     // SQL 一看 photo_comments 又没有这个 key 了，会把刚清掉的内容重新迁移回来
     await env.DB.prepare("DELETE FROM photo_notes WHERE key = ?").bind(key).run();
-    return Response.json({ ok: true });
+    return json({ ok: true });
   }
 
   if (body.action === "remove-index") {
     const removed = await removePhotoIndex(env, key);
     if (removed) await purgeDayCache(removed.month, removed.day);
-    return Response.json({ ok: true, removed });
+    return json({ ok: true, removed });
   }
 
-  return Response.json({ error: "unknown action" }, { status: 400 });
+  return json({ error: "unknown action" }, { status: 400 });
 }
 
 // POST body: { flag: "backfill" | "reindex" }——删掉 KV 完成标记，
 // 让 Cron 恢复对应的追赶任务（索引回填 / 日期重扫）
 async function handleResetFlag(request, env, url) {
   let body;
-  try { body = await request.json(); } catch { return Response.json({ error: "bad json" }, { status: 400 }); }
+  try { body = await request.json(); } catch { return json({ error: "bad json" }, { status: 400 }); }
   if (body.flag === "backfill") {
     await env.KV.delete("backfill_done_at");
-    return Response.json({ ok: true, cleared: ["backfill_done_at"] });
+    return json({ ok: true, cleared: ["backfill_done_at"] });
   }
   if (body.flag === "reindex") {
     await env.KV.delete("reindex_dates_done_at");
     await env.KV.delete("reindex_dates_offset");
-    return Response.json({ ok: true, cleared: ["reindex_dates_done_at", "reindex_dates_offset"] });
+    return json({ ok: true, cleared: ["reindex_dates_done_at", "reindex_dates_offset"] });
   }
-  return Response.json({ error: "unknown flag" }, { status: 400 });
+  return json({ error: "unknown flag" }, { status: 400 });
 }
 
 // ---------- 今日诗词：每天在页面上配一句应景的古诗词（jinrishici.com），跟"那年今日"主题搭一块 ----------
@@ -3311,9 +3173,7 @@ async function getDailyPoem(env) {
 
   await cache.put(
     cacheKey,
-    new Response(JSON.stringify(poem), {
-      headers: { "content-type": "application/json", "cache-control": "max-age=86400" },
-    })
+    json(poem, { headers: { "cache-control": "max-age=86400" } })
   );
   return poem;
 }
@@ -3321,9 +3181,7 @@ async function getDailyPoem(env) {
 async function handlePoem(request, env, url) {
   try {
     const poem = await getDailyPoem(env);
-    return new Response(JSON.stringify(poem), {
-      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=3600" },
-    });
+    return json(poem, { headers: { "cache-control": "public, max-age=3600" } });
   } catch {
     // 第三方接口挂了也别影响主页面，前端拿到 204 就什么都不显示
     return new Response(null, { status: 204 });
@@ -3338,10 +3196,7 @@ async function handleOnThisDay(request, env, url, ctx) {
   const month = url.searchParams.get("month");
   const day = url.searchParams.get("day");
   if (!/^\d{2}$/.test(month || "") || !/^\d{2}$/.test(day || "")) {
-    return new Response(JSON.stringify({ error: "month/day required, format MM/DD" }), {
-      status: 400,
-      headers: { "content-type": "application/json; charset=utf-8" },
-    });
+    return json({ error: "month/day required, format MM/DD" }, { status: 400 });
   }
 
   const cacheKey = `${SITE_ORIGIN}/api/onthisday?month=${month}&day=${day}`;
@@ -3370,9 +3225,7 @@ async function handleOnThisDay(request, env, url, ctx) {
     events.sort((a, b) => b.year - a.year);
     events = events.slice(0, 12);
 
-    const response = new Response(JSON.stringify({ month, day, events }), {
-      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=604800" },
-    });
+    const response = json({ month, day, events }, { headers: { "cache-control": "public, max-age=604800" } });
     // 以前 cache.put 也在这个 try 里：缓存写失败会被下面的 catch 当成接口失败，
     // 把一份正常拿到的数据扔掉、返回 204。cacheStore 自己吞掉写缓存的错误
     return cacheStore(ctx, cacheKey, response);
@@ -3394,10 +3247,7 @@ async function handleMapPhotos(request, env, url, ctx) {
   if (!month && !day) {
     const year = url.searchParams.get("year");
     if (year && !/^\d{4}$/.test(year)) {
-      return new Response(JSON.stringify({ error: "year must be YYYY" }), {
-        status: 400,
-        headers: { "content-type": "application/json; charset=utf-8" },
-      });
+      return json({ error: "year must be YYYY" }, { status: 400 });
     }
 
     const cacheKey = mapPhotosAllCacheKey(year);
@@ -3422,20 +3272,12 @@ async function handleMapPhotos(request, env, url, ctx) {
       month: r.month,
       day: r.day,
     }));
-    const response = new Response(JSON.stringify({ photos }), {
-      headers: {
-        "content-type": "application/json; charset=utf-8",
-        "cache-control": "public, max-age=1800",
-      },
-    });
+    const response = json({ photos }, { headers: { "cache-control": "public, max-age=1800" } });
     return cacheStore(ctx, cacheKey, response);
   }
 
   if (!/^\d{2}$/.test(month || "") || !/^\d{2}$/.test(day || "")) {
-    return new Response(JSON.stringify({ error: "month/day required, format MM/DD" }), {
-      status: 400,
-      headers: { "content-type": "application/json; charset=utf-8" },
-    });
+    return json({ error: "month/day required, format MM/DD" }, { status: 400 });
   }
 
   const cacheKey = mapPhotosDayCacheKey(month, day);
@@ -3466,12 +3308,7 @@ async function handleMapPhotos(request, env, url, ctx) {
     })
     .filter(Boolean);
 
-  const response = new Response(JSON.stringify({ month, day, photos }), {
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "public, max-age=1800",
-    },
-  });
+  const response = json({ month, day, photos }, { headers: { "cache-control": "public, max-age=1800" } });
   return cacheStore(ctx, cacheKey, response);
 }
 

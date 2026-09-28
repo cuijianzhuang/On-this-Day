@@ -46,3 +46,11 @@ function withCacheStatus(response, status) {
   tagged.headers.set("x-edge-cache", status);
   return tagged;
 }
+
+// JSON 响应。worker.js 里原来有近 30 处手写 new Response(JSON.stringify(...), { headers: { "content-type": ... } })，
+// content-type 有的带 charset 有的不带；这里统一成带 charset 的版本，其余头（cache-control、CORS）照常从 init 传进来
+export function json(data, init = {}) {
+  const headers = new Headers(init.headers);
+  headers.set("content-type", "application/json; charset=utf-8");
+  return new Response(JSON.stringify(data), { ...init, headers });
+}
