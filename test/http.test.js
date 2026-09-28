@@ -121,3 +121,13 @@ test("cachePut 不看状态码：/thumb/ 的 302 重定向也要能缓存", asyn
   assert.equal(hit.headers.get("location"), "https://previews.example/x.webp");
   assert.equal(redirect.status, 302, "调用方手里的 response 仍可照常返回");
 });
+
+test("json() 统一 content-type，保留状态码和其它头", async () => {
+  const { json } = await import("../src/http.js");
+  const r = json({ a: 1 }, { status: 400, headers: { "cache-control": "no-store", "content-type": "text/plain" } });
+  assert.equal(r.status, 400);
+  assert.equal(r.headers.get("content-type"), "application/json; charset=utf-8");
+  assert.equal(r.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await r.json(), { a: 1 });
+  assert.equal(json([1]).status, 200);
+});
