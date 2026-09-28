@@ -8,27 +8,14 @@
     src: url('/vendor/space-grotesk-latin.woff2') format('woff2');
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
   }
-  :root {
-    color-scheme: dark;
-    /* 暖调深色：纯黑配米白相纸那套换掉之后，底色带一点暖棕，照片本身才是画面里最亮的东西 */
-    --bg: #0e0d0b;
-    --surface: #1a1814;
-    --surface-2: #24211c;
-    --text: #f2ede4;
-    --text-2: #b3ab9d;
-    --muted: #7d766b;
-    --line: rgba(242,237,228,0.09);
-    --accent: #e3b56a;
-    --serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", serif;
-    --mono: 'Space Grotesk', "SF Pro Display", -apple-system, sans-serif;
-    --page-w: 1120px;
-  }
+  /* 颜色、字体等 token 在 /ui.css 里（全站共用），这里只补首页自己的 */
+  :root { color-scheme: dark; --page-w: 1120px; }
   * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
   /* 键盘可达性：:focus-visible 只在键盘导航（Tab）时出现，鼠标点击不会触发，
      所以补上它不会改变任何鼠标操作下的观感，但键盘用户终于能看见自己走到哪儿了 */
   :focus-visible {
     /* 只画轮廓，不碰 border-radius——现代浏览器的 outline 会自动贴合元素圆角，
-       在这儿硬写一个半径反而会把 .date-toggle 这种正圆按钮聚焦时压成圆角方块 */
+       在这儿硬写一个半径反而会把 .icon-btn 这种正圆按钮聚焦时压成圆角方块 */
     outline: 2px solid #ffd9a0;
     outline-offset: 2px;
   }
@@ -133,244 +120,125 @@
   body.sun-on h1 .h1-sub,
   body.sun-on .year-num,
   body.sun-on .year-meta,
-  body.sun-on .sunlight-switch,
   body.sun-on .empty,
   body.sun-on .daily-poem,
   body.sun-on .lightbox-caption { color: #1c1c1e; text-shadow: 0 1px 8px rgba(255,255,255,0.5); }
-  body.sun-on .date-toggle {
-    color: #1c1c1e; background: rgba(255,255,255,0.65);
-    box-shadow: 0 2px 10px rgba(0,0,0,0.18);
-  }
-  body.sun-on .date-toggle:hover { background: rgba(255,255,255,0.85); }
-  body.sun-on .switch .track { background: rgba(0,0,0,0.22); box-shadow: 0 1px 4px rgba(0,0,0,0.15); }
-  body.sun-on .switch .track::before { background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
-  /* 右上角这排按钮固定在视口上，滚到哪都能切日期/搜索——以前跟着标题一起滚走，看到一半想换天得先滚回顶部 */
+  /* ── 右上角工具栏 ───────────────────────────────────────────────────────────
+     固定在视口上，滚到哪都能切日期/搜索。按钮本身的长相在 /ui.css（.toolbar/.icon-btn），
+     这里只管位置和首页特有的两个控件：阳光开关、公/农历滑块。
+     工具栏自带深色毛玻璃底，阳光模式（浅色背景）下也不用再单独换一套配色 */
   .header-controls {
-    position: fixed; top: 13px; right: max(1.2rem, env(safe-area-inset-right));
-    display: flex; align-items: center; gap: 0.5rem;
+    position: fixed; top: 11px; right: max(1rem, env(safe-area-inset-right));
+    display: flex; align-items: center;
   }
-  .date-toggle {
-    width: 32px; height: 32px; border-radius: 50%; border: none;
-    background: rgba(255,255,255,0.07); backdrop-filter: blur(10px);
-    color: var(--text-2); cursor: pointer; display: flex; align-items: center; justify-content: center;
-    transition: background 0.15s ease, color 0.15s ease; flex-shrink: 0;
-  }
-  .date-toggle:hover { background: rgba(255,255,255,0.14); color: var(--text); }
-  .date-toggle:disabled { opacity: 0.35; cursor: default; }
-  .date-toggle:disabled:hover { background: rgba(255,255,255,0.08); }
-  .date-toggle svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  /* 阳光开关：原来是"KEEP THE SUN OUT"全大写英文 + iOS 滑块，现在是一个太阳图标按钮，
+     开着是金色高亮，关掉是普通灰色图标。真正的状态仍在里面那个隐藏的 checkbox 上 */
+  .sun-btn { position: relative; }
+  .sun-btn:has(input:checked) { color: var(--accent); background: var(--accent-soft); }
+  .sun-btn:has(input:checked) svg { filter: drop-shadow(0 0 4px rgba(227,181,106,0.6)); }
+  .sun-btn:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-  /* 公/农历法切换：迷你分段滑块，和旁边 32px 圆钮同高。
-     滑块圆片盖在当前选中的字下面——公历白片、农历金片，
-     跟左侧太阳开关一样"一眼看出当前在哪边、点一下去另一边" */
+  /* 公/农历：迷你分段滑块，嵌在工具栏里跟图标按钮同高 */
   .calendar-mode-toggle {
-    position: relative; height: 32px; padding: 0 3px; border: none; border-radius: 16px;
+    position: relative; height: 30px; padding: 0 2px; margin: 0 2px; border: none; border-radius: 15px;
     display: flex; align-items: center; flex-shrink: 0;
-    background: rgba(255,255,255,0.08); backdrop-filter: blur(10px);
+    background: rgba(255,255,255,0.06);
     cursor: pointer; font-family: inherit;
     transition: background 0.15s ease;
   }
-  .calendar-mode-toggle:hover { background: rgba(255,255,255,0.16); }
-  .calendar-mode-toggle:active .calendar-mode-option { transform: scale(0.94); }
+  .calendar-mode-toggle:hover { background: rgba(255,255,255,0.1); }
   .calendar-mode-toggle::before {
-    content: ''; position: absolute; top: 3px; left: 3px; width: 26px; height: 26px; border-radius: 50%;
-    background: rgba(255,255,255,0.92); box-shadow: 0 1px 4px rgba(0,0,0,0.35);
-    transition: transform 0.24s cubic-bezier(0.3, 1.35, 0.6, 1), background 0.2s ease, box-shadow 0.2s ease;
+    content: ''; position: absolute; top: 2px; left: 2px; width: 26px; height: 26px; border-radius: 50%;
+    background: var(--text);
+    transition: transform 0.24s cubic-bezier(0.3, 1.35, 0.6, 1), background 0.2s ease;
   }
-  .calendar-mode-toggle.active::before {
-    transform: translateX(26px);
-    background: linear-gradient(135deg, #f7d778, #e8b054);
-    box-shadow: 0 1px 4px rgba(0,0,0,0.35), 0 0 12px rgba(247,199,100,0.45);
-  }
+  .calendar-mode-toggle.active::before { transform: translateX(26px); background: var(--accent); }
   .calendar-mode-option {
     position: relative; z-index: 1; width: 26px; height: 26px; border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
-    font-size: 0.7rem; font-weight: 600; line-height: 1; color: #98989d;
-    transition: color 0.2s ease, transform 0.12s ease;
+    font-size: 0.7rem; font-weight: 600; line-height: 1; color: var(--text-2);
+    transition: color 0.2s ease;
   }
-  .calendar-mode-toggle .solar { color: #1c1c1e; }
-  .calendar-mode-toggle.active .solar { color: #98989d; }
-  .calendar-mode-toggle.active .lunar { color: #4a3808; }
-  /* 浅色模式跟左边太阳开关同一套语言：深色轨道 + 白色滑片。
-     之前轨道用半透明白，白滑片贴上去直接隐形——公历侧看起来像"按钮丢了" */
-  body.sun-on .calendar-mode-toggle { background: rgba(0,0,0,0.22); box-shadow: 0 1px 4px rgba(0,0,0,0.15); }
-  body.sun-on .calendar-mode-toggle:hover { background: rgba(0,0,0,0.3); }
-  body.sun-on .calendar-mode-toggle::before { background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
-  body.sun-on .calendar-mode-toggle.active::before { background: linear-gradient(135deg, #f4cf6a, #e0a83e); }
-  body.sun-on .calendar-mode-option { color: rgba(255,255,255,0.85); }
-  body.sun-on .calendar-mode-toggle .solar { color: #1c1c1e; }
-  body.sun-on .calendar-mode-toggle.active .solar { color: rgba(255,255,255,0.85); }
-  body.sun-on .calendar-mode-toggle.active .lunar { color: #4a3808; }
-  .date-picker {
-    position: fixed; top: 56px; right: max(1.2rem, env(safe-area-inset-right)); width: 268px;
-    display: flex; flex-direction: column; gap: 0.7rem;
-    background: rgba(24,24,26,0.98);
-    padding: 1rem 1.1rem 1.1rem; border-radius: 16px;
-    box-shadow: 0 16px 36px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06);
-    z-index: 10; text-align: left; isolation: isolate;
-    transform-origin: top right;
-    opacity: 0; transform: scale(0.92) translateY(-6px);
-    visibility: hidden; pointer-events: none;
-    transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s;
-  }
-  .date-picker::before {
-    content: ''; position: absolute; top: -5px; right: 22px;
-    width: 10px; height: 10px; background: rgba(24,24,26,0.98);
-    transform: rotate(45deg); border-radius: 2px;
-  }
-  .date-picker.open {
-    opacity: 1; transform: scale(1) translateY(0);
-    visibility: visible; pointer-events: auto;
-  }
-  .year-menu {
-    position: fixed; top: 56px; right: max(1.2rem, env(safe-area-inset-right)); min-width: 180px;
-    background: rgba(24,24,26,0.98); border-radius: 16px; padding: 0.4rem;
-    box-shadow: 0 16px 36px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06);
-    z-index: 10; isolation: isolate; transform-origin: top right;
-    opacity: 0; transform: scale(0.92) translateY(-6px);
-    visibility: hidden; pointer-events: none;
-    transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s;
-  }
-  .year-menu.open { opacity: 1; transform: scale(1) translateY(0); visibility: visible; pointer-events: auto; }
-  .year-menu button {
-    display: flex; align-items: baseline; gap: 0.5rem; width: 100%; text-align: left;
-    background: none; border: none; padding: 0.55rem 0.8rem; cursor: pointer;
-    border-radius: 10px; color: #f5f5f7; font-family: inherit; transition: background 0.15s ease;
-    opacity: 0; transform: translateY(6px);
-  }
-  /* 列表项不是一次性全部弹出来，每一项错开一点时间依次浮现，靠 JS 给每个按钮算好的 animation-delay 错开节奏 */
-  .year-menu.open button { animation: yearItemIn 0.32s ease forwards; }
-  @keyframes yearItemIn { to { opacity: 1; transform: translateY(0); } }
-  .year-menu button:hover { background: rgba(255,255,255,0.08); }
-  .year-menu button .y { font-weight: 600; font-size: 0.92rem; }
-  .year-menu button .c { font-size: 0.72rem; color: #8a8a8f; font-family: 'Space Grotesk', sans-serif; }
-  /* 阳光模式下不再单独把这个菜单换成白底：顶部四个弹层（日历 / 搜索 / 年份 / 更多功能）
-     统一用同一种深色面板，并排点开时不再像是两套设计 */
+  .calendar-mode-toggle .solar { color: #1a1814; }
+  .calendar-mode-toggle.active .solar { color: var(--text-2); }
+  .calendar-mode-toggle.active .lunar { color: #2a1d06; }
 
-  /* "更多功能"下拉：年度回忆/全家最爱/足迹地图/数据总览/运维控制台入口，跟 .year-menu 同一套弹出风格，
-     行元素换成 <a> 因为这些是真实跳转链接（保留右键"新标签页打开"这类原生行为） */
-  .nav-menu {
-    position: fixed; top: 56px; right: max(1.2rem, env(safe-area-inset-right)); min-width: 172px;
-    background: rgba(24,24,26,0.98); border-radius: 16px; padding: 0.4rem;
-    box-shadow: 0 16px 36px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06);
-    z-index: 10; isolation: isolate; transform-origin: top right;
-    opacity: 0; transform: scale(0.92) translateY(-6px);
-    visibility: hidden; pointer-events: none;
-    transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s;
+  /* ── 四个下拉面板：外观在 /ui.css 的 .popover / .menu，这里只定位置和尺寸 ── */
+  .date-picker, .year-menu, .nav-menu, .search-panel {
+    position: fixed; top: 58px; right: max(1rem, env(safe-area-inset-right)); z-index: 30;
   }
-  .nav-menu.open { opacity: 1; transform: scale(1) translateY(0); visibility: visible; pointer-events: auto; }
-  .nav-menu a {
-    display: flex; align-items: center; gap: 0.65rem; width: 100%;
-    padding: 0.55rem 0.8rem; text-decoration: none;
-    border-radius: 10px; color: #f5f5f7; font-size: 0.85rem; transition: background 0.15s ease;
-  }
-  .nav-menu a:hover { background: rgba(255,255,255,0.08); }
-  .nav-menu .nm-icon {
-    width: 16px; height: 16px; flex-shrink: 0;
-    fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
-  }
+  .nav-menu { width: 248px; }
+  .year-menu { width: 220px; max-height: min(70vh, 460px); overflow-y: auto; scrollbar-width: none; }
+  .year-menu::-webkit-scrollbar { display: none; }
+  .year-menu .mi-title { font-family: var(--serif); font-size: 1rem; font-weight: 600; }
+  /* 年份逐条浮现 */
+  .year-menu .menu-item { opacity: 0; transform: translateY(4px); }
+  .year-menu.open .menu-item { animation: yearItemIn 0.28s ease forwards; }
+  @keyframes yearItemIn { to { opacity: 1; transform: none; } }
 
-  /* 照片搜索面板：跟 .date-picker 同一套弹出风格 */
-  .search-panel {
-    position: fixed; top: 56px; right: max(1.2rem, env(safe-area-inset-right)); width: 320px;
-    display: flex; flex-direction: column; gap: 0.6rem;
-    background: rgba(24,24,26,0.98);
-    padding: 0.9rem; border-radius: 16px;
-    box-shadow: 0 16px 36px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06);
-    z-index: 10; text-align: left; isolation: isolate;
-    transform-origin: top right;
-    opacity: 0; transform: scale(0.92) translateY(-6px);
-    visibility: hidden; pointer-events: none;
-    transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s;
-  }
-  .search-panel.open {
-    opacity: 1; transform: scale(1) translateY(0);
-    visibility: visible; pointer-events: auto;
-  }
-  .search-panel input {
-    width: 100%; border: none; border-radius: 10px;
-    background: rgba(255,255,255,0.08); color: #f5f5f7;
-    padding: 0.55rem 0.8rem; font-size: 0.88rem; font-family: inherit;
-    outline: none;
-  }
-  .search-panel input::placeholder { color: #6e6e73; }
-  .search-panel input:focus { background: rgba(255,255,255,0.12); }
-  .search-results { max-height: 50vh; overflow-y: auto; scrollbar-width: none; display: flex; flex-direction: column; gap: 2px; }
-  .search-results::-webkit-scrollbar { display: none; }
-  .search-hint { color: #8a8a8f; font-size: 0.78rem; padding: 0.6rem 0.3rem; }
-  .search-row {
-    display: flex; align-items: center; gap: 0.65rem;
-    padding: 0.4rem; border-radius: 10px; text-decoration: none;
-    transition: background 0.15s ease;
-  }
-  .search-row:hover { background: rgba(255,255,255,0.07); }
-  .search-row img {
-    width: 44px; height: 44px; border-radius: 8px; object-fit: cover; flex-shrink: 0;
-    background: #1c1c1e;
-  }
-  .sr-text { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
-  .sr-title {
-    color: #e8e8ec; font-size: 0.8rem; line-height: 1.35;
-    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-  }
-  .sr-meta { color: #8a8a8f; font-size: 0.68rem; font-family: 'Space Grotesk', sans-serif; }
-  @media (max-width: 640px) {
-    .search-panel { top: 56px; right: 0.75rem; left: 0.75rem; width: auto; }
-  }
-
+  .date-picker { width: 284px; padding: 0.9rem 1rem 1rem; display: flex; flex-direction: column; gap: 0.6rem; }
   .cal-header { display: flex; align-items: center; justify-content: space-between; }
-  .cal-header .cal-month-label {
-    font-size: 0.85rem; font-weight: 600; color: #f5f5f7; letter-spacing: -0.005em;
-  }
-  .cal-nav-btn {
-    width: 24px; height: 24px; border-radius: 50%; border: none;
-    background: rgba(255,255,255,0.07); color: #c7c7cc; cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 0.85rem; line-height: 1; transition: background 0.15s ease;
-  }
-  .cal-nav-btn:hover { background: rgba(255,255,255,0.16); color: #f5f5f7; }
+  .cal-header .cal-month-label { font-family: var(--serif); font-size: 0.95rem; font-weight: 600; color: var(--text); }
+  .cal-nav-btn { --ctl: 30px; }
+  .cal-nav-btn svg { width: 16px; height: 16px; }
   .cal-weekdays, .cal-grid {
     display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; text-align: center;
   }
-  .cal-weekdays span { font-size: 0.68rem; color: #6e6e73; padding: 0.2rem 0; }
+  .cal-weekdays span { font-size: 0.68rem; color: var(--muted); padding: 0.2rem 0; }
   .cal-grid button {
     aspect-ratio: 1; width: 100%; border: none; border-radius: 50%; background: transparent;
-    color: #d6d6da; font-size: 0.78rem; cursor: pointer; transition: background 0.15s ease, color 0.15s ease;
+    color: var(--text-2); font-size: 0.8rem; font-family: var(--mono); cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
   }
   .cal-grid button:disabled { visibility: hidden; cursor: default; }
-  .cal-grid button:hover:not(:disabled) { background: rgba(255,255,255,0.1); }
-  /* 强调色跟阳光开关、农历滑片同一套暖金色——这里原来是 iOS 默认蓝，是全站唯一的冷色 */
-  .cal-grid button.today { color: #f0c064; font-weight: 700; }
-  .cal-grid button.selected { background: linear-gradient(135deg, #f7d778, #e0a64e); color: #3a2a06; font-weight: 700; }
-  .date-picker .row { display: flex; gap: 0.5rem; }
-  .date-picker .action-btn {
-    display: flex; align-items: center; justify-content: center;
-    border: none; border-radius: 9px; cursor: pointer; font-weight: 600;
-    font-size: 0.85rem; padding: 0.5rem 0.8rem; transition: background 0.15s ease, opacity 0.15s ease;
-    text-decoration: none;
+  .cal-grid button:hover:not(:disabled) { background: rgba(255,255,255,0.08); color: var(--text); }
+  .cal-grid button.today { color: var(--accent); font-weight: 700; }
+  .cal-grid button.selected { background: var(--accent); color: #2a1d06; font-weight: 700; }
+  .date-picker .row { display: flex; }
+  .date-picker #datePickerToday { width: 100%; }
+
+  .search-panel { width: 340px; padding: 0.7rem; display: flex; flex-direction: column; gap: 0.5rem; }
+  .search-field {
+    display: flex; align-items: center; gap: 0.5rem;
+    height: 40px; padding: 0 0.8rem; border-radius: 10px;
+    background: rgba(255,255,255,0.06); box-shadow: inset 0 0 0 1px var(--line);
+    transition: box-shadow 0.15s ease, background 0.15s ease;
+  }
+  .search-field:focus-within { background: rgba(255,255,255,0.08); box-shadow: inset 0 0 0 1px rgba(227,181,106,0.5); }
+  .search-field svg { width: 16px; height: 16px; flex-shrink: 0; fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; }
+  .search-field input {
+    flex: 1; min-width: 0; height: 100%; border: none; background: none; outline: none;
+    color: var(--text); font-size: 0.88rem; font-family: inherit;
+  }
+  .search-field input::placeholder { color: var(--muted); }
+  .search-field input::-webkit-search-cancel-button { filter: invert(0.7); }
+  .search-results { max-height: 50vh; overflow-y: auto; scrollbar-width: none; display: flex; flex-direction: column; gap: 2px; }
+  .search-results:empty { display: none; }
+  .search-results::-webkit-scrollbar { display: none; }
+  .search-hint { color: var(--muted); font-size: 0.78rem; padding: 0.5rem 0.4rem; }
+  .search-row {
+    display: flex; align-items: center; gap: 0.7rem;
+    padding: 0.4rem; border-radius: 10px; text-decoration: none;
+    transition: background 0.12s ease;
+  }
+  .search-row:hover { background: rgba(255,255,255,0.06); }
+  .search-row img {
+    width: 44px; height: 44px; border-radius: 8px; object-fit: cover; flex-shrink: 0;
+    background: var(--surface-2);
+  }
+  .sr-text { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+  .sr-title {
+    color: var(--text); font-size: 0.8rem; line-height: 1.35;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .sr-meta { color: var(--muted); font-size: 0.68rem; font-family: var(--mono); }
+  /* 手机上四个面板都铺满屏宽（左右各留一点边），不会有一半伸出屏幕外 */
+  @media (max-width: 640px) {
+    .header-controls { top: max(10px, env(safe-area-inset-top)); right: max(0.6rem, env(safe-area-inset-right)); }
+    .date-picker, .year-menu, .nav-menu, .search-panel { top: 56px; left: 0.6rem; right: 0.6rem; width: auto; }
+    .toolbar .icon-btn { --ctl: 36px; }
   }
 
-  .sunlight-switch {
-    display: flex; align-items: center; gap: 0.6rem; flex-shrink: 0;
-    color: #8a8a8f; font-family: 'Space Grotesk', sans-serif; font-size: 0.7rem;
-    letter-spacing: 0.22em; font-weight: 500; text-transform: uppercase;
-  }
-  .switch { position: relative; display: inline-block; width: 46px; height: 26px; flex-shrink: 0; }
-  .switch input { opacity: 0; width: 0; height: 0; }
-  .switch .track {
-    position: absolute; inset: 0; background: rgba(255,255,255,0.22); border-radius: 13px;
-    cursor: pointer; transition: background 0.3s ease;
-    box-shadow: inset 0 1px 3px rgba(0,0,0,0.22);
-  }
-  .switch .track::before {
-    content: ''; position: absolute; left: 3px; top: 3px; width: 20px; height: 20px;
-    background: #fff; border-radius: 50%; box-shadow: 0 1px 4px rgba(0,0,0,0.3);
-    transition: transform 0.3s cubic-bezier(0.4, 1.3, 0.5, 1);
-  }
-  .switch input:checked + .track { background: #e0a64e; }
-  .switch input:checked + .track::before { transform: translateX(20px); }
-  .date-picker #datePickerToday { width: 100%; background: rgba(255,255,255,0.08); color: #c7c7cc; }
-  .date-picker #datePickerToday:hover { background: rgba(255,255,255,0.16); }
   .eyebrow {
     font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.32em;
     text-transform: uppercase; color: var(--accent); margin-bottom: 1.1rem; font-weight: 500;
@@ -389,8 +257,7 @@
     color: var(--text-2);
   }
   /* 阳光模式要等叶影视频第一帧出来才切成深色字（见 app.js syncSunMode），切换时渐变过去 */
-  h1, h1 .date, h1 .h1-sub, .eyebrow, .subtitle, .daily-poem, .year-num, .year-meta,
-  .sunlight-switch, .empty {
+  h1, h1 .date, h1 .h1-sub, .eyebrow, .subtitle, .daily-poem, .year-num, .year-meta, .empty {
     transition: color 0.8s ease, text-shadow 0.8s ease;
   }
   h1 .date { color: var(--text); }
@@ -626,14 +493,7 @@
     opacity: 0; transition: opacity 0.3s ease;
   }
   .online-avatar img.loaded { opacity: 1; }
-  .show-more-btn {
-    display: flex; align-items: center; gap: 0.35rem; margin: 1rem 0 0;
-    background: transparent; border: 1px solid var(--line);
-    color: var(--text-2); padding: 0.5rem 1.1rem; border-radius: 999px;
-    font-size: 0.8rem; font-family: inherit; cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
-  }
-  .show-more-btn:hover { background: rgba(255,255,255,0.05); color: var(--text); border-color: rgba(242,237,228,0.2); }
+  .show-more-btn { margin-top: 1rem; }
   body.sun-on .show-more-btn { color: #3a3a3c; border-color: rgba(0,0,0,0.15); background: rgba(255,255,255,0.35); }
   body.sun-on .show-more-btn:hover { background: rgba(255,255,255,0.6); color: #1c1c1e; }
   .empty {
@@ -828,10 +688,11 @@
   .lp-note-save {
     align-self: flex-end; border: none; font-size: 0.72rem; font-family: inherit;
     padding: 0.32rem 0.85rem; border-radius: 999px; cursor: pointer;
-    background: rgba(255,255,255,0.85); color: #1c1c1e; font-weight: 600;
-    transition: background 0.15s ease;
+    background: var(--accent); color: #2a1d06; font-weight: 600;
+    transition: filter 0.15s ease;
   }
-  .lp-note-save:hover { background: #fff; }
+  .lp-note-save:hover { filter: brightness(1.08); }
+  .lp-note-save:disabled { opacity: 0.5; cursor: default; }
 
   /* 直方图 */
   .lp-histogram-wrap {
@@ -917,16 +778,15 @@
   }
   .lb-react-btn {
     display: flex; align-items: center; gap: 0.45rem;
-    background: rgba(18,18,22,0.72); backdrop-filter: blur(20px) saturate(1.6);
-    border: 1px solid rgba(255,255,255,0.13); border-radius: 999px;
-    color: #d8d8dc; cursor: pointer; font-family: inherit;
+    background: var(--glass); backdrop-filter: blur(20px) saturate(1.4);
+    border: none; box-shadow: 0 0 0 1px var(--line), 0 4px 22px rgba(0,0,0,0.45); border-radius: 999px;
+    color: var(--text); cursor: pointer; font-family: inherit;
     padding: 0.38rem 0.85rem 0.38rem 0.6rem;
     font-size: 0.8rem; font-weight: 500;
-    transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
-    box-shadow: 0 4px 22px rgba(0,0,0,0.45);
+    transition: background 0.15s ease, transform 0.12s ease;
     -webkit-tap-highlight-color: transparent;
   }
-  .lb-react-btn:hover { background: rgba(36,36,44,0.88); border-color: rgba(255,255,255,0.22); transform: scale(1.04); }
+  .lb-react-btn:hover { background: rgba(40,37,31,0.88); }
   .lb-react-btn:active { transform: scale(0.95); }
   .lb-react-icon { font-size: 1rem; line-height: 1; }
   .lb-react-label { letter-spacing: 0.01em; }
@@ -1033,59 +893,46 @@
     border-radius: 50%; animation: lbProgSpin 0.7s linear infinite;
   }
 
-  .lightbox-btn {
-    width: 38px; height: 38px; border-radius: 50%; display: flex;
-    align-items: center; justify-content: center; cursor: pointer;
-    background: rgba(255,255,255,0.1); backdrop-filter: blur(10px);
-    color: #fff; border: none; text-decoration: none;
-    transition: background 0.15s ease, transform 0.15s ease;
-  }
-  .lightbox-btn:hover { background: rgba(255,255,255,0.22); transform: scale(1.06); }
-  .lightbox-btn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  .lightbox-btn.close svg { width: 16px; height: 16px; }
+  /* 灯箱顶部按钮：长相走 /ui.css 的 .icon-btn.glass，这里只放大一点、图标加粗 */
+  .lightbox-btn { --ctl: 38px; color: #fff; }
+  .lightbox-btn svg { width: 17px; height: 17px; stroke-width: 2; }
   .toast {
     position: fixed; bottom: 2.2rem; left: 50%; transform: translateX(-50%) translateY(10px);
     background: rgba(40,40,42,0.95); color: #fff; padding: 0.55rem 1.1rem; border-radius: 980px;
     font-size: 0.85rem; opacity: 0; pointer-events: none; transition: opacity 0.25s ease, transform 0.25s ease;
     z-index: 60;
   }
+  /* 回到顶部：.icon-btn.glass，滚过一屏才出现 */
   .back-to-top {
-    position: fixed; bottom: 2rem; right: 1.6rem; z-index: 40;
-    width: 42px; height: 42px; border-radius: 50%; border: none;
-    background: rgba(255,255,255,0.1); backdrop-filter: blur(10px);
-    color: #c7c7cc; cursor: pointer; display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+    position: fixed; bottom: 2rem; right: max(1.2rem, env(safe-area-inset-right)); z-index: 40; --ctl: 42px;
     opacity: 0; transform: translateY(12px); pointer-events: none;
-    transition: opacity 0.25s ease, transform 0.25s ease, background 0.15s ease, color 0.15s ease;
+    transition: opacity 0.25s ease, transform 0.25s ease, background 0.15s ease;
   }
-  .back-to-top.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
-  .back-to-top:hover { background: rgba(255,255,255,0.18); color: #f5f5f7; }
-  .back-to-top svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  body.sun-on .back-to-top { background: rgba(255,255,255,0.65); color: #3a3a3c; box-shadow: 0 4px 14px rgba(0,0,0,0.15); }
-  body.sun-on .back-to-top:hover { background: rgba(255,255,255,0.85); color: #1c1c1e; }
+  .back-to-top.show { opacity: 1; transform: none; pointer-events: auto; }
   @media (max-width: 640px) {
-    .back-to-top { bottom: 1.2rem; right: 1rem; width: 38px; height: 38px; }
+    .back-to-top { bottom: max(1.2rem, env(safe-area-inset-bottom)); right: max(0.9rem, env(safe-area-inset-right)); --ctl: 40px; }
   }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  /* 左右切换：原来是两个裸的 ‹ › 字符，现在是跟顶部按钮同一套的圆形毛玻璃按钮 */
   .lightbox-nav {
-    position: absolute; top: 50%; transform: translateY(-50%); color: #fff; z-index: 2;
-    font-size: 2rem; cursor: pointer; opacity: 0.55; padding: 0.5rem; user-select: none;
-    transition: opacity 0.15s ease;
+    position: absolute; top: 50%; z-index: 2; --ctl: 44px; color: #fff;
+    translate: 0 -50%; opacity: 0.8;
   }
   .lightbox-nav:hover { opacity: 1; }
-  .lightbox-nav.prev { left: 0.5rem; }
+  .lightbox-nav svg { width: 22px; height: 22px; stroke-width: 2; }
+  .lightbox-nav.prev { left: 1rem; }
   /* 右箭头要在信息面板左侧，避免渲染在面板上 */
-  .lightbox-nav.next { right: calc(390px + 0.5rem); }
+  .lightbox-nav.next { right: calc(390px + 1rem); }
   /* ⓘ 收起详细信息面板后，照片占满整个灯箱，右箭头贴回右缘。
      图片的 max-width 基础值给面板预留了 390px——收起后必须一起放开，
      不然 iPad 竖屏上照片只剩 300 来像素宽的一小块 */
   .lightbox.panel-hidden .lightbox-panel { display: none; }
-  .lightbox.panel-hidden .lightbox-nav.next { right: 0.5rem; }
+  .lightbox.panel-hidden .lightbox-nav.next { right: 1rem; }
   .lightbox.panel-hidden .lightbox-stage img,
   .lightbox.panel-hidden .lightbox-stage video {
     max-width: calc(100vw - 7rem);
   }
-  .lightbox-btn.active { color: #fff; background: rgba(255,255,255,0.24); }
+  .lightbox-btn.active { color: var(--accent); background: rgba(227,181,106,0.24); }
 
   @media (max-width: 640px) {
     body { padding: 0 0 3rem; }
@@ -1144,7 +991,7 @@
       background: rgba(0,0,0,0.48); backdrop-filter: blur(24px) saturate(1.2);
       z-index: 202;
     }
-    .lightbox-btn { width: 36px; height: 36px; }
+    .lightbox-btn { --ctl: 36px; }
 
     /* 实况角标 + 声音开关放进顶栏左侧，flex:1 把操作按钮推到右边 */
     .lb-live-bar, .lb-live-bar:empty { position: static; display: flex; flex: 1; align-items: center; }
@@ -1180,24 +1027,8 @@
     /* 胶片卷 */
     .lightbox-filmstrip { height: 64px; }
     .lfs-item { height: 46px; width: 46px; }
-    .header-controls { top: max(12px, env(safe-area-inset-top)); right: max(0.75rem, env(safe-area-inset-right)); gap: 0.4rem; }
-    .date-toggle, .sunlight-switch .switch { transform: scale(1.05); }
-    .sunlight-switch span { display: none; }
-    .date-picker { top: 56px; right: 0.75rem; left: 0.75rem; width: auto; }
     .back-to-top { bottom: max(1.2rem, env(safe-area-inset-bottom)); right: max(1rem, env(safe-area-inset-right)); }
     .online-badge { top: max(12px, env(safe-area-inset-top)); left: max(0.75rem, env(safe-area-inset-left)); }
-    .cell, .date-toggle, .lightbox-btn, .lightbox-nav, .sunlight-switch .track {
-      -webkit-tap-highlight-color: transparent;
-    }
-    /* 移动端没有 hover，「▶ 视频」角标和 ❤️ 表态按钮不会像桌面那样一进一出错开，
-       两个都常驻右下角就直接叠成一团——把角标挪到左下角，各占一边 */
-    /* 顶部这几个下拉原来只给 .date-picker/.search-panel 调过位置，
-       .year-menu/.nav-menu 还停在桌面的 right:1.4rem，而触发它们的按钮已经跟着
-       .header-controls 移到了 right:0.8rem——弹出来跟按钮差着大半厘米，对不齐 */
-    .year-menu, .nav-menu {
-      top: 56px;
-      right: max(0.75rem, env(safe-area-inset-right));
-    }
   }
   /* ── 无障碍：尊重系统的"减弱动态效果" ─────────────────────────────────────
      这个页面常驻的无限循环动画很多——照片墙的加载微光、光斑的
@@ -1223,7 +1054,7 @@
     .lightbox-stage img.fx-left, .lightbox-stage video.fx-left,
     .lightbox-stage img.fx-right, .lightbox-stage video.fx-right { transform: none !important; }
     /* 菜单项逐条浮现改成直接显示 */
-    .year-menu.open button { animation: none !important; opacity: 1 !important; transform: none !important; }
+    .year-menu.open .menu-item { animation: none !important; opacity: 1 !important; transform: none !important; }
     .lb-live-bar.playing .lp-live-icon { animation: none !important; }
     .online-badge { animation: none !important; }
   }

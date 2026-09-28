@@ -633,7 +633,7 @@
         const m = String(calViewMonth + 1).padStart(2, '0');
         const d = String(btn.dataset.day).padStart(2, '0');
         navigateToDate(m, d);
-        datePicker.classList.remove('open');
+        closeAllHeaderMenus();
       };
     });
   }
@@ -673,61 +673,59 @@
     renderCalendar();
   };
 
-  // 头部这几个下拉（日期/年份/更多功能/搜索）共享同一小块屏幕区域，各自独立 toggle 的话
-  // 一次能同时开好几个，彼此叠在一起完全遮挡——所以开任意一个之前，先把其余全关掉，
-  // 同一时刻只允许一个下拉展开。closeAllHeaderMenus 引用的几个 const 会在下面陆续声明，
-  // 但这个函数只在点击时才真正执行，那时候全部已经初始化完毕，不受声明顺序影响
-  function closeAllHeaderMenus(except) {
-    if (datePicker !== except) datePicker.classList.remove('open');
-    if (yearMenu !== except) yearMenu.classList.remove('open');
-    if (navMenu !== except) navMenu.classList.remove('open');
-    if (searchPanel !== except) searchPanel.classList.remove('open');
+  // ── 顶部四个下拉面板（日期 / 年份 / 更多功能 / 搜索）─────────────────────────────
+  // 以前每个面板各写一遍 onclick、各写一段"点外面关闭"，四份几乎一样的代码。现在统一登记：
+  //   · 同一时间只开一个（它们挤在同一块屏幕区域，同时开会互相盖住）
+  //   · 点面板和按钮以外的地方、按 Esc 都会关
+  //   · 按钮跟着面板高亮，并同步 aria-expanded（读屏软件能知道菜单开着没有）
+  const HEADER_MENUS = [];
+  function setMenuOpen(m, open) {
+    m.pop.classList.toggle('open', open);
+    m.btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open && m.onOpen) m.onOpen();
   }
-
-  dateToggle.onclick = (e) => {
-    e.stopPropagation();
-    const willOpen = !datePicker.classList.contains('open');
+  function closeAllHeaderMenus(except) {
+    for (const m of HEADER_MENUS) if (m.pop !== except && m.pop.classList.contains('open')) setMenuOpen(m, false);
+  }
+  function bindHeaderMenu(btn, pop, onOpen) {
+    const m = { btn, pop, onOpen };
+    HEADER_MENUS.push(m);
+    btn.setAttribute('aria-haspopup', 'true');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const willOpen = !pop.classList.contains('open');
+      closeAllHeaderMenus();
+      if (willOpen) setMenuOpen(m, true);
+    };
+  }
+  document.addEventListener('click', (e) => {
+    for (const m of HEADER_MENUS) {
+      if (m.pop.classList.contains('open') && !m.pop.contains(e.target) && !m.btn.contains(e.target)) setMenuOpen(m, false);
+    }
+  });
+  // Esc 关掉顶部任意一个展开的下拉。灯箱开着时 Esc 归灯箱管
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || lightbox.classList.contains('open')) return;
     closeAllHeaderMenus();
-    if (willOpen) datePicker.classList.add('open');
-  };
+  });
 
-  // "跳到某一年"下拉菜单
   const yearToggle = document.getElementById('yearToggle');
   const yearMenu = document.getElementById('yearMenu');
-  yearToggle.onclick = (e) => {
-    e.stopPropagation();
-    const willOpen = !yearMenu.classList.contains('open');
-    closeAllHeaderMenus();
-    if (willOpen) yearMenu.classList.add('open');
-  };
-
-  // "更多功能"下拉：年度回忆/全家最爱/足迹地图/数据总览/运维控制台入口
   const navMenuToggle = document.getElementById('navMenuToggle');
   const navMenu = document.getElementById('navMenu');
-  navMenuToggle.onclick = (e) => {
-    e.stopPropagation();
-    const willOpen = !navMenu.classList.contains('open');
-    closeAllHeaderMenus();
-    if (willOpen) navMenu.classList.add('open');
-  };
-
-  // 照片搜索：搜 AI 说明文字和拍摄地名，防抖 350ms，回车立即搜
   const searchToggle = document.getElementById('searchToggle');
   const searchPanel = document.getElementById('searchPanel');
   const searchInput = document.getElementById('searchInput');
   const searchResults = document.getElementById('searchResults');
   let _searchTimer = null, _searchSeq = 0;
 
-  searchToggle.onclick = (e) => {
-    e.stopPropagation();
-    const willOpen = !searchPanel.classList.contains('open');
-    closeAllHeaderMenus();
-    if (willOpen) {
-      searchPanel.classList.add('open');
-      setTimeout(() => searchInput.focus(), 60);
-    }
-  };
+  bindHeaderMenu(dateToggle, datePicker);
+  bindHeaderMenu(yearToggle, yearMenu);
+  bindHeaderMenu(navMenuToggle, navMenu);
+  bindHeaderMenu(searchToggle, searchPanel, () => setTimeout(() => searchInput.focus(), 60));
 
+  // 照片搜索：搜 AI 说明文字和拍摄地名，防抖 350ms，回车立即搜
   function runSearch() {
     const q = searchInput.value.trim();
     if (!q) { searchResults.innerHTML = ''; return; }
@@ -764,30 +762,7 @@
   });
   searchInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { clearTimeout(_searchTimer); runSearch(); }
-    if (e.key === 'Escape') searchPanel.classList.remove('open');
-  });
-
-  // Esc 关掉顶部任意一个展开的下拉。灯箱自己那个 keydown 监听器在灯箱没开时会直接 return，
-  // 所以这里不用担心两边抢同一个按键
-  document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return;
-    if (lightbox.classList.contains('open')) return; // 灯箱开着时 Esc 归灯箱管
-    closeAllHeaderMenus();
-  });
-
-  document.addEventListener('click', (e) => {
-    if (datePicker.classList.contains('open') && !datePicker.contains(e.target) && e.target !== dateToggle && !dateToggle.contains(e.target)) {
-      datePicker.classList.remove('open');
-    }
-    if (yearMenu.classList.contains('open') && !yearMenu.contains(e.target) && e.target !== yearToggle && !yearToggle.contains(e.target)) {
-      yearMenu.classList.remove('open');
-    }
-    if (navMenu.classList.contains('open') && !navMenu.contains(e.target) && e.target !== navMenuToggle && !navMenuToggle.contains(e.target)) {
-      navMenu.classList.remove('open');
-    }
-    if (searchPanel.classList.contains('open') && !searchPanel.contains(e.target) && e.target !== searchToggle && !searchToggle.contains(e.target)) {
-      searchPanel.classList.remove('open');
-    }
+    if (e.key === 'Escape') closeAllHeaderMenus();
   });
 
   // "唤醒林间"开关：一个开关同时控制光斑视觉效果和林间环境音，默认开启
@@ -798,7 +773,13 @@
   const sunlightSwitch = document.getElementById('sunlightSwitch');
   const sunlightLabel = document.getElementById('sunlightLabel');
   sunlightSwitch.checked = true;
-  sunlightLabel.textContent = 'KEEP THE SUN OUT';
+  const sunlightBtn = document.getElementById('sunlightBtn');
+  const syncSunLabel = () => {
+    const t = sunlightSwitch.checked ? '关掉阳光' : '打开阳光';
+    sunlightLabel.textContent = t;
+    if (sunlightBtn) sunlightBtn.title = t;
+  };
+  syncSunLabel();
   sunlight.classList.add('on');
 
   // body.sun-on 会把标题、按钮换成深色字——前提是背后真有一层亮的叶影视频。可 body 背景是纯黑，
@@ -834,7 +815,7 @@
   sunlightSwitch.onchange = () => {
     syncSunMode();
     sunlight.classList.toggle('on', sunlightSwitch.checked);
-    sunlightLabel.textContent = sunlightSwitch.checked ? 'KEEP THE SUN OUT' : 'LET THE SUN IN';
+    syncSunLabel();
     if (sunlightSwitch.checked) {
       sunSweep.classList.remove('play');
       requestAnimationFrame(() => sunSweep.classList.add('play'));
@@ -2117,7 +2098,7 @@
             return html;
           }).join('');
           const showMoreBtn = extraCount > 0
-            ? `<button class="show-more-btn" data-total="${y.photos.length}" onclick="toggleShowMore(this)">展开查看全部 ${y.photos.length} 张 ›</button>`
+            ? `<button class="pill-btn show-more-btn" data-total="${y.photos.length}" onclick="toggleShowMore(this)">展开查看全部 ${y.photos.length} 张 ›</button>`
             : '';
           return `
       <section class="year-block${idPrefix === 'lunar-year-' ? ' lunar-year-block' : ''}" id="${idPrefix}${y.year}">
@@ -2144,14 +2125,15 @@
         // 农历模式下点年份找不到元素，滚动没反应、份数也是公历的数
         yearToggle.disabled = false;
         yearMenu.innerHTML = visibleYears.map((y, i) =>
-          '<button style="animation-delay:' + (i * 0.05) + 's" onclick="jumpToYear(' + y.year + ')"><span class="y">' + y.year + ' 年</span>' +
-          '<span class="c">' + y.photos.length + ' 份</span></button>'
+          '<button class="menu-item" role="menuitem" style="animation-delay:' + (i * 0.04) + 's" onclick="jumpToYear(' + y.year + ')">' +
+          '<span class="mi-text"><span class="mi-title">' + y.year + '</span><span class="mi-sub">' + agoText(y.year) + '</span></span>' +
+          '<span class="mi-end">' + y.photos.length + ' 张</span></button>'
         ).join('');
         window.jumpToYear = function (year) {
           const el = document.getElementById(yearPrefix + year);
           // 减掉固定顶栏的高度，不然年份标题正好被顶栏压住
           if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 76, behavior: scrollBehavior() });
-          yearMenu.classList.remove('open');
+          closeAllHeaderMenus();
         };
 
         fadeIn();

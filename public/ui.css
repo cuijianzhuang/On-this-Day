@@ -1,0 +1,130 @@
+/* ── 全站共用的控件：图标按钮 / 工具栏 / 弹出菜单 / 菜单项 / 返回按钮 ──────────────
+   以前每个页面各写一套：首页的 .date-toggle、灯箱的 .lightbox-btn、最爱/数据页的 .back、
+   地图页的 .back-btn、放映页的 .btn……尺寸（32/36/38px）、底色、悬停效果各不相同。
+   这里收成一套，各页面只管摆位置，不再各自定义长相。颜色 token 也放在这里，全站一份 */
+:root {
+  --bg: #0e0d0b;
+  --surface: #1a1814;
+  --surface-2: #24211c;
+  --text: #f2ede4;
+  --text-2: #b3ab9d;
+  --muted: #7d766b;
+  --line: rgba(242,237,228,0.09);
+  --line-2: rgba(242,237,228,0.16);
+  --accent: #e3b56a;
+  --accent-soft: rgba(227,181,106,0.16);
+  --serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", serif;
+  --mono: 'Space Grotesk', "SF Pro Display", -apple-system, sans-serif;
+  --ctl: 36px;                 /* 所有圆形图标按钮的尺寸 */
+  --glass: rgba(24,22,18,0.72); /* 浮在照片/地图上的控件底色 */
+  --pop-bg: rgba(28,26,22,0.97);
+  --pop-shadow: 0 18px 48px rgba(0,0,0,0.5), 0 0 0 1px var(--line);
+}
+
+/* 圆形图标按钮。浮在内容上方的（返回、放映页右上角）加 .glass 带毛玻璃底 */
+.icon-btn {
+  width: var(--ctl); height: var(--ctl); flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; border-radius: 50%; padding: 0; margin: 0;
+  background: transparent; color: var(--text-2);
+  cursor: pointer; text-decoration: none; font: inherit;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.12s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.icon-btn svg {
+  width: 18px; height: 18px; fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
+.icon-btn:hover { background: rgba(255,255,255,0.08); color: var(--text); }
+.icon-btn:active { transform: scale(0.92); }
+.icon-btn:disabled { opacity: 0.35; cursor: default; }
+.icon-btn:disabled:hover { background: transparent; color: var(--text-2); }
+/* 对应的菜单展开中 / 开关处于打开状态 */
+.icon-btn.active, .icon-btn[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); }
+.icon-btn.glass {
+  background: var(--glass); color: var(--text);
+  backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  box-shadow: 0 0 0 1px var(--line), 0 6px 18px rgba(0,0,0,0.3);
+}
+.icon-btn.glass:hover { background: rgba(40,37,31,0.85); }
+.icon-btn[hidden] { display: none; }
+
+/* 工具栏：一组图标按钮收进同一条胶囊里，按钮之间用 .tb-sep 细竖线分组 */
+.toolbar {
+  display: flex; align-items: center; gap: 2px; padding: 3px;
+  border-radius: 999px;
+  background: var(--glass);
+  backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  box-shadow: 0 0 0 1px var(--line), 0 6px 20px rgba(0,0,0,0.25);
+}
+.toolbar .icon-btn { --ctl: 34px; }
+.tb-sep { width: 1px; height: 18px; margin: 0 4px; background: var(--line-2); flex-shrink: 0; }
+
+/* 带文字的返回按钮：子页面左上角统一用它，不再是一个意义不明的小箭头圆点 */
+.back-pill {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  height: var(--ctl); padding: 0 0.95rem 0 0.6rem; border-radius: 999px;
+  background: var(--glass); color: var(--text); text-decoration: none;
+  font-size: 0.82rem; letter-spacing: 0.04em;
+  backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  box-shadow: 0 0 0 1px var(--line), 0 6px 18px rgba(0,0,0,0.3);
+  transition: background 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.back-pill:hover { background: rgba(40,37,31,0.85); }
+.back-pill svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* 弹出面板：展开/收起统一走 .open，从触发按钮所在的右上角缩放出来 */
+.popover {
+  background: var(--pop-bg); border-radius: 16px; box-shadow: var(--pop-shadow);
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  color: var(--text); text-align: left; isolation: isolate;
+  transform-origin: top right;
+  opacity: 0; transform: scale(0.96) translateY(-4px);
+  visibility: hidden; pointer-events: none;
+  transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s;
+}
+.popover.open { opacity: 1; transform: none; visibility: visible; pointer-events: auto; }
+
+/* 菜单项：左边图标块 + 标题 + 可选的灰色说明/右侧附注 */
+.menu { padding: 6px; display: flex; flex-direction: column; gap: 1px; }
+.menu-item {
+  display: flex; align-items: center; gap: 0.75rem; width: 100%;
+  padding: 0.5rem 0.6rem; border: none; border-radius: 10px;
+  background: none; color: var(--text); text-decoration: none; text-align: left;
+  font: inherit; cursor: pointer; transition: background 0.12s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.menu-item:hover, .menu-item:focus-visible { background: rgba(255,255,255,0.06); }
+.menu-item .mi-icon {
+  width: 30px; height: 30px; flex-shrink: 0; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.06); color: var(--accent);
+}
+.menu-item .mi-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.menu-item .mi-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.menu-item .mi-title { font-size: 0.88rem; }
+.menu-item .mi-sub { font-size: 0.7rem; color: var(--muted); }
+.menu-item .mi-end { margin-left: auto; font-size: 0.72rem; color: var(--muted); font-family: var(--mono); }
+.menu-sep { height: 1px; margin: 4px 8px; background: var(--line); }
+
+/* 次要按钮（胶囊描边），比如"展开查看全部""回到今天" */
+.pill-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem;
+  height: 34px; padding: 0 1rem; border-radius: 999px;
+  background: transparent; border: 1px solid var(--line-2); color: var(--text-2);
+  font: inherit; font-size: 0.8rem; cursor: pointer; text-decoration: none;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.pill-btn:hover { background: rgba(255,255,255,0.05); color: var(--text); border-color: rgba(242,237,228,0.26); }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+/* 子页面（最爱 / 数据总览 / 地图 / 年度放映）左上角的返回按钮，位置统一 */
+.page-back {
+  position: fixed; z-index: 50;
+  top: max(0.9rem, env(safe-area-inset-top)); left: max(0.9rem, env(safe-area-inset-left));
+}
