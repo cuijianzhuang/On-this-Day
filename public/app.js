@@ -303,6 +303,19 @@
     return { direct: PREVIEWS_BASE + '/' + thumbKey.split('/').map(encodeURIComponent).join('/'), fallback };
   }
 
+  // 照片墙格子的比例（--ar）没量过时先按 4:3 占位，图片/视频拿到真实像素后改写成真实比例，
+  // flex 等高行会自动重排。差得不多（2% 内）就不动，免得一整行无意义地抖一下
+  window.fixCellRatio = function (el) {
+    const cell = el.closest('.cell');
+    if (!cell) return;
+    const w = el.naturalWidth || el.videoWidth, h = el.naturalHeight || el.videoHeight;
+    if (!w || !h) return;
+    const ar = w / h;
+    const cur = parseFloat(cell.style.getPropertyValue('--ar')) || 0;
+    if (!cur || Math.abs(ar - cur) / cur > 0.02) cell.style.setProperty('--ar', ar.toFixed(4));
+    cell.classList.remove('ar-guess');
+  };
+
   // 直连地址加载失败 → 先回落到 /thumb/ 让服务端现场生成一次，还不行才进原来那条退避重试链
   window.onThumbError = function (img) {
     img.onerror = null;
@@ -367,7 +380,7 @@
     attempt = attempt || 0;
     const done = () => { if (onDone) onDone(); };
     if (!/\.heic$/i.test(originalUrl)) {
-      imgEl.onload = () => { imgEl.classList.add('loaded'); done(); };
+      imgEl.onload = () => { imgEl.classList.add('loaded'); window.fixCellRatio(imgEl); done(); };
       imgEl.src = originalUrl;
       return;
     }
@@ -377,7 +390,7 @@
       const converted = await heic2any({ blob, toType: 'image/jpeg', quality: 0.85 });
       const previewBlob = Array.isArray(converted) ? converted[0] : converted;
       const objUrl = URL.createObjectURL(previewBlob);
-      imgEl.onload = () => { imgEl.classList.add('loaded'); done(); };
+      imgEl.onload = () => { imgEl.classList.add('loaded'); window.fixCellRatio(imgEl); done(); };
       imgEl.src = objUrl;
       // 顺手把现场解码的结果回传存进 PREVIEWS 桶，下次别的访问者就不用再解码一遍了——
       // 哪怕服务端那边重试次数早就用完放弃了，这次浏览器端解码成功一样会被接受存进去
@@ -1895,11 +1908,13 @@
     // 历史上的今天跟着这次要看的日期一起换，独立请求互不阻塞
     loadOnThisDay(month, day);
 
-    // 骨架屏直接复用真实照片的 .cell/.frame-inner 方格（带同一道加载微光），第一格同样占 2×2，
+    // 骨架屏直接复用真实照片的 .cell/.frame-inner（带同一道加载微光）：一张通栏封面 + 一行横竖混排，
     // 数据到了之后版式不会整体跳一下
-    const SKELETON_HTML = '<div class="skeleton-grid">' + Array.from({ length: 9 }, (_, i) =>
-      '<div class="cell' + (i === 0 ? ' hero' : '') + '" style="--enter-delay:' + (i * 0.04).toFixed(2) + 's"><div class="frame-inner"></div></div>'
-    ).join('') + '</div>';
+    const SKELETON_ARS = [1.5, 0.75, 1.333, 1.333, 0.75, 1.5, 1.333];
+    const SKELETON_HTML = '<div class="skeleton-grid"><div class="cell hero"><div class="frame-inner"></div></div>' +
+      SKELETON_ARS.map((ar, i) =>
+        '<div class="cell" style="--ar:' + ar + ';--enter-delay:' + ((i + 1) * 0.04).toFixed(2) + 's"><div class="frame-inner"></div></div>'
+      ).join('') + '</div>';
 
     function fadeOut() {
       content.style.opacity = '0';
@@ -1977,8 +1992,7 @@
 
         // 一年的照片太多时，先精选一部分摆出来：视频/Live Photo 优先收录，然后是 AI 打过分的高分照片，
         // 剩下名额（包括还没被 AI 打分的）按时间均匀抽样，保证不是"挤在某一段"，而是有代表性的几个瞬间
-        // 9 = 1 张 2×2 大图 + 8 张小图：桌面 4 列、手机 3 列都正好铺满整行，最后一行不会只剩一两张
-        const FEATURED_LIMIT = 9;
+        const FEATURED_LIMIT = 10;
         function pickFeatured(photos, limit) {
           if (photos.length <= limit) return null; // null 表示不需要折叠，全部都是精选
           const featured = new Set();
@@ -2024,31 +2038,35 @@
           btn.textContent = expanded ? '收起' : '展开查看全部 ' + total + ' 张 ›';
         };
 
-        // 格子都是正方形（CSS object-fit:cover 铺满），缩略图直接让服务端按正方形裁好（fit=cover）：
-        // 只按宽度缩放的话横图高度不够，铺满方格时要放大 1.5～2 倍，糊。
-        // 所有设备都只用两种固定尺寸——普通格 480²、大格 960²——这样同一张照片在手机、电脑上
-        // 请求的是同一个缩略图 key，生成一次全家共用（缩略图按尺寸存 R2，尺寸越多要生成的越多）。
-        // 480 = 桌面 4 列时一格约 220px × 2 倍屏
-        const TILE_PX = 480, HERO_PX = 960;
+        // 杂志式排版：每年一张通栏封面，下面是"等高行"拼接——每行高度一致、左右铺满，
+        // 每张按原始比例占宽度（横图宽、竖图窄）。排版完全交给 CSS flex（见 app.css .grid）：
+        // 每个格子带一个 --ar（宽/高），flex-grow 按 --ar 分配，同一行自然等高，窗口缩放时自动重排。
+        //
+        // 比例从哪来：后端量过的直接用（photos_index.width/height）；没量过的先按 4:3 占位，
+        // 缩略图加载出来后按真实像素比改写 --ar（见 fixCellRatio）。缩略图只限宽、不裁剪
+        // （fit=scale-down），服务端生成时会顺手把宽高存库，所以同一张照片下次打开就不会再跳。
+        // 宽度只用固定两档：普通格 640，封面复用灯箱的 1600（点开过的照片封面直接命中缓存）
+        const TILE_W = 640, HERO_W = 1600, DEFAULT_AR = 4 / 3;
         const thisYear = new Date().getFullYear();
         const agoText = (year) => {
           const n = thisYear - Number(year);
           return n <= 0 ? '今年' : n === 1 ? '去年' : n + ' 年前';
         };
-        // 每年挑一张当 2×2 大图：可见照片里 AI 分数最高的静态图，没打过分就用第一张。
-        // 只在 1 张或 ≥5 张时放：2～4 张的年份交给 .grid.n2/n3/n4 等分排版（见 app.css），
-        // 否则一张大图旁边只剩一两张小图，大图下方会空出一整块
+        const ratioOf = (p) => {
+          const w = Number(p.width), h = Number(p.height);
+          return w > 0 && h > 0 ? w / h : 0;
+        };
+        // 封面：可见照片里 AI 分数最高的静态图（同分优先横图，通栏裁切损失小），没打过分就用第一张静态图
         function pickHero(photos, featured) {
-          const visible = photos.map((p, i) => i).filter((i) => !featured || featured.has(i));
-          if (visible.length >= 2 && visible.length <= 4) return -1;
-          let best = visible[0], bestScore = -Infinity;
-          for (const i of visible) {
-            const p = photos[i];
-            if (p.type === 'video') continue;
-            const sc = typeof p.score === 'number' ? p.score : -1;
-            if (sc > bestScore) { best = i; bestScore = sc; }
-          }
-          return best;
+          let best = -1, bestKey = -Infinity;
+          photos.forEach((p, i) => {
+            if (featured && !featured.has(i)) return;
+            if (p.type === 'video') return;
+            const ar = ratioOf(p) || DEFAULT_AR;
+            const k = (typeof p.score === 'number' ? p.score : -1) * 10 + (ar >= 1.2 ? 1 : 0);
+            if (k > bestKey) { best = i; bestKey = k; }
+          });
+          return best === -1 ? 0 : best;
         }
 
         // 照片不是一次性全部弹出来，按页面上的出场顺序错开一点时间依次淡入；
@@ -2058,7 +2076,9 @@
           const featured = pickFeatured(y.photos, FEATURED_LIMIT);
           const extraCount = featured ? y.photos.length - featured.size : 0;
           const heroIdx = pickHero(y.photos, featured);
-          const visibleCount = featured ? featured.size : y.photos.length;
+          // 封面之外还剩几张（只算默认展示的）：剩得少时 .grid.few 把行高调大，不然一两张小图缩在左下角
+          const restCount = (featured ? featured.size : y.photos.length) - 1;
+          let heroHtml = '';
           const cells = y.photos.map((p, pi) => {
             // allPhotos 是按完全相同的 年->照片 嵌套顺序铺出来的，flatIndex 直接用这个递增计数器就是它在
             // allPhotos 里的下标，不用每张照片都 findIndex 整个数组查一遍
@@ -2066,24 +2086,35 @@
             const enterDelay = Math.min(globalCellIndex * 0.03, 0.6).toFixed(2);
             globalCellIndex++;
             const isHero = pi === heroIdx;
-            const cls = 'cell' + (isHero ? ' hero' : '') + (featured && !featured.has(pi) ? ' extra' : '');
-            const style = `--enter-delay:${enterDelay}s`;
-            const px = isHero ? HERO_PX : TILE_PX;
-            const t = thumbUrls(p.url, { w: px, h: px, q: 75, fit: 'cover' });
+            const known = ratioOf(p);
+            const ar = (known || DEFAULT_AR).toFixed(4);
+            const cls = 'cell' + (isHero ? ' hero' : '') + (known ? '' : ' ar-guess') + (featured && !featured.has(pi) ? ' extra' : '');
+            const style = `--ar:${ar};--enter-delay:${enterDelay}s`;
+            const t = thumbUrls(p.url, { w: isHero ? HERO_W : TILE_W, q: 75, fit: 'scale-down' });
             // _roomReactions 的值是 {emoji: count} 对象，要先用 _totalReactions 聚合成数字
             const reactCnt = _totalReactions(p.key);
             const reactBtn = `<button class="react-btn" data-key="${escAttr(p.key)}" onclick="event.stopPropagation();doReact(this)" aria-label="点赞">❤️<span class="react-cnt">${reactCnt > 0 ? reactCnt : ''}</span></button>`;
             const open = `onclick="openLightbox(${flatIndex}, false)"`;
+            let html;
             if (p.type === 'video') {
-              return `<div class="${cls}" style="${style}" ${open}><div class="frame-inner"><video data-src="${escAttr(p.url)}#t=0.5" muted loop playsinline preload="metadata" onloadeddata="this.classList.add('loaded')" onmouseenter="this.play().catch(()=>{})" onmouseleave="this.pause();this.currentTime=0.5"></video></div><span class="play-badge">▶ 视频</span>${reactBtn}</div>`;
+              html = `<div class="${cls}" style="${style}" ${open}><div class="frame-inner"><video data-src="${escAttr(p.url)}#t=0.5" muted loop playsinline preload="metadata" onloadedmetadata="fixCellRatio(this)" onloadeddata="this.classList.add('loaded')" onmouseenter="this.play().catch(()=>{})" onmouseleave="this.pause();this.currentTime=0.5"></video></div><span class="play-badge">▶ 视频</span>${reactBtn}</div>`;
+            } else {
+              const img = `<img src="${escAttr(t.direct)}" data-thumb="${escAttr(t.fallback)}" data-src="${escAttr(p.url)}" alt="" loading="${isHero ? 'eager' : 'lazy'}" decoding="async" onload="this.classList.add('loaded');fixCellRatio(this)" onerror="onThumbError(this)" />`;
+              // 封面叠一行 AI 文案 + 地点，像杂志的图注
+              const caption = isHero && (p.caption || p.place)
+                ? `<div class="hero-caption">${p.caption ? `<div class="hc-text">${escHtml(p.caption)}</div>` : ''}${p.place ? `<div class="hc-place">${escHtml(p.place)}</div>` : ''}</div>`
+                : '';
+              if (p.type === 'live') {
+                // Live Photo：默认显示静态图，悬浮（桌面）/长按（移动端）才播放配对的短视频；
+                // 网格里不标"实况"，点开灯箱才提示，算是个不张扬的小彩蛋
+                html = `<div class="${cls}" style="${style}" ${open}><div class="frame-inner live-photo-cell" onmouseenter="this.classList.add('playing');const v=this.querySelector('video');v.loop=true;v.currentTime=0;v.play().catch(()=>{})" onmouseleave="this.classList.remove('playing');this.querySelector('video').pause()" ontouchstart="livePhotoTouchStart(this,event)" ontouchend="livePhotoTouchEnd(this,event)" ontouchcancel="livePhotoTouchEnd(this,event)">${img}<video src="${p.videoUrl}" loop muted playsinline preload="none" class="cell-live-video"></video></div>${caption}${reactBtn}</div>`;
+              } else {
+                html = `<div class="${cls}" style="${style}" ${open}><div class="frame-inner">${img}</div>${caption}${reactBtn}</div>`;
+              }
             }
-            const img = `<img src="${escAttr(t.direct)}" data-thumb="${escAttr(t.fallback)}" data-src="${escAttr(p.url)}" alt="" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="onThumbError(this)" />`;
-            if (p.type === 'live') {
-              // Live Photo：默认显示静态图，悬浮（桌面）/长按（移动端）才播放配对的短视频；
-              // 网格里不标"实况"，点开灯箱才提示，算是个不张扬的小彩蛋
-              return `<div class="${cls}" style="${style}" ${open}><div class="frame-inner live-photo-cell" onmouseenter="this.classList.add('playing');const v=this.querySelector('video');v.loop=true;v.currentTime=0;v.play().catch(()=>{})" onmouseleave="this.classList.remove('playing');this.querySelector('video').pause()" ontouchstart="livePhotoTouchStart(this,event)" ontouchend="livePhotoTouchEnd(this,event)" ontouchcancel="livePhotoTouchEnd(this,event)">${img}<video src="${p.videoUrl}" loop muted playsinline preload="none" class="cell-live-video"></video></div>${reactBtn}</div>`;
-            }
-            return `<div class="${cls}" style="${style}" ${open}><div class="frame-inner">${img}</div>${reactBtn}</div>`;
+            // 封面单独放在网格上方（通栏），不参与下面的等高行
+            if (isHero) { heroHtml = html; return ''; }
+            return html;
           }).join('');
           const showMoreBtn = extraCount > 0
             ? `<button class="show-more-btn" data-total="${y.photos.length}" onclick="toggleShowMore(this)">展开查看全部 ${y.photos.length} 张 ›</button>`
@@ -2095,7 +2126,8 @@
           <div class="year-meta"><span class="ago">${agoText(y.year)}</span><span class="n">${y.photos.length} 张</span></div>
         </div>
         <div class="year-body">
-          <div class="grid${visibleCount <= 4 ? ' n' + visibleCount : ''}">${cells}</div>
+          ${heroHtml}
+          ${cells ? `<div class="grid${restCount <= 3 ? ' few' : ''}">${cells}</div>` : ''}
           ${showMoreBtn}
         </div>
       </section>
