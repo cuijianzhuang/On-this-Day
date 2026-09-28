@@ -2876,9 +2876,10 @@ async function handleReindexPhotoDates(request, env, url) {
 // 转换计费。探不到现成缩略图的就跳过（留 NULL），等它第一次被浏览时自然量到。
 //
 // 探测宽度列表 = 前端实际会请求的那些等比宽度：1600 是灯箱大图（照片被点开过就有），
-// 其余是照片墙格子宽 × 设备像素比（1x / 2x）。移动端宽度是按视口算的、无法穷举，
+// 640 是现在照片墙统一用的格子宽；其余是旧版照片墙的格子宽 × 设备像素比（1x / 2x），
+// 旧版移动端宽度是按视口算的、无法穷举，
 // 探不中就留给下次浏览
-const THUMB_PROBE_WIDTHS = [1600, 460, 420, 380, 340, 300, 230, 210, 190, 170, 150];
+const THUMB_PROBE_WIDTHS = [1600, 640, 460, 420, 380, 340, 300, 230, 210, 190, 170, 150];
 
 async function backfillPhotoDimsBatch(env, limit, afterKey = "") {
   await ensureAuxTables(env);
